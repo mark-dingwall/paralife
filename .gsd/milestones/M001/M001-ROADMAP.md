@@ -24,7 +24,7 @@
 - [x] **S03: Tick Engine** `risk:medium` `depends:[S01]`
   > After this: Server runs a tick loop, logs tick numbers, tick rate is configurable, clean shutdown stops the loop.
 
-- [ ] **S04: WebSocket Connection Manager** `risk:high` `depends:[S01,S02,S03]`
+- [x] **S04: WebSocket Connection Manager** `risk:high` `depends:[S01,S02,S03]`
   > After this: Bots connect via WebSocket, receive tick broadcasts with world snapshot, server tracks active sessions.
 
 - [ ] **S05: Integration Test — 100 Bots** `risk:medium` `depends:[S04]`
