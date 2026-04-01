@@ -21,7 +21,7 @@
 - [x] **S02: World Grid Model** `risk:low` `depends:[S01]`
   > After this: Grid created with configurable dimensions, toroidal neighbor queries work, unit tests pass.
 
-- [ ] **S03: Tick Engine** `risk:medium` `depends:[S01]`
+- [x] **S03: Tick Engine** `risk:medium` `depends:[S01]`
   > After this: Server runs a tick loop, logs tick numbers, tick rate is configurable, clean shutdown stops the loop.
 
 - [ ] **S04: WebSocket Connection Manager** `risk:high` `depends:[S01,S02,S03]`
