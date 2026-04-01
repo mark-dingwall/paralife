@@ -21,3 +21,6 @@ paralife:
   world:
     width: 256
     height: 256
+  tick:
+    interval-ms: 500
+    auto-start: true

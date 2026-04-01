@@ -18,7 +18,7 @@
 - [x] **S01: Spring Boot Project Scaffold** `risk:low` `depends:[]`
   > After this: `./gradlew bootRun` starts the server, health endpoint responds, virtual threads enabled.
 
-- [ ] **S02: World Grid Model** `risk:low` `depends:[S01]`
+- [x] **S02: World Grid Model** `risk:low` `depends:[S01]`
   > After this: Grid created with configurable dimensions, toroidal neighbor queries work, unit tests pass.
 
 - [ ] **S03: Tick Engine** `risk:medium` `depends:[S01]`
