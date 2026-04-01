@@ -13,10 +13,10 @@
 
 ## Tasks
 
-- [ ] **T01: Gradle project + Spring Boot application**
+- [x] **T01: Gradle project + Spring Boot application**
   Initialize Gradle Kotlin DSL project, add Spring Boot plugin, create main application class, application.yml with virtual threads, and verify it boots.
 
-- [ ] **T02: Verify virtual threads & health endpoint**
+- [x] **T02: Verify virtual threads & health endpoint**
   Add Actuator dependency, configure health endpoint, write a smoke test confirming boot + health + virtual threads active.
 
 ## Files Likely Touched

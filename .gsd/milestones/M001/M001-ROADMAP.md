@@ -15,7 +15,7 @@
 
 ## Slices
 
-- [ ] **S01: Spring Boot Project Scaffold** `risk:low` `depends:[]`
+- [x] **S01: Spring Boot Project Scaffold** `risk:low` `depends:[]`
   > After this: `./gradlew bootRun` starts the server, health endpoint responds, virtual threads enabled.
 
 - [ ] **S02: World Grid Model** `risk:low` `depends:[S01]`

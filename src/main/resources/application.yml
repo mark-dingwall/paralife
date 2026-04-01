@@ -16,3 +16,8 @@ management:
   endpoint:
     health:
       show-details: always
+
+paralife:
+  world:
+    width: 256
+    height: 256
