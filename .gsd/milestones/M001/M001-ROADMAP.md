@@ -27,7 +27,7 @@
 - [x] **S04: WebSocket Connection Manager** `risk:high` `depends:[S01,S02,S03]`
   > After this: Bots connect via WebSocket, receive tick broadcasts with world snapshot, server tracks active sessions.
 
-- [ ] **S05: Integration Test — 100 Bots** `risk:medium` `depends:[S04]`
+- [x] **S05: Integration Test — 100 Bots** `risk:medium` `depends:[S04]`
   > After this: Automated test spins up 100 concurrent WebSocket clients, all receive sequential tick events without gaps.
 
 ---
