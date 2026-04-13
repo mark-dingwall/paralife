@@ -12,10 +12,18 @@ package com.paralife.world;
  * Entities are immutable records — mutation produces a new instance.
  * Null occupant in a {@link Cell} means the cell is empty.
  */
-public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutrient, Entity.BondedPair {
+public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutrient, Entity.BondedPair, Entity.CompositeMember {
 
     /** Unique identifier for this entity instance. */
     String id();
+
+    // ── Roles (siphonophore zooid specialization) ───────────────────
+
+    /**
+     * Specialization roles for composite organism members (D-06).
+     * Each member of a composite fills exactly one role.
+     */
+    enum Role { LOCOMOTOR, FEEDER, ATTACKER, DEFENDER, REPRODUCER, SENSOR }
 
     // ── Active agents ──────────────────────────────────────────────
 
@@ -173,6 +181,45 @@ public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutr
             return new BondedPair(id, primaryType, secondaryType,
                     Math.clamp(newEnergy, 0, maxEnergy), maxEnergy,
                     primaryEntityId, secondaryEntityId);
+        }
+
+        public boolean isAlive() {
+            return energy > 0;
+        }
+    }
+
+    // ── Composite members (siphonophore model) ───────────────────
+
+    /**
+     * A member of a composite organism. Each member occupies its own grid cell
+     * and shares a compositeId with other members of the same composite.
+     * Shared state (energy pool, member list) lives in CompositeRegistry.
+     *
+     * @param id          unique entity identifier for this member
+     * @param compositeId identifier of the composite this member belongs to
+     * @param type        original RPS particle type
+     * @param role        specialization role within the composite (D-06)
+     * @param energy      individual energy (combat damage hits this directly, D-15)
+     * @param maxEnergy   energy cap for this member
+     */
+    record CompositeMember(
+            String id,
+            String compositeId,
+            ParticleType type,
+            Role role,
+            int energy,
+            int maxEnergy
+    ) implements Entity {
+
+        public CompositeMember {
+            if (energy < 0) throw new IllegalArgumentException("Energy cannot be negative: " + energy);
+            if (maxEnergy <= 0) throw new IllegalArgumentException("Max energy must be positive: " + maxEnergy);
+        }
+
+        /** Return a copy with adjusted energy, clamped to [0, maxEnergy]. */
+        public CompositeMember withEnergy(int newEnergy) {
+            return new CompositeMember(id, compositeId, type, role,
+                    Math.clamp(newEnergy, 0, maxEnergy), maxEnergy);
         }
 
         public boolean isAlive() {

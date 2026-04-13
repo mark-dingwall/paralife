@@ -36,3 +36,18 @@ paralife:
     bond-energy-threshold: 50
     bonding-probability: 0.10
     bond-defense-chance: 0.25
+  composite:
+    dissolution-chance: 0.03
+    critical-energy-percent: 12
+    speed-constant: 1.0
+    locomotor-passive-drain: 1
+    locomotor-active-drain: 3
+    feeder-passive-drain: 1
+    feeder-active-drain: 2
+    attacker-passive-drain: 1
+    attacker-active-drain: 4
+    defender-passive-drain: 1
+    reproducer-passive-drain: 1
+    reproducer-active-drain: 2
+    sensor-passive-drain: 1
+    can-form-composites: true

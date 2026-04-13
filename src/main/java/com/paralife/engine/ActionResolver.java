@@ -192,6 +192,10 @@ public class ActionResolver {
             sendResult(ra.sessionId, tickNumber, false, "move", "Cell occupied by a bonded pair");
             return false;
         }
+        if (targetCell.occupant() instanceof Entity.CompositeMember) {
+            sendResult(ra.sessionId, tickNumber, false, "move", "Cell occupied by a composite member");
+            return false;
+        }
 
         // Execute move
         claimedCells.add(target);

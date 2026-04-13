@@ -135,6 +135,9 @@ public class PerceptionBroadcaster {
             case Entity.BondedPair bp -> new CellView(
                     "BONDED_" + bp.primaryType() + "_" + bp.secondaryType(),
                     bp.id(), cell.nutrientLevel());
+            case Entity.CompositeMember cm -> new CellView(
+                    "COMPOSITE_" + cm.type() + "_" + cm.role(),
+                    cm.id(), cell.nutrientLevel());
         };
     }
 }

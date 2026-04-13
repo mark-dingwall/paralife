@@ -128,6 +128,7 @@ class EntityTest {
             case Rock r -> "rock";
             case Nutrient n -> "nutrient:" + n.level();
             case Entity.BondedPair bp -> "bonded:" + bp.primaryType() + "+" + bp.secondaryType();
+            case Entity.CompositeMember cm -> "composite:" + cm.role();
         };
         assertThat(result).isEqualTo("particle:CATALYST");
     }
@@ -178,6 +179,7 @@ class EntityTest {
             case Rock r -> "rock";
             case Nutrient n -> "nutrient";
             case Entity.BondedPair bp -> "bonded:" + bp.primaryType() + "+" + bp.secondaryType();
+            case Entity.CompositeMember cm -> "composite:" + cm.role();
         };
         assertThat(result).isEqualTo("bonded:SPORE+MEMBRANE");
     }

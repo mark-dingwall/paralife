@@ -229,6 +229,7 @@ public class SimulationEngine {
     }
 
     // ── Phase 2: Energy decay ──────────────────────────────────────
+    // CompositeMember energy handled by CompositeEnergyDistributor (Plan 12-02)
 
     private int processEnergyDecay(int width, int height) {
         if (config.energyDecayPerTick() == 0) return 0;
@@ -252,6 +253,7 @@ public class SimulationEngine {
     }
 
     // ── Phase 2.5: Overcrowding ─────────────────────────────────────
+    // CompositeMember overcrowding handled by CompositeEnergyDistributor (Plan 12-02)
 
     private int processOvercrowding(int width, int height) {
         if (config.overcrowdingThreshold() > 8 || config.overcrowdingEnergyPenalty() == 0) return 0;
@@ -290,6 +292,7 @@ public class SimulationEngine {
     }
 
     // ── Phase 3: Death removal ─────────────────────────────────────
+    // CompositeMember death handled by CompositeEnergyDistributor (Plan 12-02)
 
     private int processDeaths(int width, int height) {
         int deaths = 0;
