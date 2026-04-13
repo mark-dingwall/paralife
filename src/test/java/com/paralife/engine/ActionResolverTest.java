@@ -38,7 +38,8 @@ class ActionResolverTest {
         sessionRegistry = new SessionRegistry();
         config = SimulationConfig.defaults();
         objectMapper = new ObjectMapper();
-        resolver = new ActionResolver(worldGrid, botRegistry, sessionRegistry, config, objectMapper);
+        resolver = new ActionResolver(worldGrid, botRegistry, sessionRegistry, config, objectMapper,
+                new CompositeRegistry(), CompositeConfig.defaults());
     }
 
     private WebSocketSession mockSession(String id) {

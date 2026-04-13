@@ -72,6 +72,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
                 case Messages.Register register -> handleRegister(session, register);
                 case Messages.Heartbeat heartbeat -> handleHeartbeat(session);
                 case Messages.Action action -> handleAction(session, action);
+                case Messages.CompositeAction compositeAction -> handleCompositeAction(session, compositeAction);
                 default -> {
                     log.warn("Unexpected message type from {}: {}", session.getId(), msg.getClass().getSimpleName());
                     sendMessage(session, new Messages.Error("UNKNOWN_MESSAGE", "Unhandled message type"));
@@ -152,6 +153,12 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         actionResolver.queueAction(session.getId(), action);
         log.debug("Action queued from {}: type={} dir={}", session.getId(),
                 action.actionType(), action.direction());
+    }
+
+    private void handleCompositeAction(WebSocketSession session, Messages.CompositeAction action) {
+        actionResolver.queueCompositeAction(session.getId(), action);
+        log.debug("Composite action queued from {}: type={} dir={} prefs={}", session.getId(),
+                action.actionType(), action.direction(), action.rankedPreferences());
     }
 
     private void handleHeartbeat(WebSocketSession session) {
