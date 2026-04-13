@@ -178,6 +178,68 @@ public class SimulationEngine {
                     }
                     // If deflected (roll < bondDefenseChance), no deltas added
                 }
+
+                // Case 3: Particle attacks CompositeMember (D-12)
+                // RPS check: attacker must be predator of CompositeMember's type
+                if (defender instanceof Entity.CompositeMember cm
+                        && attacker.type().prey() == cm.type()) {
+                    // DEFENDER role absorption check (reuses bondDefenseChance)
+                    if (cm.role() == Entity.Role.DEFENDER
+                            && rng.nextDouble() < bondingConfig.bondDefenseChance()) {
+                        // Deflected by DEFENDER
+                    } else {
+                        // Damage hits individual energy (D-12, D-15)
+                        results.add(new CombatDelta(pos, config.combatEnergyTransfer()));
+                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                    }
+                }
+            }
+        }
+
+        // Scan for CompositeMember attackers (D-10, D-11, D-13)
+        List<Position> compositeMemberPositions = new ArrayList<>();
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                Cell cell = worldGrid.getCell(x, y);
+                if (cell.occupant() instanceof Entity.CompositeMember) {
+                    compositeMemberPositions.add(new Position(x, y));
+                }
+            }
+        }
+        Collections.shuffle(compositeMemberPositions, rng);
+
+        for (Position pos : compositeMemberPositions) {
+            Cell cell = worldGrid.getCell(pos.x(), pos.y());
+            if (!(cell.occupant() instanceof Entity.CompositeMember attacker)) continue;
+
+            for (Position nPos : worldGrid.getNeighbors(pos.x(), pos.y())) {
+                Cell nc = worldGrid.getCell(nPos.x(), nPos.y());
+                Entity defender = nc.occupant();
+                if (defender == null) continue;
+
+                // Skip same-composite members (D-13)
+                if (defender instanceof Entity.CompositeMember cm
+                        && cm.compositeId().equals(attacker.compositeId())) continue;
+
+                if (attacker.role() == Entity.Role.ATTACKER) {
+                    // True damage — type-agnostic (D-10)
+                    if (defender instanceof Particle || defender instanceof Entity.BondedPair
+                            || defender instanceof Entity.CompositeMember) {
+                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                    }
+                } else {
+                    // Position-based combat: RPS rules based on member's type (D-11)
+                    if (defender instanceof Particle prey && attacker.type().prey() == prey.type()) {
+                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                    } else if (defender instanceof Entity.BondedPair bp
+                            && attacker.type().prey() == bp.primaryType()) {
+                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                    } else if (defender instanceof Entity.CompositeMember cm
+                            && attacker.type().prey() == cm.type()) {
+                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                    }
+                }
+                break; // Each member attacks at most one neighbor per tick
             }
         }
 
@@ -227,6 +289,10 @@ public class SimulationEngine {
                 } else if (c.occupant() instanceof Entity.BondedPair bp) {
                     worldGrid.setEntity(delta.pos.x(), delta.pos.y(),
                             bp.withEnergy(bp.energy() + delta.energyDelta));
+                    combatEvents++;
+                } else if (c.occupant() instanceof Entity.CompositeMember cm) {
+                    worldGrid.setEntity(delta.pos.x(), delta.pos.y(),
+                            cm.withEnergy(cm.energy() + delta.energyDelta));
                     combatEvents++;
                 }
             }
