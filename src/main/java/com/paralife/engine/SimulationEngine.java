@@ -354,17 +354,19 @@ public class SimulationEngine {
                 // Create CompositeMember entities — individual energy = half of source BondedPair energy
                 String memberId1 = "cm-" + UUID.randomUUID().toString().substring(0, 8);
                 String memberId2 = "cm-" + UUID.randomUUID().toString().substring(0, 8);
+                int individualEnergy1 = cf.bp1().energy() / 2;
+                int individualEnergy2 = cf.bp2().energy() / 2;
                 var member1 = new Entity.CompositeMember(memberId1, compositeId, cf.bp1().primaryType(), role1,
-                        cf.bp1().energy() / 2, cf.bp1().maxEnergy() / 2);
+                        individualEnergy1, cf.bp1().maxEnergy() / 2);
                 var member2 = new Entity.CompositeMember(memberId2, compositeId, cf.bp2().primaryType(), role2,
-                        cf.bp2().energy() / 2, cf.bp2().maxEnergy() / 2);
+                        individualEnergy2, cf.bp2().maxEnergy() / 2);
 
                 // Place on grid
                 worldGrid.setEntity(cf.pos1().x(), cf.pos1().y(), member1);
                 worldGrid.setEntity(cf.pos2().x(), cf.pos2().y(), member2);
 
-                // Register in CompositeRegistry — shared pool = sum of both BondedPair energies
-                int sharedPool = cf.bp1().energy() + cf.bp2().energy();
+                // Register in CompositeRegistry — shared pool = remainder after individual allocation
+                int sharedPool = (cf.bp1().energy() - individualEnergy1) + (cf.bp2().energy() - individualEnergy2);
                 int maxPool = cf.bp1().maxEnergy() + cf.bp2().maxEnergy();
                 compositeRegistry.register(compositeId, List.of(memberId1, memberId2),
                         Map.of(memberId1, cf.pos1(), memberId2, cf.pos2()),
