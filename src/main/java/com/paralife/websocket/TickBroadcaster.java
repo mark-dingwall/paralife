@@ -1,11 +1,13 @@
 package com.paralife.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.engine.SimulationEngine;
 import com.paralife.engine.TickEvent;
 import com.paralife.world.WorldGrid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -24,14 +26,18 @@ public class TickBroadcaster {
     private final SessionRegistry sessionRegistry;
     private final WorldGrid worldGrid;
     private final ObjectMapper objectMapper;
+    private final SimulationEngine simulationEngine;
 
-    public TickBroadcaster(SessionRegistry sessionRegistry, WorldGrid worldGrid, ObjectMapper objectMapper) {
+    public TickBroadcaster(SessionRegistry sessionRegistry, WorldGrid worldGrid,
+                           ObjectMapper objectMapper, SimulationEngine simulationEngine) {
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
         this.objectMapper = objectMapper;
+        this.simulationEngine = simulationEngine;
     }
 
     @EventListener
+    @Order(100) // After SimulationEngine (Order 10) so broadcast reflects post-simulation state
     public void onTick(TickEvent event) {
         var sessions = sessionRegistry.getActiveSessions();
         if (sessions.isEmpty()) {
@@ -42,7 +48,8 @@ public class TickBroadcaster {
         var tickMessage = new Messages.Tick(
                 event.tickNumber(),
                 event.timestamp().toEpochMilli(),
-                snapshot.entityCount()
+                snapshot.entityCount(),
+                simulationEngine.getLastTickBondCount()
         );
 
         try {

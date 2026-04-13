@@ -132,7 +132,9 @@ public class PerceptionBroadcaster {
             case Particle p -> new CellView(p.type().name(), p.id(), cell.nutrientLevel());
             case Entity.Rock r -> new CellView("ROCK", r.id(), cell.nutrientLevel());
             case Entity.Nutrient n -> new CellView("NUTRIENT", n.id(), cell.nutrientLevel());
-            case Entity.BondedPair bp -> new CellView("BONDED", bp.id(), cell.nutrientLevel());
+            case Entity.BondedPair bp -> new CellView(
+                    "BONDED_" + bp.primaryType() + "_" + bp.secondaryType(),
+                    bp.id(), cell.nutrientLevel());
         };
     }
 }
