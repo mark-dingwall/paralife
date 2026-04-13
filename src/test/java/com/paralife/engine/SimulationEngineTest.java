@@ -34,11 +34,13 @@ class SimulationEngineTest {
     }
 
     private SimulationEngine engineWith(SimulationConfig config) {
-        return new SimulationEngine(grid, config, botRegistry, noBonding());
+        return new SimulationEngine(grid, config, botRegistry, noBonding(),
+                new CompositeRegistry(), CompositeConfig.defaults());
     }
 
     private SimulationEngine engineWith(SimulationConfig config, BondingConfig bondingConfig) {
-        return new SimulationEngine(grid, config, botRegistry, bondingConfig);
+        return new SimulationEngine(grid, config, botRegistry, bondingConfig,
+                new CompositeRegistry(), CompositeConfig.defaults());
     }
 
     private BondingConfig bondingConfig(int threshold, double probability, double defense) {

@@ -16,7 +16,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -42,15 +44,20 @@ public class SimulationEngine {
     private final SimulationConfig config;
     private final BotRegistry botRegistry;
     private final BondingConfig bondingConfig;
+    private final CompositeRegistry compositeRegistry;
+    private final CompositeConfig compositeConfig;
     private final AtomicLong nutrientIdCounter = new AtomicLong(0);
     private final AtomicInteger lastTickBondCount = new AtomicInteger(0);
 
     public SimulationEngine(WorldGrid worldGrid, SimulationConfig config,
-                            BotRegistry botRegistry, BondingConfig bondingConfig) {
+                            BotRegistry botRegistry, BondingConfig bondingConfig,
+                            CompositeRegistry compositeRegistry, CompositeConfig compositeConfig) {
         this.worldGrid = worldGrid;
         this.config = config;
         this.botRegistry = botRegistry;
         this.bondingConfig = bondingConfig;
+        this.compositeRegistry = compositeRegistry;
+        this.compositeConfig = compositeConfig;
     }
 
     public int getLastTickBondCount() {
@@ -73,10 +80,11 @@ public class SimulationEngine {
         int width = worldGrid.getWidth();
         int height = worldGrid.getHeight();
 
-        // Phase 1: Interaction resolution (bonding or combat)
+        // Phase 1: Interaction resolution (bonding, combat, composite formation)
         int[] interactionCounts = processInteractions(width, height);
         int combatEvents = interactionCounts[0];
         int bondEvents = interactionCounts[1];
+        int compositeEvents = interactionCounts[2];
         lastTickBondCount.set(bondEvents);
 
         // Phase 2: Energy decay
@@ -92,8 +100,8 @@ public class SimulationEngine {
         int spawned = processNutrientSpawning(width, height);
 
         if (log.isDebugEnabled()) {
-            log.debug("Tick {} simulation: combat={}, bonds={}, decayed={}, overcrowded={}, deaths={}, nutrients_spawned={}",
-                    tickNumber, combatEvents, bondEvents, decayed, overcrowded, deaths, spawned);
+            log.debug("Tick {} simulation: combat={}, bonds={}, composites={}, decayed={}, overcrowded={}, deaths={}, nutrients_spawned={}",
+                    tickNumber, combatEvents, bondEvents, compositeEvents, decayed, overcrowded, deaths, spawned);
         }
     }
 
@@ -103,17 +111,20 @@ public class SimulationEngine {
     private record CombatDelta(Position pos, int energyDelta) implements InteractionResult {}
     private record BondFormation(Position primaryPos, Position secondaryPos,
                                   Particle predator, Particle prey) implements InteractionResult {}
+    private record CompositeFormation(Position pos1, Position pos2,
+                                       Entity.BondedPair bp1, Entity.BondedPair bp2) implements InteractionResult {}
 
     /**
      * For each particle, check adjacent cells for interactions:
      * - Predator+prey pair eligible for bonding → form BondedPair
      * - Otherwise → standard RPS combat
      * - Particle attacking BondedPair → probabilistic defense
+     * - Adjacent BondedPairs → composite formation (D-01)
      *
      * Uses snapshot reads + deferred writes to avoid order-dependent results.
      * Cells are processed in random order to prevent spatial bias.
      *
-     * @return int[2]: [combatEvents, bondEvents]
+     * @return int[3]: [combatEvents, bondEvents, compositeEvents]
      */
     private int[] processInteractions(int width, int height) {
         // Build list of all particle positions (attackers are always Particles)
@@ -126,8 +137,6 @@ public class SimulationEngine {
                 }
             }
         }
-
-        if (particlePositions.isEmpty()) return new int[]{0, 0};
 
         // Shuffle to prevent directional bias
         Collections.shuffle(particlePositions, ThreadLocalRandom.current());
@@ -172,7 +181,37 @@ public class SimulationEngine {
             }
         }
 
-        // Apply results — combat deltas first, then bond formations
+        // Scan for composite formation (D-01): adjacent BondedPair pairs
+        if (compositeConfig.canFormComposites()) {
+            List<Position> bondedPairPositions = new ArrayList<>();
+            for (int x = 0; x < width; x++) {
+                for (int y = 0; y < height; y++) {
+                    Cell cell = worldGrid.getCell(x, y);
+                    if (cell.occupant() instanceof Entity.BondedPair) {
+                        bondedPairPositions.add(new Position(x, y));
+                    }
+                }
+            }
+            Collections.shuffle(bondedPairPositions, ThreadLocalRandom.current());
+            Set<Position> scannedForComposite = new HashSet<>();
+            for (Position bpPos : bondedPairPositions) {
+                if (scannedForComposite.contains(bpPos)) continue;
+                Cell cell = worldGrid.getCell(bpPos.x(), bpPos.y());
+                if (!(cell.occupant() instanceof Entity.BondedPair bp1)) continue;
+                for (Position nPos : worldGrid.getNeighbors(bpPos.x(), bpPos.y())) {
+                    if (scannedForComposite.contains(nPos)) continue;
+                    Cell nc = worldGrid.getCell(nPos.x(), nPos.y());
+                    if (nc.occupant() instanceof Entity.BondedPair bp2) {
+                        results.add(new CompositeFormation(bpPos, nPos, bp1, bp2));
+                        scannedForComposite.add(bpPos);
+                        scannedForComposite.add(nPos);
+                        break; // Each BondedPair tries to merge with first available neighbor
+                    }
+                }
+            }
+        }
+
+        // Apply results — combat deltas first, then bond formations, then composite formations
         int combatEvents = 0;
         int bondEvents = 0;
         Set<Position> claimedForBonding = new HashSet<>();
@@ -225,7 +264,76 @@ public class SimulationEngine {
             }
         }
 
-        return new int[]{combatEvents / 2, bondEvents};
+        // Apply composite formations (D-01: adjacent BondedPairs merge)
+        int compositeEvents = 0;
+        for (InteractionResult result : results) {
+            if (result instanceof CompositeFormation cf) {
+                if (claimedForBonding.contains(cf.pos1()) || claimedForBonding.contains(cf.pos2())) continue;
+                // Verify cells still hold BondedPairs
+                Cell c1 = worldGrid.getCell(cf.pos1().x(), cf.pos1().y());
+                Cell c2 = worldGrid.getCell(cf.pos2().x(), cf.pos2().y());
+                if (!(c1.occupant() instanceof Entity.BondedPair) || !(c2.occupant() instanceof Entity.BondedPair)) continue;
+
+                String compositeId = "composite-" + UUID.randomUUID().toString().substring(0, 8);
+                // Determine surface member (more empty neighbors = surface = FEEDER per D-09)
+                int emptyNeighbors1 = countEmptyNeighbors(cf.pos1());
+                int emptyNeighbors2 = countEmptyNeighbors(cf.pos2());
+                Entity.Role role1 = emptyNeighbors1 >= emptyNeighbors2 ? Entity.Role.FEEDER : Entity.Role.LOCOMOTOR;
+                Entity.Role role2 = role1 == Entity.Role.FEEDER ? Entity.Role.LOCOMOTOR : Entity.Role.FEEDER;
+
+                // Create CompositeMember entities — individual energy = half of source BondedPair energy
+                String memberId1 = "cm-" + UUID.randomUUID().toString().substring(0, 8);
+                String memberId2 = "cm-" + UUID.randomUUID().toString().substring(0, 8);
+                var member1 = new Entity.CompositeMember(memberId1, compositeId, cf.bp1().primaryType(), role1,
+                        cf.bp1().energy() / 2, cf.bp1().maxEnergy() / 2);
+                var member2 = new Entity.CompositeMember(memberId2, compositeId, cf.bp2().primaryType(), role2,
+                        cf.bp2().energy() / 2, cf.bp2().maxEnergy() / 2);
+
+                // Place on grid
+                worldGrid.setEntity(cf.pos1().x(), cf.pos1().y(), member1);
+                worldGrid.setEntity(cf.pos2().x(), cf.pos2().y(), member2);
+
+                // Register in CompositeRegistry — shared pool = sum of both BondedPair energies
+                int sharedPool = cf.bp1().energy() + cf.bp2().energy();
+                int maxPool = cf.bp1().maxEnergy() + cf.bp2().maxEnergy();
+                compositeRegistry.register(compositeId, List.of(memberId1, memberId2),
+                        Map.of(memberId1, cf.pos1(), memberId2, cf.pos2()),
+                        sharedPool, maxPool);
+
+                // Update BotRegistry for all 4 original entity IDs (2 per BondedPair)
+                updateBotRegistryForFormation(cf.bp1(), memberId1, cf.pos1());
+                updateBotRegistryForFormation(cf.bp2(), memberId2, cf.pos2());
+
+                claimedForBonding.add(cf.pos1());
+                claimedForBonding.add(cf.pos2());
+                compositeEvents++;
+            }
+        }
+
+        return new int[]{combatEvents / 2, bondEvents, compositeEvents};
+    }
+
+    private int countEmptyNeighbors(Position pos) {
+        int count = 0;
+        for (Position nPos : worldGrid.getNeighbors(pos.x(), pos.y())) {
+            if (worldGrid.getCell(nPos.x(), nPos.y()).isEmpty()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void updateBotRegistryForFormation(Entity.BondedPair bp, String newMemberId, Position pos) {
+        // Map primary entity's session to new member
+        botRegistry.getSessionForEntity(bp.primaryEntityId()).ifPresent(sessionId -> {
+            botRegistry.unregisterByEntity(bp.primaryEntityId());
+            botRegistry.register(sessionId, newMemberId, pos);
+        });
+        // Map secondary entity's session to new member
+        botRegistry.getSessionForEntity(bp.secondaryEntityId()).ifPresent(sessionId -> {
+            botRegistry.unregisterByEntity(bp.secondaryEntityId());
+            botRegistry.register(sessionId, newMemberId, pos);
+        });
     }
 
     // ── Phase 2: Energy decay ──────────────────────────────────────
