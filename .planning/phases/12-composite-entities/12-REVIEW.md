@@ -1,178 +1,161 @@
 ---
 phase: 12-composite-entities
-reviewed: 2026-04-14T16:45:00Z
+reviewed: 2026-04-14T05:10:00Z
 depth: standard
-files_reviewed: 13
+files_reviewed: 29
 files_reviewed_list:
-  - src/main/java/com/paralife/world/Entity.java
+  - src/main/java/com/paralife/engine/ActionResolver.java
+  - src/main/java/com/paralife/engine/BotRegistry.java
   - src/main/java/com/paralife/engine/CompositeConfig.java
   - src/main/java/com/paralife/engine/CompositeEnergyDistributor.java
   - src/main/java/com/paralife/engine/CompositeRegistry.java
-  - src/main/java/com/paralife/engine/SimulationEngine.java
-  - src/main/java/com/paralife/engine/ActionResolver.java
   - src/main/java/com/paralife/engine/PerceptionBroadcaster.java
-  - src/main/java/com/paralife/websocket/TickBroadcaster.java
+  - src/main/java/com/paralife/engine/SimulationEngine.java
   - src/main/java/com/paralife/websocket/Messages.java
+  - src/main/java/com/paralife/websocket/TickBroadcaster.java
   - src/main/java/com/paralife/websocket/WorldWebSocketHandler.java
-  - src/main/java/com/paralife/engine/BotRegistry.java
+  - src/main/java/com/paralife/world/Entity.java
   - src/main/resources/application.yml
+  - src/test/java/com/paralife/engine/ActionResolverTest.java
+  - src/test/java/com/paralife/engine/BotRegistryTest.java
+  - src/test/java/com/paralife/engine/CompositeActionTest.java
+  - src/test/java/com/paralife/engine/CompositeCombatTest.java
+  - src/test/java/com/paralife/engine/CompositeConfigTest.java
+  - src/test/java/com/paralife/engine/CompositeDissolutionTest.java
+  - src/test/java/com/paralife/engine/CompositeEnergyDistributorTest.java
+  - src/test/java/com/paralife/engine/CompositeFormationTest.java
   - src/test/java/com/paralife/engine/CompositeIntegrationTest.java
+  - src/test/java/com/paralife/engine/CompositeMovementTest.java
+  - src/test/java/com/paralife/engine/CompositePerceptionTest.java
+  - src/test/java/com/paralife/engine/CompositeRegistryTest.java
+  - src/test/java/com/paralife/engine/PerceptionBroadcasterTest.java
+  - src/test/java/com/paralife/engine/SimulationEngineTest.java
+  - src/test/java/com/paralife/websocket/TickBroadcasterTest.java
+  - src/test/java/com/paralife/world/CompositeMemberTest.java
+  - src/test/java/com/paralife/world/EntityTest.java
 findings:
-  critical: 1
-  warning: 6
+  critical: 2
+  warning: 4
   info: 3
-  total: 10
+  total: 9
 status: issues_found
 ---
 
 # Phase 12: Code Review Report
 
-**Reviewed:** 2026-04-14T16:45:00Z
+**Reviewed:** 2026-04-14T05:10:00Z
 **Depth:** standard
-**Files Reviewed:** 13
+**Files Reviewed:** 29
 **Status:** issues_found
 
 ## Summary
 
-The composite entity system introduces a siphonophore-inspired multi-cell organism model layered on top of the existing particle/bonded-pair system. The code is well-structured, follows project conventions (immutable records, sealed interfaces, event-driven pipeline), and the integration test coverage is solid. However, there are several concurrency bugs in `CompositeRegistry.drainEnergy`, a double-accounting energy bug in composite formation, missing validation on composite actions in the WebSocket handler, and some edge-case logic issues in the energy distributor and movement code.
+Phase 12 introduces composite entities (siphonophore model) -- a significant feature adding formation, movement, combat, energy distribution, perception, and dissolution mechanics. The architecture is sound: `CompositeRegistry` for shared state, `CompositeEnergyDistributor` at `@Order(15)` for passive drain/healing, and extensions to `ActionResolver` and `SimulationEngine` for composite actions and lifecycle.
+
+The prior review's CR-01 (drainEnergy race condition), WR-02/WR-03 (compositeTicksSinceMove initialization/pruning), and WR-04 (secondary bot ghost state on formation) have been fixed. However, the WR-02 fix (initializing compositeTicksSinceMove to 0) introduced a regression that breaks 4 movement tests. Additionally, the prior review's WR-01 (shared pool energy calculation in formation) was implemented correctly in the source code, but the corresponding test assertion was never updated to match -- it still asserts the old, wrong value.
+
+**5 tests are currently failing** (confirmed via `./gradlew test`):
+- `CompositeFormationTest.formationSharedPoolEnergyIsSumOfBondedPairs` -- expected 140 but was 70
+- `CompositeMovementTest.locomotorVotesMoveComposite` -- null assertion failure
+- `CompositeMovementTest.rigidBodyPreservesFormation` -- null assertion failure
+- `CompositeMovementTest.movementUpdatesRegistries` -- expected (6,5) but was (5,5)
+- `CompositeMovementTest.movementSpeedGate` -- expected (8,7) but was (8,8)
 
 ## Critical Issues
 
-### CR-01: Race condition in CompositeState.drainEnergy (non-atomic read-then-modify)
+### CR-01: WR-02 Fix Regression -- Speed Gate Blocks All First-Tick Movement for Multi-Member Composites
 
-**File:** `src/main/java/com/paralife/engine/CompositeRegistry.java:113-118`
-**Issue:** `drainEnergy` performs a non-atomic read-then-modify on `sharedPoolEnergy`. It reads `current` via `get()`, computes `actual`, then blindly subtracts. If two callers invoke `drainEnergy` concurrently (e.g., the CompositeEnergyDistributor healing loop and a FEEDER action resolved on a different thread), both read the same `current` value and both succeed, draining more energy than available and potentially driving the pool negative.
+**File:** `src/main/java/com/paralife/engine/ActionResolver.java:581-609`
+**Issue:** The WR-02 fix changed `compositeTicksSinceMove` initialization from the implicit `getOrDefault(compositeId, moveInterval)` fallback to an explicit `putIfAbsent(compositeId, 0)` at line 582. Combined with the increment at line 587 (`merge(compositeId, 1, Integer::sum)`), a new composite starts at 0, gets incremented to 1, then hits the speed gate check at line 609: `if (ticksSince < moveInterval)`. For a 2-member composite with 1 LOCOMOTOR: speed=0.5, moveInterval=ceil(1/0.5)=2, ticksSince=1 -- movement is always blocked on the first tick. The composite can only move on tick 2 (when ticksSince reaches 2).
 
-The comment says "Tick pipeline is single-threaded for mutations" but `drainEnergy` is also called from `ActionResolver` which processes queued actions, and `addEnergy` is called similarly. While the current event-driven pipeline is synchronous, the `AtomicInteger` usage signals an intent for thread-safety that is not actually achieved. If any future change introduces concurrency (or if Spring's event model changes), this silently corrupts state.
+This breaks 4 tests that expect first-tick movement (`locomotorVotesMoveComposite`, `rigidBodyPreservesFormation`, `movementUpdatesRegistries`, `movementSpeedGate`). The original behavior (before the WR-02 fix) used `getOrDefault(compositeId, moveInterval)` which allowed first-tick movement.
 
-**Fix:** Use `AtomicInteger.getAndUpdate` or a CAS loop:
+**Fix:** Initialize to `moveInterval` instead of `0`, so the first tick passes the speed gate. The WR-02 fix intent was to prevent composites formed *this tick* from immediately moving, but the fix overcorrected by blocking *all* first-tick movement including composites formed on previous ticks:
 ```java
-public int drainEnergy(int amount) {
-    int[] drained = new int[1];
-    sharedPoolEnergy.getAndUpdate(current -> {
-        drained[0] = Math.min(current, amount);
-        return current - drained[0];
-    });
-    return drained[0];
+// Line 581-583: Initialize to moveInterval so first action tick allows movement
+for (var composite : compositeRegistry.getAll()) {
+    compositeTicksSinceMove.putIfAbsent(composite.getCompositeId(), Integer.MAX_VALUE);
 }
 ```
+Using `Integer.MAX_VALUE` ensures a newly tracked composite passes the speed gate on its first tick, then resets to 0 on successful movement (line 616).
 
-Alternatively, since `addEnergy` has the same issue (can exceed `maxPoolEnergy`):
+### CR-02: Test Assertion Wrong -- formationSharedPoolEnergyIsSumOfBondedPairs Expects 140, Correct Value is 70
+
+**File:** `src/test/java/com/paralife/engine/CompositeFormationTest.java:155`
+**Issue:** The test asserts `getSharedPoolEnergy()).isEqualTo(140)` with the comment `// 80 + 60`, expecting all BondedPair energy goes to the shared pool. But `SimulationEngine.java:357-369` correctly splits energy: half to individual member, half to shared pool. With bp1.energy=80 and bp2.energy=60: individualEnergy1=40, individualEnergy2=30, sharedPool=(80-40)+(60-30)=70. Confirmed failing: `expected: 140 but was: 70`.
+
+The test name and comment are misleading -- the shared pool is NOT the sum of BondedPair energies, it's the remainder after individual allocation.
+
+**Fix:** Update the assertion and comment:
 ```java
-public void addEnergy(int amount) {
-    sharedPoolEnergy.getAndUpdate(current ->
-        Math.min(current + amount, maxPoolEnergy));
-}
+assertThat(composite.get().getSharedPoolEnergy()).isEqualTo(70); // remainder: (80-40) + (60-30)
 ```
 
 ## Warnings
 
-### WR-01: Double-counted energy on composite formation
-
-**File:** `src/main/java/com/paralife/engine/SimulationEngine.java:354-371`
-**Issue:** When a composite forms from two BondedPairs, individual member energy is set to `bp.energy() / 2` and the shared pool is set to `bp1.energy() + bp2.energy()`. This means the total system energy after formation is `bp1.energy()/2 + bp2.energy()/2 + bp1.energy() + bp2.energy()` = 1.5x the original energy. Energy is created from nothing.
-
-The pool should either exclude the energy already allocated to individual members, or the individual energy should be set to 0 with all energy going to the pool.
-
-**Fix:**
-```java
-// Option A: Pool = remainder after individual allocation
-int individualEnergy1 = cf.bp1().energy() / 2;
-int individualEnergy2 = cf.bp2().energy() / 2;
-int sharedPool = (cf.bp1().energy() - individualEnergy1) + (cf.bp2().energy() - individualEnergy2);
-```
-
-### WR-02: compositeTicksSinceMove never initialized for new composites
-
-**File:** `src/main/java/com/paralife/engine/ActionResolver.java:580-583`
-**Issue:** The tick-since-move counter is only incremented for composites already in the map (line 581). New composites (formed this tick) are not added to `compositeTicksSinceMove`, so `getOrDefault(compositeId, moveInterval)` on line 603 returns `moveInterval`, immediately allowing movement. This may be intentional, but combined with the increment loop on lines 580-583 which only iterates existing keys, newly formed composites will always pass the speed gate on their first tick with a LOCOMOTOR vote, regardless of speed ratio.
-
-The increment loop also never adds new entries -- it only touches existing ones. A composite must successfully move at least once (line 611 puts 0) before it starts being tracked.
-
-**Fix:** Initialize the counter when a composite is formed:
-```java
-// In processInteractions composite formation block, after compositeRegistry.register():
-compositeTicksSinceMove.put(compositeId, 0);
-```
-
-### WR-03: Stale compositeTicksSinceMove entries leak memory
-
-**File:** `src/main/java/com/paralife/engine/ActionResolver.java:62`
-**Issue:** `compositeTicksSinceMove` is never cleaned up when a composite is dissolved. Over time, dissolved composites accumulate entries that are never removed. While each entry is small (String + Integer), in a long-running simulation this grows without bound.
-
-**Fix:** Add cleanup in `SimulationEngine.dissolveToParticles` / `handleMemberDeath` / `checkPanicZone` -- or have `ActionResolver` prune stale entries each tick:
-```java
-// At the end of resolveCompositeMovements:
-compositeTicksSinceMove.keySet().retainAll(
-    compositeRegistry.getAll().stream()
-        .map(CompositeRegistry.CompositeState::getCompositeId)
-        .collect(Collectors.toSet()));
-```
-
-### WR-04: BotRegistry double-mapping on composite formation
-
-**File:** `src/main/java/com/paralife/engine/SimulationEngine.java:396-407`
-**Issue:** `updateBotRegistryForFormation` maps both the primary and secondary entity's sessions to the *same* new member ID. Since `BotRegistry.register` overwrites by session, the second call wins for the session map. But `entityToSession` now maps the single `newMemberId` to whichever session was last registered. The first session's bot effectively becomes orphaned -- `botRegistry.getBySession(firstSession)` returns the old (now non-existent) state until overwritten, and `entityToSession` only points to the second session.
-
-This means one of the two bot clients that were controlling the original BondedPair's constituent particles loses its entity mapping silently.
-
-**Fix:** This is a design issue. If two bots contributed to a BondedPair and that pair becomes a CompositeMember, only one bot can control the resulting member. The other should either be notified of death/ejection or assigned a different role. At minimum, the losing session should be explicitly unregistered to avoid ghost state.
-
-### WR-05: BondedPair convenience constructor splits ID for entity IDs -- fragile assumption
-
-**File:** `src/main/java/com/paralife/world/Entity.java:172-177`
-**Issue:** The 5-arg `BondedPair` constructor derives `primaryEntityId` and `secondaryEntityId` by splitting `id` on `+`. If the ID does not contain `+`, both entity IDs are set to the same value as `id`. This is used in tests and the `revertToBondedPair` method (line 591-592) which constructs `"bp-" + cm.id()` -- an ID that never contains `+`. The resulting BondedPair has `primaryEntityId == secondaryEntityId == "bp-" + cm.id()`, which means `BotRegistry.unregisterByEntity` during BondedPair death (line 486-487) will try to unregister the same entity ID twice. The second call is a no-op, but it indicates the constructor's fallback behavior masks a real data modeling gap.
-
-**Fix:** The `revertToBondedPair` method at SimulationEngine:591 should use the 7-arg constructor with explicit entity IDs rather than relying on the fallback:
-```java
-var bondedPair = new Entity.BondedPair(
-    "bp-" + cm.id(), cm.type(), cm.type(), cm.energy(), cm.maxEnergy(),
-    cm.id(), cm.id()); // already correct, but document intent
-```
-This is currently correct by accident. Consider deprecating the 5-arg constructor or adding a clear warning in its Javadoc.
-
-### WR-06: CompositeMember overcrowding and energy decay are silently skipped
-
-**File:** `src/main/java/com/paralife/engine/SimulationEngine.java:410-411, 434`
-**Issue:** Comments state that CompositeMember energy decay and overcrowding are "handled by CompositeEnergyDistributor (Plan 12-02)". However, `CompositeEnergyDistributor` only handles passive role drain and pool healing -- it does not apply the same `energyDecayPerTick` that Particles and BondedPairs receive, and it does not apply overcrowding penalties. This means CompositeMember entities are exempt from the base energy decay and overcrowding penalty that all other entity types pay, giving composites a systematic survival advantage that may not be intended.
-
-**Fix:** Either:
-1. Apply `energyDecayPerTick` to CompositeMember individual energy in `processEnergyDecay` (same as Particles/BondedPairs), or
-2. Explicitly document in `CompositeEnergyDistributor` that passive drain replaces base decay, and verify the drain rates are calibrated accordingly.
-
-## Info
-
-### IN-01: Unused import in ActionResolver
-
-**File:** `src/main/java/com/paralife/engine/ActionResolver.java:7`
-**Issue:** `com.paralife.world.Entity.Rock` is not directly referenced in ActionResolver (rock checks use `instanceof Rock` via wildcard import style, but the explicit import `Entity.Rock` is not used since the `instanceof` pattern uses the simple name from the `Entity` sealed interface).
-
-Actually, on closer inspection: `Entity.Rock` is not imported. `Rock` at line 257 works via `instanceof Rock` which resolves through the existing `import com.paralife.world.Entity`. The wildcard-style `import java.util.*` at line 15 is a minor style deviation from the project's otherwise explicit import convention.
-
-**Fix:** Replace `import java.util.*;` with explicit imports on line 15 for consistency.
-
-### IN-02: Dead code path -- extractRankedPreferences(Messages.CompositeAction) is never called
-
-**File:** `src/main/java/com/paralife/engine/ActionResolver.java:721-734`
-**Issue:** The overloaded `extractRankedPreferences(Messages.CompositeAction)` method is defined but never called. The `queueCompositeAction` method converts `CompositeAction` to a regular `Action` and stores ranked preferences separately. The only call to `extractRankedPreferences` in `resolveCompositeMovements` (line 574) uses the `Messages.Action` overload. This method is dead code.
-
-**Fix:** Remove the unused overload or mark it as package-private with a test that exercises it if it's intended for future use.
-
-### IN-03: CompositeRegistry.updateAllPositions has a non-atomic clear+putAll window
+### WR-01: Non-Atomic Clear+PutAll in updateAllPositions
 
 **File:** `src/main/java/com/paralife/engine/CompositeRegistry.java:87-89`
-**Issue:** `updateAllPositions` calls `clear()` then `putAll()` on a `ConcurrentHashMap`. Between these two calls, any concurrent reader (e.g., PerceptionBroadcaster reading positions) will see an empty map. This is noted as acceptable because the tick pipeline is single-threaded for mutations, but the Javadoc claims thread-safety for reads, and PerceptionBroadcaster runs on the same event thread at a later `@Order`. If the architecture ever changes to parallel pipeline stages, this would be a race. Low risk currently.
+**Issue:** `updateAllPositions()` calls `memberPositions.clear()` then `memberPositions.putAll(positions)`. Between these two calls, a concurrent reader (e.g., `PerceptionBroadcaster`) could see an empty map. The class javadoc claims "Thread-safe for concurrent reads" but this window violates that contract. Currently low risk because all pipeline components run on the same event thread, but the concurrent data structures used throughout suggest the intent is to support concurrent reads.
 
-**Fix:** Consider replacing with a single `ConcurrentHashMap` swap pattern if thread safety becomes a harder requirement:
+**Fix:** Replace with a non-clearing approach:
 ```java
 public void updateAllPositions(Map<String, Position> positions) {
-    memberPositions.keySet().retainAll(positions.keySet());
     memberPositions.putAll(positions);
+    memberPositions.keySet().retainAll(positions.keySet());
 }
 ```
 
+### WR-02: Active Drain Return Values Ignored -- Possible Free-Energy Exploit
+
+**File:** `src/main/java/com/paralife/engine/ActionResolver.java:429,485,545,548,618`
+**Issue:** `composite.drainEnergy()` returns the actual amount drained (clamped to available pool energy), but the return value is ignored at 5 call sites. When the pool is nearly empty, actions succeed at reduced energy cost. For example, REPRODUCER budding (line 545) deducts `REPRODUCE_ENERGY_COST` from the pool, then line 548 charges the active drain -- but if the pool hit zero from the reproduction cost, the active drain is silently partial. This gives composites free actions when their pool is low.
+
+**Fix:** Either check the return value and adjust success/failure accordingly, or explicitly document this as intended graceful degradation. The most impactful case is the REPRODUCER, which should verify the active drain was fully applied:
+```java
+int drained = composite.drainEnergy(compositeConfig.reproducerActiveDrain());
+// At minimum, log if partial: if (drained < compositeConfig.reproducerActiveDrain()) ...
+```
+
+### WR-03: CompositeEnergyDistributor Can Set Negative Energy Before Clamping
+
+**File:** `src/main/java/com/paralife/engine/CompositeEnergyDistributor.java:81-92`
+**Issue:** Line 81 computes `newEnergy = member.energy() - passiveDrain` which can go negative. If there's no pool energy for healing, the negative value reaches `member.withEnergy(newEnergy)` at line 92. The `withEnergy()` method clamps via `Math.clamp(newEnergy, 0, maxEnergy)`, so the entity is safe. However, the calculation on line 84 (`Math.max(newEnergy, 0)`) suggests the author was aware of the negative possibility and partially addressed it, but inconsistently -- the deficit and heal calculations use the clamped value while the final assignment may pass a negative value.
+
+**Fix:** Clamp before the conditional for clarity:
+```java
+newEnergy = Math.max(member.energy() - passiveDrain, 0);
+```
+
+### WR-04: Composite Formation Only Assigns FEEDER and LOCOMOTOR -- Blind Composites by Default
+
+**File:** `src/main/java/com/paralife/engine/SimulationEngine.java:351-352`
+**Issue:** When two BondedPairs merge, role assignment only uses FEEDER and LOCOMOTOR. Newly formed composites have no SENSOR (so they receive no perception per D-20 blind composite rule), no ATTACKER (can't deal true damage), no DEFENDER (can't deflect), and no REPRODUCER (can't bud). This means composite perception (`CompositePerception`) is never sent to any newly formed composite's members -- they are functionally blind until role diversification occurs (which has no mechanism in the current code).
+
+**Fix:** This may be intentional for phase 12 as a minimal viable implementation. If so, document it. Otherwise, consider assigning at least one SENSOR role on formation, or implementing a role-mutation mechanism for future phases.
+
+## Info
+
+### IN-01: Unused Variable `actionType` in resolveAttackerAttack
+
+**File:** `src/main/java/com/paralife/engine/ActionResolver.java:443`
+**Issue:** `String actionType = rca.action.actionType() != null ? rca.action.actionType().toLowerCase() : "";` is computed but never read.
+**Fix:** Remove the unused variable.
+
+### IN-02: Dead Code -- extractRankedPreferences(Messages.CompositeAction) Never Called
+
+**File:** `src/main/java/com/paralife/engine/ActionResolver.java:733-746`
+**Issue:** The `extractRankedPreferences(Messages.CompositeAction)` overload is never invoked. `queueCompositeAction()` converts `CompositeAction` to `Action` and stores ranked preferences in a separate map. The only call site uses the `extractRankedPreferences(Messages.Action)` overload.
+**Fix:** Remove the unused method.
+
+### IN-03: Test Name Misleading -- formationSharedPoolEnergyIsSumOfBondedPairs
+
+**File:** `src/test/java/com/paralife/engine/CompositeFormationTest.java:144`
+**Issue:** The test name `formationSharedPoolEnergyIsSumOfBondedPairs` states the pool equals the sum of BondedPair energies, but the correct behavior (implemented in the source) is that the pool equals the *remainder* after individual energy allocation. Even after fixing the assertion (CR-02), the test name will be misleading.
+**Fix:** Rename to `formationSharedPoolEnergyIsRemainderAfterIndividualAllocation` or similar.
+
 ---
 
-_Reviewed: 2026-04-14T16:45:00Z_
+_Reviewed: 2026-04-14T05:10:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
