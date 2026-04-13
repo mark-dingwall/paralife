@@ -74,6 +74,14 @@ Plans:
 ### Phase 12: Composite Entities
 **Goal:** Multi-cell organisms with shared state that move and act as a unit on the grid
 **Depends on:** Phase 11 (bonding rules must exist before composites can form)
+**Plans:** 6 plans
+Plans:
+- [ ] 12-01-PLAN.md — Foundation types: CompositeMember entity, Role enum, CompositeConfig, CompositeRegistry, Message types
+- [ ] 12-02-PLAN.md — Composite formation from BondedPairs + CompositeEnergyDistributor
+- [ ] 12-03-PLAN.md — Reactive role actions (FEEDER/ATTACKER/REPRODUCER) + STV movement voting
+- [ ] 12-04-PLAN.md — Composite combat mechanics + dissolution/degradation/panic zone
+- [ ] 12-05-PLAN.md — SENSOR stitched perception + TickBroadcaster composite count + BotRegistry remap
+- [ ] 12-06-PLAN.md — Integration test: full composite lifecycle
 **Success Criteria:**
 - Composite entity representation on Cell[][] grid (each member occupies a cell)
 - Shared energy pool across composite members
@@ -128,7 +136,7 @@ Plans:
 | 09 | Bot Client — Heuristic AI | ✅ Complete |
 | 10 | Integration Test — Population Dynamics & Load | ✅ Complete |
 | 11 | Bonding Rules Engine | Not started |
-| 12 | Composite Entities | Not started |
+| 12 | Composite Entities | Planning complete |
 | 13 | Energy & Metabolism System | Not started |
 | 14 | Environmental Rules | Not started |
 | 15 | Emergent Behavior Tests | Not started |
