@@ -101,20 +101,24 @@ public class CompositeRegistry {
             memberPositions.remove(memberId);
         }
 
-        /** Add energy to the shared pool. */
+        /** Add energy to the shared pool (clamped to maxPoolEnergy). */
         public void addEnergy(int amount) {
-            sharedPoolEnergy.addAndGet(amount);
+            sharedPoolEnergy.getAndUpdate(current ->
+                    Math.min(current + amount, maxPoolEnergy));
         }
 
         /**
          * Drain energy from the shared pool.
          * Returns the actual amount drained (clamped to available energy).
+         * Uses atomic getAndUpdate to prevent concurrent over-drain.
          */
         public int drainEnergy(int amount) {
-            int current = sharedPoolEnergy.get();
-            int actual = Math.min(current, amount);
-            sharedPoolEnergy.addAndGet(-actual);
-            return actual;
+            int[] drained = new int[1];
+            sharedPoolEnergy.getAndUpdate(current -> {
+                drained[0] = Math.min(current, amount);
+                return current - drained[0];
+            });
+            return drained[0];
         }
 
         public int getMemberCount() {
