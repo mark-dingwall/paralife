@@ -14,11 +14,13 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -48,6 +50,8 @@ public class SimulationEngine {
     private final CompositeConfig compositeConfig;
     private final AtomicLong nutrientIdCounter = new AtomicLong(0);
     private final AtomicInteger lastTickBondCount = new AtomicInteger(0);
+    /** Tracks previous tick's pool energy per composite for panic zone decrease detection (D-31). */
+    private final ConcurrentHashMap<String, Integer> previousPoolEnergy = new ConcurrentHashMap<>();
 
     public SimulationEngine(WorldGrid worldGrid, SimulationConfig config,
                             BotRegistry botRegistry, BondingConfig bondingConfig,
@@ -466,10 +470,11 @@ public class SimulationEngine {
     }
 
     // ── Phase 3: Death removal ─────────────────────────────────────
-    // CompositeMember death handled by CompositeEnergyDistributor (Plan 12-02)
 
     private int processDeaths(int width, int height) {
         int deaths = 0;
+
+        // Phase 3a: Particle and BondedPair death
         for (int x = 0; x < width; x++) {
             for (int y = 0; y < height; y++) {
                 Cell cell = worldGrid.getCell(x, y);
@@ -485,7 +490,176 @@ public class SimulationEngine {
                 }
             }
         }
+
+        // Phase 3b: CompositeMember death — dissolution/degradation (D-29)
+        Set<String> processedComposites = new HashSet<>();
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                Cell cell = worldGrid.getCell(x, y);
+                if (cell.occupant() instanceof Entity.CompositeMember cm && !cm.isAlive()) {
+                    handleMemberDeath(cm, new Position(x, y), processedComposites);
+                    deaths++;
+                }
+            }
+        }
+
+        // Phase 3c: Panic zone check for all composites (D-31)
+        // Snapshot current pool energies for decrease detection
+        Map<String, Integer> currentPoolEnergies = new HashMap<>();
+        for (var composite : compositeRegistry.getAll()) {
+            if (processedComposites.contains(composite.getCompositeId())) continue;
+            currentPoolEnergies.put(composite.getCompositeId(), composite.getSharedPoolEnergy());
+        }
+
+        for (var composite : new ArrayList<>(compositeRegistry.getAll())) {
+            if (processedComposites.contains(composite.getCompositeId())) continue;
+            checkPanicZone(composite, processedComposites);
+        }
+
+        // Update previous pool energy tracking for next tick
+        previousPoolEnergy.clear();
+        previousPoolEnergy.putAll(currentPoolEnergies);
+        // Also track composites that weren't processed (survived this tick)
+        for (var composite : compositeRegistry.getAll()) {
+            if (!previousPoolEnergy.containsKey(composite.getCompositeId())) {
+                previousPoolEnergy.put(composite.getCompositeId(), composite.getSharedPoolEnergy());
+            }
+        }
+
         return deaths;
+    }
+
+    /**
+     * Handle death of a CompositeMember (D-29).
+     * 97% graceful degradation (composite shrinks), 3% full dissolution (shatter).
+     */
+    private void handleMemberDeath(Entity.CompositeMember deadMember, Position deadPos,
+                                    Set<String> processedComposites) {
+        String compositeId = deadMember.compositeId();
+        var compositeOpt = compositeRegistry.getComposite(compositeId);
+        if (compositeOpt.isEmpty() || processedComposites.contains(compositeId)) {
+            worldGrid.clearEntity(deadPos.x(), deadPos.y());
+            botRegistry.unregisterByEntity(deadMember.id());
+            return;
+        }
+        var composite = compositeOpt.get();
+
+        // Remove dead member from grid and registries
+        worldGrid.clearEntity(deadPos.x(), deadPos.y());
+        botRegistry.unregisterByEntity(deadMember.id());
+        compositeRegistry.removeMember(compositeId, deadMember.id());
+
+        int remainingCount = composite.getMemberCount();
+
+        if (remainingCount == 0) {
+            compositeRegistry.dissolve(compositeId);
+            processedComposites.add(compositeId);
+            return;
+        }
+
+        if (remainingCount == 1) {
+            // D-30: Revert last member to BondedPair
+            revertToBondedPair(composite, processedComposites);
+            return;
+        }
+
+        // D-29: Roll for graceful degradation vs full dissolution
+        if (ThreadLocalRandom.current().nextDouble() < compositeConfig.dissolutionChance()) {
+            // Full dissolution — shatter surviving members to Particles
+            dissolveToParticles(composite, processedComposites);
+        } else {
+            // Graceful degradation — composite shrinks, continues
+            processedComposites.add(compositeId);
+        }
+    }
+
+    /**
+     * Revert the last remaining member of a composite to a BondedPair (D-30).
+     */
+    private void revertToBondedPair(CompositeRegistry.CompositeState composite,
+                                     Set<String> processedComposites) {
+        String memberId = composite.getMemberIds().get(0);
+        Position pos = composite.getPositionForMember(memberId);
+        if (pos == null) {
+            compositeRegistry.dissolve(composite.getCompositeId());
+            processedComposites.add(composite.getCompositeId());
+            return;
+        }
+
+        Cell cell = worldGrid.getCell(pos.x(), pos.y());
+        if (cell.occupant() instanceof Entity.CompositeMember cm) {
+            var bondedPair = new Entity.BondedPair(
+                    "bp-" + cm.id(), cm.type(), cm.type(), cm.energy(), cm.maxEnergy(),
+                    cm.id(), cm.id());
+            worldGrid.setEntity(pos.x(), pos.y(), bondedPair);
+
+            // Update BotRegistry: remap session from CompositeMember to BondedPair
+            botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId ->
+                    botRegistry.remapEntity(sessionId, bondedPair.id(), pos));
+        }
+        compositeRegistry.dissolve(composite.getCompositeId());
+        processedComposites.add(composite.getCompositeId());
+    }
+
+    /**
+     * Dissolve a composite — surviving members revert to solo Particles (D-29 dissolution path).
+     */
+    private void dissolveToParticles(CompositeRegistry.CompositeState composite,
+                                      Set<String> processedComposites) {
+        for (String memberId : new ArrayList<>(composite.getMemberIds())) {
+            Position pos = composite.getPositionForMember(memberId);
+            if (pos == null) continue;
+            Cell cell = worldGrid.getCell(pos.x(), pos.y());
+            if (cell.occupant() instanceof Entity.CompositeMember cm) {
+                var particle = new Particle(cm.id() + "-p", cm.type(), cm.energy(), cm.maxEnergy());
+                worldGrid.setEntity(pos.x(), pos.y(), particle);
+
+                // Remap session from CompositeMember to new Particle
+                botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId ->
+                        botRegistry.remapEntity(sessionId, particle.id(), pos));
+            }
+        }
+        compositeRegistry.dissolve(composite.getCompositeId());
+        processedComposites.add(composite.getCompositeId());
+    }
+
+    /**
+     * Check if a composite is in the panic zone (pool < criticalEnergyPercent) (D-31).
+     * Pool=0 → total death. Pool decreased since last tick → progressive shatter die roll.
+     */
+    private void checkPanicZone(CompositeRegistry.CompositeState composite,
+                                 Set<String> processedComposites) {
+        int pool = composite.getSharedPoolEnergy();
+        int maxPool = composite.getMaxPoolEnergy();
+        if (maxPool == 0) return;
+
+        // Pool=0 → total death (D-31)
+        if (pool == 0) {
+            for (String memberId : new ArrayList<>(composite.getMemberIds())) {
+                Position pos = composite.getPositionForMember(memberId);
+                if (pos != null) {
+                    worldGrid.clearEntity(pos.x(), pos.y());
+                }
+                botRegistry.unregisterByEntity(memberId);
+            }
+            compositeRegistry.dissolve(composite.getCompositeId());
+            processedComposites.add(composite.getCompositeId());
+            previousPoolEnergy.remove(composite.getCompositeId());
+            return;
+        }
+
+        double poolPercent = (double) pool / maxPool * 100;
+        if (poolPercent >= compositeConfig.criticalEnergyPercent()) return;
+
+        // Only roll if pool decreased since last tick
+        Integer prevPool = previousPoolEnergy.get(composite.getCompositeId());
+        if (prevPool == null || pool >= prevPool) return; // No decrease or first tick — no roll
+
+        // Progressive shatter die roll: probability scales from 0 (at criticalPercent) to 0.5 (at 0%)
+        double shatterProb = (1.0 - poolPercent / compositeConfig.criticalEnergyPercent()) * 0.5;
+        if (ThreadLocalRandom.current().nextDouble() < shatterProb) {
+            dissolveToParticles(composite, processedComposites);
+        }
     }
 
     // ── Phase 4: Nutrient spawning ─────────────────────────────────
