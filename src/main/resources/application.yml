@@ -24,3 +24,15 @@ paralife:
   tick:
     interval-ms: 500
     auto-start: true
+  simulation:
+    energy-decay-per-tick: 1
+    combat-energy-transfer: 10
+    nutrient-spawn-probability: 0.001
+    nutrient-consume-energy: 5
+    enabled: true
+    overcrowding-threshold: 6
+    overcrowding-energy-penalty: 2
+  bonding:
+    bond-energy-threshold: 50
+    bonding-probability: 0.10
+    bond-defense-chance: 0.25
