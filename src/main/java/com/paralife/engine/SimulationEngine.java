@@ -213,7 +213,9 @@ public class SimulationEngine {
                         bond.predator.type(),   // primary = predator
                         bond.prey.type(),        // secondary = prey
                         bond.predator.energy() + bond.prey.energy(),
-                        bond.predator.maxEnergy() + bond.prey.maxEnergy()
+                        bond.predator.maxEnergy() + bond.prey.maxEnergy(),
+                        bond.predator.id(),      // primaryEntityId for bot cleanup
+                        bond.prey.id()           // secondaryEntityId for bot cleanup
                 );
                 worldGrid.setEntity(bond.primaryPos.x(), bond.primaryPos.y(), bondedPair);
                 worldGrid.clearEntity(bond.secondaryPos.x(), bond.secondaryPos.y());

@@ -134,18 +134,22 @@ public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutr
      * Flat fields only — no nested member state (per D-05).
      * primaryType is the predator's type, secondaryType is the prey's type (per D-07).
      *
-     * @param id            composite identifier (predatorId+preyId)
-     * @param primaryType   RPS type of the predator (dominant member)
-     * @param secondaryType RPS type of the prey (symbiont member)
-     * @param energy        shared energy pool (sum of both members at formation)
-     * @param maxEnergy     energy cap (sum of both members' maxEnergy)
+     * @param id               composite identifier (predatorId+preyId)
+     * @param primaryType      RPS type of the predator (dominant member)
+     * @param secondaryType    RPS type of the prey (symbiont member)
+     * @param energy           shared energy pool (sum of both members at formation)
+     * @param maxEnergy        energy cap (sum of both members' maxEnergy)
+     * @param primaryEntityId  original entity ID of the predator (for bot cleanup)
+     * @param secondaryEntityId original entity ID of the prey (for bot cleanup)
      */
     record BondedPair(
             String id,
             ParticleType primaryType,
             ParticleType secondaryType,
             int energy,
-            int maxEnergy
+            int maxEnergy,
+            String primaryEntityId,
+            String secondaryEntityId
     ) implements Entity {
 
         public BondedPair {
@@ -153,10 +157,22 @@ public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutr
             if (maxEnergy <= 0) throw new IllegalArgumentException("Max energy must be positive: " + maxEnergy);
         }
 
+        /**
+         * Convenience constructor without explicit entity IDs (for tests and legacy usage).
+         * Derives constituent IDs by splitting the composite id on "+".
+         */
+        public BondedPair(String id, ParticleType primaryType, ParticleType secondaryType,
+                          int energy, int maxEnergy) {
+            this(id, primaryType, secondaryType, energy, maxEnergy,
+                    id.contains("+") ? id.split("\\+", 2)[0] : id,
+                    id.contains("+") ? id.split("\\+", 2)[1] : id);
+        }
+
         /** Return a copy with adjusted energy, clamped to [0, maxEnergy]. */
         public BondedPair withEnergy(int newEnergy) {
             return new BondedPair(id, primaryType, secondaryType,
-                    Math.clamp(newEnergy, 0, maxEnergy), maxEnergy);
+                    Math.clamp(newEnergy, 0, maxEnergy), maxEnergy,
+                    primaryEntityId, secondaryEntityId);
         }
 
         public boolean isAlive() {
