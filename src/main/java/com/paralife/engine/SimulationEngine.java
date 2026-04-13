@@ -396,15 +396,15 @@ public class SimulationEngine {
     }
 
     private void updateBotRegistryForFormation(Entity.BondedPair bp, String newMemberId, Position pos) {
-        // Map primary entity's session to new member
+        // Map primary entity's session to new member (primary wins control)
         botRegistry.getSessionForEntity(bp.primaryEntityId()).ifPresent(sessionId -> {
             botRegistry.unregisterByEntity(bp.primaryEntityId());
             botRegistry.register(sessionId, newMemberId, pos);
         });
-        // Map secondary entity's session to new member
+        // Secondary entity's bot loses its entity on composite formation — unregister cleanly
+        // to avoid ghost state (WR-04). Only one bot can control a CompositeMember.
         botRegistry.getSessionForEntity(bp.secondaryEntityId()).ifPresent(sessionId -> {
             botRegistry.unregisterByEntity(bp.secondaryEntityId());
-            botRegistry.register(sessionId, newMemberId, pos);
         });
     }
 
