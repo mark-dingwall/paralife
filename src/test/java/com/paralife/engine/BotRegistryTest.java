@@ -105,6 +105,34 @@ class BotRegistryTest {
     }
 
     @Test
+    void remapEntityUpdatesEntityId() {
+        registry.register("s1", "e1", new Position(5, 5));
+        registry.remapEntity("s1", "m1", new Position(6, 6));
+
+        // Session still exists
+        var bot = registry.getBySession("s1");
+        assertThat(bot).isPresent();
+        assertThat(bot.get().entityId()).isEqualTo("m1");
+        assertThat(bot.get().position()).isEqualTo(new Position(6, 6));
+
+        // Old entity mapping removed
+        assertThat(registry.getSessionForEntity("e1")).isEmpty();
+        // New entity mapping works
+        assertThat(registry.getSessionForEntity("m1")).contains("s1");
+    }
+
+    @Test
+    void remapEntityForUnknownSessionCreatesMapping() {
+        // remapEntity should work even if session wasn't registered before
+        registry.remapEntity("s1", "m1", new Position(3, 3));
+
+        var bot = registry.getBySession("s1");
+        assertThat(bot).isPresent();
+        assertThat(bot.get().entityId()).isEqualTo("m1");
+        assertThat(registry.getSessionForEntity("m1")).contains("s1");
+    }
+
+    @Test
     void multipleBotsConcurrent() {
         // Register many bots to exercise concurrency paths
         for (int i = 0; i < 100; i++) {

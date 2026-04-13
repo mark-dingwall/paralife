@@ -1,6 +1,7 @@
 package com.paralife.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.engine.CompositeRegistry;
 import com.paralife.engine.SimulationEngine;
 import com.paralife.engine.TickEvent;
 import com.paralife.world.WorldGrid;
@@ -27,13 +28,16 @@ public class TickBroadcaster {
     private final WorldGrid worldGrid;
     private final ObjectMapper objectMapper;
     private final SimulationEngine simulationEngine;
+    private final CompositeRegistry compositeRegistry;
 
     public TickBroadcaster(SessionRegistry sessionRegistry, WorldGrid worldGrid,
-                           ObjectMapper objectMapper, SimulationEngine simulationEngine) {
+                           ObjectMapper objectMapper, SimulationEngine simulationEngine,
+                           CompositeRegistry compositeRegistry) {
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
         this.objectMapper = objectMapper;
         this.simulationEngine = simulationEngine;
+        this.compositeRegistry = compositeRegistry;
     }
 
     @EventListener
@@ -49,7 +53,8 @@ public class TickBroadcaster {
                 event.tickNumber(),
                 event.timestamp().toEpochMilli(),
                 snapshot.entityCount(),
-                simulationEngine.getLastTickBondCount()
+                simulationEngine.getLastTickBondCount(),
+                compositeRegistry.size()
         );
 
         try {

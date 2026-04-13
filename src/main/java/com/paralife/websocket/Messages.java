@@ -50,7 +50,8 @@ public sealed interface Messages {
             long tickNumber,
             long timestamp,
             int entityCount,
-            int bondCount
+            int bondCount,
+            int compositeCount
     ) implements Messages {}
 
     /**

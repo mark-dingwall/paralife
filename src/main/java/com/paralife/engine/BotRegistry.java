@@ -76,6 +76,21 @@ public class BotRegistry {
     }
 
     /**
+     * Remap a bot's entity ID (e.g., when BondedPair entity becomes CompositeMember).
+     * Preserves the session but updates entity mapping.
+     */
+    public void remapEntity(String sessionId, String newEntityId, Position position) {
+        var old = bySession.get(sessionId);
+        if (old != null) {
+            entityToSession.remove(old.entityId());
+        }
+        var state = new BotState(sessionId, newEntityId, position);
+        bySession.put(sessionId, state);
+        entityToSession.put(newEntityId, sessionId);
+        log.debug("Bot remapped: session={} newEntity={} pos={}", sessionId, newEntityId, position);
+    }
+
+    /**
      * Get the bot state for a session, if registered.
      */
     public Optional<BotState> getBySession(String sessionId) {
