@@ -2,7 +2,7 @@
 phase: 12
 slug: composite-entities
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-04-14
 ---
@@ -38,26 +38,26 @@ created: 2026-04-14
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 12-01-01 | 01 | 1 | Composite entity representation | — | N/A | unit | `./gradlew test --tests "com.paralife.world.CompositeMemberTest"` | ❌ W0 | ⬜ pending |
-| 12-01-02 | 01 | 1 | Shared energy pool | — | N/A | unit | `./gradlew test --tests "com.paralife.engine.CompositeStateTest"` | ❌ W0 | ⬜ pending |
-| 12-02-01 | 02 | 1 | Composite formation | — | N/A | unit | `./gradlew test --tests "com.paralife.engine.CompositeFormationTest"` | ❌ W0 | ⬜ pending |
-| 12-03-01 | 03 | 2 | Coordinated movement | — | N/A | unit | `./gradlew test --tests "com.paralife.engine.CompositeMovementTest"` | ❌ W0 | ⬜ pending |
-| 12-03-02 | 03 | 2 | STV voting | — | N/A | unit | `./gradlew test --tests "com.paralife.engine.STVVotingTest"` | ❌ W0 | ⬜ pending |
-| 12-04-01 | 04 | 2 | Dissolution & death | — | N/A | unit | `./gradlew test --tests "com.paralife.engine.CompositeDissolutionTest"` | ❌ W0 | ⬜ pending |
-| 12-05-01 | 05 | 3 | Perception stitching | — | N/A | unit | `./gradlew test --tests "com.paralife.engine.CompositePerceptionTest"` | ❌ W0 | ⬜ pending |
-| 12-06-01 | 06 | 3 | Integration test | — | N/A | integration | `./gradlew test --tests "com.paralife.engine.CompositeIntegrationTest"` | ❌ W0 | ⬜ pending |
+| 12-01-01 | 01 | 1 | Composite entity representation | -- | N/A | unit | `./gradlew test --tests "com.paralife.world.CompositeMemberTest"` | No W0 | pending |
+| 12-01-02 | 01 | 1 | Registry + position tracking | -- | N/A | unit | `./gradlew test --tests "com.paralife.engine.CompositeRegistryTest"` | No W0 | pending |
+| 12-02-01 | 02 | 2 | Composite formation | -- | N/A | unit | `./gradlew test --tests "com.paralife.engine.CompositeFormationTest"` | No W0 | pending |
+| 12-03-01 | 03 | 2 | Coordinated movement | -- | N/A | unit | `./gradlew test --tests "com.paralife.engine.CompositeMovementTest"` | No W0 | pending |
+| 12-03-02 | 03 | 2 | STV voting | -- | N/A | unit | `./gradlew test --tests "com.paralife.engine.CompositeMovementTest"` | No W0 | pending |
+| 12-04-01 | 04 | 3 | Dissolution + death | -- | N/A | unit | `./gradlew test --tests "com.paralife.engine.CompositeDissolutionTest"` | No W0 | pending |
+| 12-05-01 | 05 | 2 | Perception stitching | -- | N/A | unit | `./gradlew test --tests "com.paralife.engine.CompositePerceptionTest"` | No W0 | pending |
+| 12-06-01 | 06 | 4 | Integration test | -- | N/A | integration | `./gradlew test --tests "com.paralife.engine.CompositeIntegrationTest"` | No W0 | pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*Status: pending / green / red / flaky*
 
 ---
 
 ## Wave 0 Requirements
 
-- [ ] `src/test/java/com/paralife/world/CompositeMemberTest.java` — stubs for CompositeMember entity
-- [ ] `src/test/java/com/paralife/engine/CompositeStateTest.java` — stubs for CompositeState/Registry
-- [ ] `src/test/java/com/paralife/engine/CompositeFormationTest.java` — stubs for BondedPair→Composite formation
-- [ ] `src/test/java/com/paralife/engine/CompositeMovementTest.java` — stubs for coordinated movement
-- [ ] `src/test/java/com/paralife/engine/CompositeDissolutionTest.java` — stubs for dissolution/death
+- [ ] `src/test/java/com/paralife/world/CompositeMemberTest.java` -- stubs for CompositeMember entity
+- [ ] `src/test/java/com/paralife/engine/CompositeRegistryTest.java` -- stubs for CompositeRegistry CRUD + position tracking
+- [ ] `src/test/java/com/paralife/engine/CompositeFormationTest.java` -- stubs for BondedPair->Composite formation
+- [ ] `src/test/java/com/paralife/engine/CompositeMovementTest.java` -- stubs for coordinated movement + STV
+- [ ] `src/test/java/com/paralife/engine/CompositeDissolutionTest.java` -- stubs for dissolution/death
 
 *Existing JUnit 5 infrastructure covers all framework needs.*
 
@@ -74,11 +74,11 @@ created: 2026-04-14
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 30s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s
+- [x] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** pending

@@ -470,7 +470,7 @@ No network-facing changes beyond the existing WebSocket protocol. New message ty
 
 ASVS V5 (Input Validation): new `CompositeAction` message fields (`role`, ranked direction preferences) must be validated against enum values before use. Pattern: `Direction.fromString()` returns null for invalid values — already handled in ActionResolver.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **`canFormComposites` flag location (D-02)**
    - What we know: D-02 says it should be a property on entities to toggle formation eligibility.
