@@ -61,10 +61,10 @@ Simple entities combine into complex organisms when conditions align.
 ### Phase 11: Bonding Rules Engine
 **Goal:** Define which entity types can combine and under what conditions; implement bonding logic as a new simulation phase
 **Depends on:** Phase 10 (stable entity system with RPS dynamics)
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 Plans:
-- [ ] 11-01-PLAN.md — BondedPair entity type, BondingConfig, processInteractions refactor
-- [ ] 11-02-PLAN.md — Downstream wiring (PerceptionBroadcaster, TickBroadcaster, Messages.Tick bondCount)
+- [x] 11-01-PLAN.md — BondedPair entity type, BondingConfig, processInteractions refactor
+- [x] 11-02-PLAN.md — Downstream wiring (PerceptionBroadcaster, TickBroadcaster, Messages.Tick bondCount)
 **Success Criteria:**
 - Bonding rules configurable via application.yml or dedicated config
 - At least two bonding conditions implemented (e.g., proximity + energy threshold)
