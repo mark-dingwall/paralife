@@ -409,7 +409,8 @@ public class SimulationEngine {
     }
 
     // ── Phase 2: Energy decay ──────────────────────────────────────
-    // CompositeMember energy handled by CompositeEnergyDistributor (Plan 12-02)
+    // CompositeMember energy decay: passive role drain in CompositeEnergyDistributor @Order(15)
+    // replaces base energyDecayPerTick. Drain rates are per-role (see CompositeConfig).
 
     private int processEnergyDecay(int width, int height) {
         if (config.energyDecayPerTick() == 0) return 0;
@@ -433,7 +434,8 @@ public class SimulationEngine {
     }
 
     // ── Phase 2.5: Overcrowding ─────────────────────────────────────
-    // CompositeMember overcrowding handled by CompositeEnergyDistributor (Plan 12-02)
+    // CompositeMember entities are exempt from overcrowding penalty — their energy cost
+    // is governed by composite-specific passive/active drain rates (CompositeConfig).
 
     private int processOvercrowding(int width, int height) {
         if (config.overcrowdingThreshold() > 8 || config.overcrowdingEnergyPenalty() == 0) return 0;
