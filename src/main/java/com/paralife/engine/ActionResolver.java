@@ -577,7 +577,12 @@ public class ActionResolver {
             }
         }
 
-        // Increment ticks-since-move for all composites
+        // Initialize tracking for newly formed composites (WR-02: prevent immediate movement)
+        for (var composite : compositeRegistry.getAll()) {
+            compositeTicksSinceMove.putIfAbsent(composite.getCompositeId(), 0);
+        }
+
+        // Increment ticks-since-move for all tracked composites
         for (String compositeId : compositeTicksSinceMove.keySet()) {
             compositeTicksSinceMove.merge(compositeId, 1, Integer::sum);
         }
