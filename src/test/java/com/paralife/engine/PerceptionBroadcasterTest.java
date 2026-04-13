@@ -1,17 +1,21 @@
 package com.paralife.engine;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.websocket.Messages;
 import com.paralife.websocket.Messages.CellView;
 import com.paralife.websocket.SessionRegistry;
 import com.paralife.world.*;
+import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
+import com.paralife.world.Entity.Role;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -23,6 +27,7 @@ class PerceptionBroadcasterTest {
     private SessionRegistry sessionRegistry;
     private WorldGrid worldGrid;
     private ObjectMapper objectMapper;
+    private CompositeRegistry compositeRegistry;
     private PerceptionBroadcaster broadcaster;
 
     @BeforeEach
@@ -31,7 +36,8 @@ class PerceptionBroadcasterTest {
         botRegistry = new BotRegistry();
         sessionRegistry = new SessionRegistry();
         objectMapper = new ObjectMapper();
-        broadcaster = new PerceptionBroadcaster(botRegistry, sessionRegistry, worldGrid, objectMapper);
+        compositeRegistry = new CompositeRegistry();
+        broadcaster = new PerceptionBroadcaster(botRegistry, sessionRegistry, worldGrid, objectMapper, compositeRegistry);
     }
 
     @Test
@@ -217,5 +223,51 @@ class PerceptionBroadcasterTest {
     void onTickNoBots() {
         // Should not throw when no bots registered
         broadcaster.onTick(new TickEvent(1));
+    }
+
+    @Test
+    void compositeMemberGetsCompositePerception() throws Exception {
+        // Place a CompositeMember bot — should receive CompositePerception, not regular Perception
+        var sensor = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.SENSOR, 50, 100);
+        worldGrid.setEntity(5, 5, sensor);
+
+        compositeRegistry.register("c1", List.of("m1"),
+                Map.of("m1", new Position(5, 5)), 100, 200);
+
+        botRegistry.register("s1", "m1", new Position(5, 5));
+
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.getId()).thenReturn("s1");
+        when(session.isOpen()).thenReturn(true);
+        sessionRegistry.register(session);
+
+        broadcaster.onTick(new TickEvent(1));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        verify(session).sendMessage(captor.capture());
+
+        var msg = objectMapper.readValue(captor.getValue().getPayload(), Messages.class);
+        assertThat(msg).isInstanceOf(Messages.CompositePerception.class);
+    }
+
+    @Test
+    void regularParticleBotGetsRegularPerception() throws Exception {
+        // Particle bot should still get regular Perception (not CompositePerception)
+        Particle particle = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(5, 5, particle);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.getId()).thenReturn("s1");
+        when(session.isOpen()).thenReturn(true);
+        sessionRegistry.register(session);
+
+        broadcaster.onTick(new TickEvent(1));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        verify(session).sendMessage(captor.capture());
+
+        var msg = objectMapper.readValue(captor.getValue().getPayload(), Messages.class);
+        assertThat(msg).isInstanceOf(Messages.Perception.class);
     }
 }
