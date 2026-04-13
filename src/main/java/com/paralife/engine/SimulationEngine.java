@@ -297,6 +297,8 @@ public class SimulationEngine {
                     worldGrid.clearEntity(x, y);
                     deaths++;
                 } else if (cell.occupant() instanceof Entity.BondedPair bp && !bp.isAlive()) {
+                    botRegistry.unregisterByEntity(bp.primaryEntityId());
+                    botRegistry.unregisterByEntity(bp.secondaryEntityId());
                     worldGrid.clearEntity(x, y);
                     deaths++;
                 }
