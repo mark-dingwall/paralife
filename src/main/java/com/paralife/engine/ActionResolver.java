@@ -618,6 +618,13 @@ public class ActionResolver {
                 composite.drainEnergy(locomotorCount * compositeConfig.locomotorActiveDrain());
             }
         }
+
+        // Prune stale entries for dissolved composites to prevent memory leak (WR-03)
+        Set<String> activeCompositeIds = new HashSet<>();
+        for (var composite : compositeRegistry.getAll()) {
+            activeCompositeIds.add(composite.getCompositeId());
+        }
+        compositeTicksSinceMove.keySet().retainAll(activeCompositeIds);
     }
 
     /**
