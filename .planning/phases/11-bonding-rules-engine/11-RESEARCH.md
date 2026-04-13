@@ -434,17 +434,19 @@ No new authentication, session, or access control surface is introduced. Phase 1
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **`bondCount` surfacing to `TickBroadcaster`**
    - What we know: `TickBroadcaster` currently reads only `worldGrid.snapshot().entityCount()`. It has no channel to receive per-tick bond counts from `SimulationEngine`.
    - What's unclear: Best coupling approach — shared per-tick counter on `SimulationEngine` (consistent with `nutrientIdCounter`), or a `TickContext` object published alongside `TickEvent`.
    - Recommendation: Add a `AtomicInteger lastTickBondCount` field to `SimulationEngine`, reset at start of `processInteractions()`, incremented per bond. `TickBroadcaster` injects `SimulationEngine` and reads it. Simple, no new event types.
+   - RESOLVED: Using `AtomicInteger lastTickBondCount` on `SimulationEngine`. `TickBroadcaster` injects `SimulationEngine` and calls `getLastTickBondCount()`. Implemented in Plan 11-01 Task 2 and Plan 11-02 Task 1.
 
 2. **Energy decay rate for `BondedPair` — flat or scaled?**
    - What we know: D-11 says "decay operates on the single pool." The existing `processEnergyDecay` applies `energyDecayPerTick` flat to every `Particle`.
    - What's unclear: Should a `BondedPair` decay at the same flat rate as a `Particle`, or at 2× (representing two metabolisms)? D-11 doesn't specify.
    - Recommendation: Apply the same flat `energyDecayPerTick` to the shared pool in Phase 11. Phase 13 (Energy & Metabolism) will introduce per-type metabolism rates — that's the right phase for this distinction.
+   - RESOLVED: Applying flat `energyDecayPerTick` to the shared pool (same rate as a Particle). Scaled decay deferred to Phase 13 (Energy & Metabolism). Implemented in Plan 11-01 Task 2.
 
 ---
 
