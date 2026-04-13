@@ -260,7 +260,8 @@ public class SimulationEngine {
         for (int x = 0; x < width; x++) {
             for (int y = 0; y < height; y++) {
                 Cell cell = worldGrid.getCell(x, y);
-                if (!(cell.occupant() instanceof Particle p)) continue;
+                Entity occupant = cell.occupant();
+                if (!(occupant instanceof Particle) && !(occupant instanceof Entity.BondedPair)) continue;
 
                 int neighborCount = 0;
                 for (Position nPos : worldGrid.getNeighbors(x, y)) {
@@ -271,8 +272,11 @@ public class SimulationEngine {
                 }
 
                 if (neighborCount >= config.overcrowdingThreshold()) {
-                    Particle penalized = p.withEnergy(p.energy() - config.overcrowdingEnergyPenalty());
-                    worldGrid.setEntity(x, y, penalized);
+                    if (occupant instanceof Particle p) {
+                        worldGrid.setEntity(x, y, p.withEnergy(p.energy() - config.overcrowdingEnergyPenalty()));
+                    } else if (occupant instanceof Entity.BondedPair bp) {
+                        worldGrid.setEntity(x, y, bp.withEnergy(bp.energy() - config.overcrowdingEnergyPenalty()));
+                    }
                     if (!cell.hasFlag(Cell.FLAG_OVERCROWDED)) {
                         worldGrid.setCell(x, y, worldGrid.getCell(x, y).withAddedFlag(Cell.FLAG_OVERCROWDED));
                     }
