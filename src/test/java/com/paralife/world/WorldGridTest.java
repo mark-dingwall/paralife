@@ -1,10 +1,13 @@
 package com.paralife.world;
 
+import com.paralife.world.Entity.Particle;
+import com.paralife.world.Entity.ParticleType;
+import com.paralife.world.Entity.Rock;
+import com.paralife.world.Entity.Nutrient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -27,36 +30,63 @@ class WorldGridTest {
 
     @Test
     void emptyCellReturnsEmpty() {
-        assertThat(grid.getCell(0, 0)).isEmpty();
+        Cell cell = grid.getCell(0, 0);
+        assertThat(cell.isEmpty()).isTrue();
     }
 
     @Test
-    void setCellAndRetrieve() {
-        grid.setCell(3, 4, "entity-1");
-        assertThat(grid.getCell(3, 4)).contains("entity-1");
+    void setEntityAndRetrieve() {
+        Particle p = Particle.spawn("p1", ParticleType.CATALYST);
+        grid.setEntity(3, 4, p);
+        Cell cell = grid.getCell(3, 4);
+        assertThat(cell.hasOccupant()).isTrue();
+        assertThat(cell.occupant()).isEqualTo(p);
     }
 
     @Test
-    void clearCellWithNull() {
-        grid.setCell(3, 4, "entity-1");
-        grid.setCell(3, 4, null);
-        assertThat(grid.getCell(3, 4)).isEmpty();
+    void clearEntity() {
+        grid.setEntity(3, 4, Particle.spawn("p1", ParticleType.SPORE));
+        grid.clearEntity(3, 4);
+        assertThat(grid.getCell(3, 4).isEmpty()).isTrue();
+    }
+
+    @Test
+    void setCellReplacesEntireCell() {
+        Cell cell = new Cell(new Rock("r1"), 0, 5);
+        grid.setCell(2, 2, cell);
+        Cell retrieved = grid.getCell(2, 2);
+        assertThat(retrieved.occupant()).isInstanceOf(Rock.class);
+        assertThat(retrieved.nutrientLevel()).isEqualTo(5);
+    }
+
+    @Test
+    void setEntityPreservesEnvironment() {
+        // Set a cell with nutrient level
+        grid.setCell(1, 1, Cell.EMPTY.withNutrientLevel(7));
+        // Place an entity on it
+        grid.setEntity(1, 1, Particle.spawn("p1", ParticleType.MEMBRANE));
+        Cell cell = grid.getCell(1, 1);
+        assertThat(cell.hasOccupant()).isTrue();
+        assertThat(cell.nutrientLevel()).isEqualTo(7); // preserved
     }
 
     @Test
     void getCellWrapsCoordinates() {
-        grid.setCell(0, 0, "wrap-test");
+        grid.setEntity(0, 0, new Rock("wrap-test"));
         // (10, 10) wraps to (0, 0) on a 10x10 grid
-        assertThat(grid.getCell(10, 10)).contains("wrap-test");
+        assertThat(grid.getCell(10, 10).occupant()).isInstanceOf(Rock.class);
+        assertThat(((Rock) grid.getCell(10, 10).occupant()).id()).isEqualTo("wrap-test");
         // (-10, -10) also wraps to (0, 0)
-        assertThat(grid.getCell(-10, -10)).contains("wrap-test");
+        assertThat(grid.getCell(-10, -10).occupant()).isNotNull();
     }
 
     @Test
-    void setCellWrapsCoordinates() {
-        grid.setCell(-1, -1, "negative-wrap");
+    void setEntityWrapsCoordinates() {
+        grid.setEntity(-1, -1, new Rock("negative-wrap"));
         // -1 mod 10 = 9
-        assertThat(grid.getCell(9, 9)).contains("negative-wrap");
+        Cell cell = grid.getCell(9, 9);
+        assertThat(cell.hasOccupant()).isTrue();
+        assertThat(cell.occupant().id()).isEqualTo("negative-wrap");
     }
 
     @Test
@@ -74,23 +104,24 @@ class WorldGridTest {
 
     @Test
     void snapshotIsDeepCopy() {
-        grid.setCell(1, 1, "before-snapshot");
+        Particle before = Particle.spawn("before", ParticleType.CATALYST);
+        grid.setEntity(1, 1, before);
         WorldGrid.GridSnapshot snap = grid.snapshot();
 
         // Mutate the live grid after snapshot
-        grid.setCell(1, 1, "after-snapshot");
-        grid.setCell(2, 2, "new-entity");
+        grid.setEntity(1, 1, Particle.spawn("after", ParticleType.SPORE));
+        grid.setEntity(2, 2, new Rock("new-entity"));
 
         // Snapshot should reflect state at time of capture
-        assertThat(snap.getCell(1, 1)).contains("before-snapshot");
-        assertThat(snap.getCell(2, 2)).isEmpty();
+        assertThat(snap.getCell(1, 1).occupant()).isEqualTo(before);
+        assertThat(snap.getCell(2, 2).isEmpty()).isTrue();
     }
 
     @Test
     void snapshotEntityCount() {
-        grid.setCell(0, 0, "a");
-        grid.setCell(1, 1, "b");
-        grid.setCell(2, 2, "c");
+        grid.setEntity(0, 0, Particle.spawn("a", ParticleType.CATALYST));
+        grid.setEntity(1, 1, Particle.spawn("b", ParticleType.SPORE));
+        grid.setEntity(2, 2, new Rock("c"));
         WorldGrid.GridSnapshot snap = grid.snapshot();
         assertThat(snap.entityCount()).isEqualTo(3);
     }
@@ -110,12 +141,11 @@ class WorldGridTest {
 
     @Test
     void concurrentReadsDontBlock() throws Exception {
-        grid.setCell(5, 5, "concurrent");
+        grid.setEntity(5, 5, Particle.spawn("concurrent", ParticleType.MEMBRANE));
 
         // Launch multiple virtual threads reading simultaneously
         var threads = new Thread[100];
-        @SuppressWarnings("unchecked")
-        Optional<String>[] results = new Optional[100];
+        Cell[] results = new Cell[100];
         for (int i = 0; i < 100; i++) {
             final int idx = i;
             threads[i] = Thread.startVirtualThread(() -> {
@@ -127,18 +157,30 @@ class WorldGridTest {
         }
 
         // All reads should succeed
-        for (Optional<String> r : results) {
-            assertThat(r).contains("concurrent");
+        for (Cell r : results) {
+            assertThat(r.hasOccupant()).isTrue();
+            assertThat(r.occupant().id()).isEqualTo("concurrent");
         }
     }
 
     @Test
     void largeGridWorks() {
         WorldGrid large = new WorldGrid(new GridConfig(256, 256));
-        large.setCell(255, 255, "corner");
-        assertThat(large.getCell(255, 255)).contains("corner");
+        large.setEntity(255, 255, new Rock("corner"));
+        assertThat(large.getCell(255, 255).occupant()).isInstanceOf(Rock.class);
         assertThat(large.getNeighbors(255, 255)).hasSize(8);
         // Neighbor wrapping: (256,256) → (0,0)
         assertThat(large.getNeighbors(255, 255)).contains(new Position(0, 0));
+    }
+
+    @Test
+    void differentEntityTypesCoexist() {
+        grid.setEntity(0, 0, Particle.spawn("p1", ParticleType.CATALYST));
+        grid.setEntity(1, 0, new Rock("r1"));
+        grid.setEntity(2, 0, Nutrient.spawn("n1"));
+
+        assertThat(grid.getCell(0, 0).occupant()).isInstanceOf(Particle.class);
+        assertThat(grid.getCell(1, 0).occupant()).isInstanceOf(Rock.class);
+        assertThat(grid.getCell(2, 0).occupant()).isInstanceOf(Nutrient.class);
     }
 }

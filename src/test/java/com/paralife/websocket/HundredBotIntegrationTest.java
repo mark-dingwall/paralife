@@ -74,6 +74,7 @@ class HundredBotIntegrationTest {
 
                     var handler = new TextWebSocketHandler() {
                         private boolean welcomed = false;
+                        private boolean tickGoalReached = false;
 
                         @Override
                         protected void handleTextMessage(WebSocketSession session, TextMessage message) {
@@ -87,7 +88,8 @@ class HundredBotIntegrationTest {
                                 } else if ("tick".equals(type)) {
                                     long tickNum = node.get("tickNumber").asLong();
                                     ticks.add(tickNum);
-                                    if (ticks.size() >= TICKS_TO_COLLECT) {
+                                    if (!tickGoalReached && ticks.size() >= TICKS_TO_COLLECT) {
+                                        tickGoalReached = true;
                                         allReceivedTicks.countDown();
                                     }
                                 }
@@ -135,7 +137,7 @@ class HundredBotIntegrationTest {
 
         // Verify: each bot received sequential tick numbers (no gaps within each bot's stream)
         for (var entry : ticksByBot.entrySet()) {
-            List<Long> ticks = entry.getValue();
+            List<Long> ticks = new ArrayList<>(entry.getValue()); // snapshot to avoid COW race
             assertThat(ticks)
                     .as("Bot %s should have received at least %d ticks", entry.getKey(), TICKS_TO_COLLECT)
                     .hasSizeGreaterThanOrEqualTo(TICKS_TO_COLLECT);

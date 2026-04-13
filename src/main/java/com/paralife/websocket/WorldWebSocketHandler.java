@@ -1,8 +1,16 @@
 package com.paralife.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.engine.ActionResolver;
+import com.paralife.engine.BotRegistry;
 import com.paralife.engine.TickEngine;
+import com.paralife.world.Entity;
+import com.paralife.world.Entity.Particle;
+import com.paralife.world.Entity.ParticleType;
+import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
+
+import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -25,13 +33,18 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
     private final SessionRegistry sessionRegistry;
     private final WorldGrid worldGrid;
     private final TickEngine tickEngine;
+    private final BotRegistry botRegistry;
+    private final ActionResolver actionResolver;
     private final ObjectMapper objectMapper;
 
     public WorldWebSocketHandler(SessionRegistry sessionRegistry, WorldGrid worldGrid,
-                                  TickEngine tickEngine, ObjectMapper objectMapper) {
+                                  TickEngine tickEngine, BotRegistry botRegistry,
+                                  ActionResolver actionResolver, ObjectMapper objectMapper) {
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
         this.tickEngine = tickEngine;
+        this.botRegistry = botRegistry;
+        this.actionResolver = actionResolver;
         this.objectMapper = objectMapper;
     }
 
@@ -58,6 +71,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
             switch (msg) {
                 case Messages.Register register -> handleRegister(session, register);
                 case Messages.Heartbeat heartbeat -> handleHeartbeat(session);
+                case Messages.Action action -> handleAction(session, action);
                 default -> {
                     log.warn("Unexpected message type from {}: {}", session.getId(), msg.getClass().getSimpleName());
                     sendMessage(session, new Messages.Error("UNKNOWN_MESSAGE", "Unhandled message type"));
@@ -71,6 +85,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        cleanupBot(session.getId());
         sessionRegistry.unregister(session.getId());
         log.info("Client disconnected: {} (status: {}, total: {})",
                 session.getId(), status, sessionRegistry.getSessionCount());
@@ -79,19 +94,64 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         log.warn("Transport error for session {}: {}", session.getId(), exception.getMessage());
+        cleanupBot(session.getId());
         sessionRegistry.unregister(session.getId());
     }
 
+    /** Remove bot's entity from the grid, then unregister from BotRegistry. */
+    private void cleanupBot(String sessionId) {
+        botRegistry.getBySession(sessionId).ifPresent(state -> {
+            var pos = state.position();
+            worldGrid.clearEntity(pos.x(), pos.y());
+        });
+        botRegistry.unregisterBySession(sessionId);
+    }
+
+    private static final int MAX_PLACEMENT_ATTEMPTS = 50;
+
     private void handleRegister(WebSocketSession session, Messages.Register register) throws Exception {
-        // For now, place entity at random position
-        int x = (int) (Math.random() * worldGrid.getWidth());
-        int y = (int) (Math.random() * worldGrid.getHeight());
         String entityId = "entity-" + session.getId();
 
-        worldGrid.setCell(x, y, entityId);
+        // Parse particle type from register message, default to CATALYST
+        ParticleType particleType;
+        try {
+            particleType = ParticleType.valueOf(register.entityType().toUpperCase());
+        } catch (IllegalArgumentException | NullPointerException e) {
+            particleType = ParticleType.CATALYST;
+        }
+
+        Particle particle = Particle.spawn(entityId, particleType);
+
+        // Try random positions until we find an empty cell
+        var rng = ThreadLocalRandom.current();
+        int x = -1, y = -1;
+        boolean placed = false;
+        for (int attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS; attempt++) {
+            x = rng.nextInt(worldGrid.getWidth());
+            y = rng.nextInt(worldGrid.getHeight());
+            if (worldGrid.trySetEntity(x, y, particle)) {
+                placed = true;
+                break;
+            }
+        }
+
+        if (!placed) {
+            sendMessage(session, new Messages.Error("GRID_FULL", "No empty cell found after "
+                    + MAX_PLACEMENT_ATTEMPTS + " attempts"));
+            return;
+        }
+
+        // Register in bot registry for perception/action tracking
+        botRegistry.register(session.getId(), entityId, new Position(x, y));
 
         sendMessage(session, new Messages.Registered(entityId, x, y));
-        log.info("Entity registered: {} at ({},{}) type={}", entityId, x, y, register.entityType());
+        log.info("Entity registered: {} at ({},{}) type={}", entityId, x, y, particleType);
+    }
+
+    private void handleAction(WebSocketSession session, Messages.Action action) {
+        actionResolver.queueAction(session.getId(), action);
+        log.debug("Action queued from {}: type={} dir={}", session.getId(),
+                action.actionType(), action.direction());
     }
 
     private void handleHeartbeat(WebSocketSession session) {

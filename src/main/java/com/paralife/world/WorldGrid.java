@@ -2,14 +2,12 @@ package com.paralife.world;
 
 import org.springframework.stereotype.Component;
 
-import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * A 2D toroidal grid that stores entity IDs (or null for empty cells).
+ * A 2D toroidal grid of {@link Cell}s.
  * Thread-safe via read-write lock — many readers, exclusive writer.
  */
 @Component
@@ -17,13 +15,21 @@ public class WorldGrid {
 
     private final int width;
     private final int height;
-    private final String[][] cells; // entity ID or null
+    private final Cell[][] cells;
+    // Non-fair RRWL: per-cell locking means ~262K acquisitions/tick at 256×256, but these
+    // are uncontended reads on a single-threaded tick pipeline — sub-ms in practice.
+    // Coarser locking (per-phase or striped) is a future optimization for 1000+ bots.
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
     public WorldGrid(GridConfig config) {
         this.width = config.width();
         this.height = config.height();
-        this.cells = new String[width][height];
+        this.cells = new Cell[width][height];
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                cells[x][y] = Cell.EMPTY;
+            }
+        }
     }
 
     public int getWidth() {
@@ -35,28 +41,89 @@ public class WorldGrid {
     }
 
     /**
-     * Get the entity ID at a position. Returns empty if cell is unoccupied.
-     * Coordinates are wrapped toroidally.
+     * Get the cell at a position. Coordinates are wrapped toroidally.
      */
-    public Optional<String> getCell(int x, int y) {
+    public Cell getCell(int x, int y) {
         Position pos = Position.wrap(x, y, width, height);
         lock.readLock().lock();
         try {
-            return Optional.ofNullable(cells[pos.x()][pos.y()]);
+            return cells[pos.x()][pos.y()];
         } finally {
             lock.readLock().unlock();
         }
     }
 
     /**
-     * Place an entity at a position. Pass null to clear.
-     * Coordinates are wrapped toroidally.
+     * Attempt to place an entity at a position only if the cell is currently empty.
+     * Returns true if placed, false if the cell was occupied.
      */
-    public void setCell(int x, int y, String entityId) {
+    public boolean trySetEntity(int x, int y, Entity entity) {
         Position pos = Position.wrap(x, y, width, height);
         lock.writeLock().lock();
         try {
-            cells[pos.x()][pos.y()] = entityId;
+            if (cells[pos.x()][pos.y()].hasOccupant()) {
+                return false;
+            }
+            cells[pos.x()][pos.y()] = cells[pos.x()][pos.y()].withOccupant(entity);
+            return true;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Place an entity at a position, replacing any existing occupant.
+     * Preserves the cell's environmental state (flags, nutrient level).
+     * Coordinates are wrapped toroidally.
+     */
+    public void setEntity(int x, int y, Entity entity) {
+        Position pos = Position.wrap(x, y, width, height);
+        lock.writeLock().lock();
+        try {
+            cells[pos.x()][pos.y()] = cells[pos.x()][pos.y()].withOccupant(entity);
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Set the entire cell at a position (occupant + environment).
+     * Coordinates are wrapped toroidally.
+     */
+    public void setCell(int x, int y, Cell cell) {
+        Position pos = Position.wrap(x, y, width, height);
+        lock.writeLock().lock();
+        try {
+            cells[pos.x()][pos.y()] = cell;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Clear the occupant at a position, preserving environmental state.
+     */
+    public void clearEntity(int x, int y) {
+        Position pos = Position.wrap(x, y, width, height);
+        lock.writeLock().lock();
+        try {
+            cells[pos.x()][pos.y()] = cells[pos.x()][pos.y()].cleared();
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Reset the entire grid to empty cells.
+     */
+    public void clear() {
+        lock.writeLock().lock();
+        try {
+            for (int x = 0; x < width; x++) {
+                for (int y = 0; y < height; y++) {
+                    cells[x][y] = Cell.EMPTY;
+                }
+            }
         } finally {
             lock.writeLock().unlock();
         }
@@ -72,15 +139,15 @@ public class WorldGrid {
 
     /**
      * Returns an immutable snapshot of the entire grid state.
-     * The snapshot is a deep copy — modifications to the grid after snapshot creation
-     * do not affect the snapshot.
+     * The snapshot is a deep copy — modifications after creation don't affect it.
      */
     public GridSnapshot snapshot() {
         lock.readLock().lock();
         try {
-            String[][] copy = new String[width][height];
-            for (int i = 0; i < width; i++) {
-                copy[i] = Arrays.copyOf(cells[i], height);
+            Cell[][] copy = new Cell[width][height];
+            for (int x = 0; x < width; x++) {
+                // Cell is a record (immutable) so shallow copy of the array is sufficient
+                System.arraycopy(cells[x], 0, copy[x], 0, height);
             }
             return new GridSnapshot(width, height, copy);
         } finally {
@@ -91,21 +158,19 @@ public class WorldGrid {
     /**
      * Immutable snapshot of the grid at a point in time.
      */
-    public record GridSnapshot(int width, int height, String[][] cells) {
+    public record GridSnapshot(int width, int height, Cell[][] cells) {
 
-        public Optional<String> getCell(int x, int y) {
+        public Cell getCell(int x, int y) {
             Position pos = Position.wrap(x, y, width, height);
-            return Optional.ofNullable(cells[pos.x()][pos.y()]);
+            return cells[pos.x()][pos.y()];
         }
 
-        /**
-         * Count of occupied cells.
-         */
+        /** Count of occupied cells (cells with a non-null occupant). */
         public int entityCount() {
             int count = 0;
-            for (String[] col : cells) {
-                for (String cell : col) {
-                    if (cell != null) count++;
+            for (Cell[] col : cells) {
+                for (Cell cell : col) {
+                    if (cell.hasOccupant()) count++;
                 }
             }
             return count;
