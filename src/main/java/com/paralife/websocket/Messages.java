@@ -23,6 +23,10 @@ import java.util.List;
         @JsonSubTypes.Type(value = Messages.Register.class, name = "register"),
         @JsonSubTypes.Type(value = Messages.Heartbeat.class, name = "heartbeat"),
         @JsonSubTypes.Type(value = Messages.Action.class, name = "action"),
+        // Composite entity messages
+        @JsonSubTypes.Type(value = Messages.CompositePerception.class, name = "composite_perception"),
+        @JsonSubTypes.Type(value = Messages.CompositeAction.class, name = "composite_action"),
+        @JsonSubTypes.Type(value = Messages.CompositeJoined.class, name = "composite_joined"),
 })
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public sealed interface Messages {
@@ -112,6 +116,41 @@ public sealed interface Messages {
     record Action(
             String actionType,
             String direction
+    ) implements Messages {}
+
+    // ── Composite entity messages ────────────────────────────────
+
+    /**
+     * Server -> Client: per-tick perception for composite members (D-36).
+     * Contains the stitched neighbourhood from all SENSOR members.
+     */
+    record CompositePerception(
+            long tickNumber,
+            EntityState self,
+            List<List<CellView>> stitchedNeighbourhood,
+            int compositeSize,
+            int sharedPoolEnergy,
+            int maxPoolEnergy,
+            String role
+    ) implements Messages {}
+
+    /**
+     * Client -> Server: composite member action with optional STV ranked preferences (D-26, D-34).
+     * rankedPreferences is used by LOCOMOTOR members for direction voting.
+     */
+    record CompositeAction(
+            String actionType,
+            String direction,
+            List<String> rankedPreferences
+    ) implements Messages {}
+
+    /**
+     * Server -> Client: notification that entity joined a composite (D-33).
+     */
+    record CompositeJoined(
+            String compositeId,
+            String role,
+            int compositeSize
     ) implements Messages {}
 
     // ── Shared view types ─────────────────────────────────────────
