@@ -77,15 +77,15 @@ public class CompositeEnergyDistributor {
 
             int passiveDrain = getPassiveDrain(member.role());
 
-            // Phase 1: Decay (drain individual energy)
-            int newEnergy = member.energy() - passiveDrain;
+            // Phase 1: Decay (drain individual energy, clamp to zero)
+            int newEnergy = Math.max(member.energy() - passiveDrain, 0);
 
             // Phase 2: Healing (draw from shared pool if below max)
-            int deficit = member.maxEnergy() - Math.max(newEnergy, 0);
+            int deficit = member.maxEnergy() - newEnergy;
             if (deficit > 0 && composite.getSharedPoolEnergy() > 0) {
                 int healAmount = Math.min(passiveDrain, deficit);
                 int actualHealed = composite.drainEnergy(healAmount);
-                newEnergy = Math.max(newEnergy, 0) + actualHealed;
+                newEnergy = newEnergy + actualHealed;
             }
 
             // Update entity on grid
