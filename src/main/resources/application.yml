@@ -76,6 +76,15 @@ paralife:
       max-attack-boost: 0.5
       max-nutrient-boost: 0.5
       max-damage-vulnerability: 0.5
+    # Phase 13 Plan 03: fertility patches (D-13) and seasonal cycle (D-14)
+    fertility:
+      patch-count: 20
+      patch-min-radius: 3
+      patch-max-radius: 8
+      max-level: 100
+    seasons:
+      year-length-ticks: 200
+      amplitude: 0.5
   bonding:
     bond-energy-threshold: 50
     bonding-probability: 0.10
