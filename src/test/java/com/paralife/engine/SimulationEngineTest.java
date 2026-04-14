@@ -650,8 +650,11 @@ class SimulationEngineTest {
 
         @Test
         void bondedPairDiesWhenEnergyReachesZero() {
-            // Place a BondedPair with low energy, decay will kill it
-            Entity.BondedPair bp = new Entity.BondedPair("bp1", ParticleType.CATALYST, ParticleType.SPORE, 1, 200);
+            // Phase 13 Plan 02: BondedPair decay uses cached effectiveDecayRate, not the
+            // flat config. Construct the pair with effectiveDecayRate=1 so energy 1→0.
+            Entity.BondedPair bp = new Entity.BondedPair(
+                    "bp1", ParticleType.CATALYST, ParticleType.SPORE, 1, 200,
+                    "cat", "spo", 1, 10, 10);
             grid.setEntity(5, 5, bp);
 
             // Decay by 1 → energy=0 → death removes it
@@ -662,13 +665,53 @@ class SimulationEngineTest {
 
         @Test
         void bondedPairDecaysPerTick() {
-            Entity.BondedPair bp = new Entity.BondedPair("bp1", ParticleType.CATALYST, ParticleType.SPORE, 100, 200);
+            // Phase 13 Plan 02: BondedPair decay is the cached effectiveDecayRate, not the
+            // flat SimulationConfig.energyDecayPerTick. Construct the pair with an explicit
+            // effective rate = 3 to match the pre-Plan-02 assertion.
+            Entity.BondedPair bp = new Entity.BondedPair(
+                    "bp1", ParticleType.CATALYST, ParticleType.SPORE, 100, 200,
+                    "cat", "spo", 3, 10, 10);
             grid.setEntity(5, 5, bp);
 
             engineWith(decayOnly(3)).processTick(1);
 
             Entity.BondedPair updated = (Entity.BondedPair) grid.getCell(5, 5).occupant();
             assertThat(updated.energy()).isEqualTo(97); // 100 - 3
+        }
+
+        @Test
+        void bondedPairFormationCachesHybridVigorRates() {
+            // Phase 13 Plan 02 D-05/D-06: formation must populate the three effective-* fields.
+            // With uniformProfile(decay=3, combat=10, attack=10) and default ranges [0.6, 0.9],
+            // effectiveDecay ∈ [3, 5] (sum*factor = 6 * 0.6..0.9 = 3.6..5.4 → int truncation 3..5)
+            // and effectiveCombat/effectiveAttack ∈ [10, 10] (avg==max==10).
+            Particle catalyst = new Particle("cat", ParticleType.CATALYST, 60, 100);
+            Particle spore = new Particle("spo", ParticleType.SPORE, 60, 100);
+            grid.setEntity(5, 5, catalyst);
+            grid.setEntity(5, 6, spore);
+
+            SimulationConfig cfg = new SimulationConfig(3, 10, 0.0, 5, true, 8, 0);
+            engineWith(cfg, bondingConfig(50, 1.0, 0.0)).processTick(1);
+
+            Entity.BondedPair bp = findBondedPair(5, 5, 5, 6);
+            assertThat(bp).isNotNull();
+            // Hybrid vigor rates cached — within expected bounds.
+            assertThat(bp.effectiveDecayRate()).isBetween(3, 5);
+            assertThat(bp.effectiveCombatTransfer()).isEqualTo(10); // avg==max for uniform profile
+            assertThat(bp.effectiveAttackPower()).isEqualTo(10);
+        }
+
+        @Test
+        void bondedPairWithEnergyPreservesHybridVigor() {
+            // withEnergy must not lose cached rates.
+            Entity.BondedPair bp = new Entity.BondedPair(
+                    "bp1", ParticleType.CATALYST, ParticleType.SPORE, 100, 200,
+                    "cat", "spo", 4, 12, 14);
+            Entity.BondedPair after = bp.withEnergy(50);
+            assertThat(after.energy()).isEqualTo(50);
+            assertThat(after.effectiveDecayRate()).isEqualTo(4);
+            assertThat(after.effectiveCombatTransfer()).isEqualTo(12);
+            assertThat(after.effectiveAttackPower()).isEqualTo(14);
         }
 
         @Test

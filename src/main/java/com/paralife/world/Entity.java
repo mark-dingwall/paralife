@@ -1,5 +1,7 @@
 package com.paralife.world;
 
+import java.util.concurrent.ThreadLocalRandom;
+
 /**
  * Sealed entity hierarchy for all things that occupy grid cells.
  *
@@ -150,13 +152,21 @@ public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutr
      * Flat fields only — no nested member state (per D-05).
      * primaryType is the predator's type, secondaryType is the prey's type (per D-07).
      *
-     * @param id               composite identifier (predatorId+preyId)
-     * @param primaryType      RPS type of the predator (dominant member)
-     * @param secondaryType    RPS type of the prey (symbiont member)
-     * @param energy           shared energy pool (sum of both members at formation)
-     * @param maxEnergy        energy cap (sum of both members' maxEnergy)
-     * @param primaryEntityId  original entity ID of the predator (for bot cleanup)
-     * @param secondaryEntityId original entity ID of the prey (for bot cleanup)
+     * <p>Phase 13 Plan 02 extends the record with three cached hybrid vigor /
+     * bond decay cost fields (D-05, D-06). These are computed once at formation
+     * time via {@link #formBond} and stored permanently on the pair. Per-tick
+     * randomness is deliberately avoided for stability (review concern #5).
+     *
+     * @param id                      composite identifier (predatorId+preyId)
+     * @param primaryType             RPS type of the predator (dominant member)
+     * @param secondaryType           RPS type of the prey (symbiont member)
+     * @param energy                  shared energy pool (sum of both members at formation)
+     * @param maxEnergy               energy cap (sum of both members' maxEnergy)
+     * @param primaryEntityId         original entity ID of the predator (for bot cleanup)
+     * @param secondaryEntityId       original entity ID of the prey (for bot cleanup)
+     * @param effectiveDecayRate      D-06: cached bond decay cost (sum*factor), used per-tick
+     * @param effectiveCombatTransfer D-05: cached hybrid combat transfer rate
+     * @param effectiveAttackPower    D-05: cached hybrid attack power
      */
     record BondedPair(
             String id,
@@ -165,12 +175,44 @@ public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutr
             int energy,
             int maxEnergy,
             String primaryEntityId,
-            String secondaryEntityId
+            String secondaryEntityId,
+            int effectiveDecayRate,
+            int effectiveCombatTransfer,
+            int effectiveAttackPower
     ) implements Entity {
+
+        /**
+         * Default effective decay rate used by legacy 5/7-arg constructors.
+         * Set to 0 so pre-Phase-13 tests constructed via legacy factories continue
+         * to observe BondedPair decay == SimulationConfig.energyDecayPerTick(0) in
+         * combatOnly-style configurations. Tests that explicitly need decay should
+         * use the full 10-arg constructor and supply an effectiveDecayRate.
+         */
+        public static final int DEFAULT_EFFECTIVE_DECAY_RATE = 0;
+        /** Default effective combat transfer used by legacy constructors (matches legacy flat value). */
+        public static final int DEFAULT_EFFECTIVE_COMBAT_TRANSFER = 10;
+        /** Default effective attack power used by legacy constructors (matches legacy flat value). */
+        public static final int DEFAULT_EFFECTIVE_ATTACK_POWER = 10;
 
         public BondedPair {
             if (energy < 0) throw new IllegalArgumentException("Energy cannot be negative: " + energy);
             if (maxEnergy <= 0) throw new IllegalArgumentException("Max energy must be positive: " + maxEnergy);
+        }
+
+        /**
+         * 7-arg constructor used by pre-Phase-13 code (e.g. SimulationEngine
+         * revertToBondedPair and other callers). Fills in the three cached
+         * hybrid-vigor fields with sensible defaults so existing behavior
+         * (legacy decay/combat rates) is preserved.
+         */
+        public BondedPair(String id, ParticleType primaryType, ParticleType secondaryType,
+                          int energy, int maxEnergy,
+                          String primaryEntityId, String secondaryEntityId) {
+            this(id, primaryType, secondaryType, energy, maxEnergy,
+                    primaryEntityId, secondaryEntityId,
+                    DEFAULT_EFFECTIVE_DECAY_RATE,
+                    DEFAULT_EFFECTIVE_COMBAT_TRANSFER,
+                    DEFAULT_EFFECTIVE_ATTACK_POWER);
         }
 
         /**
@@ -181,18 +223,80 @@ public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutr
                           int energy, int maxEnergy) {
             this(id, primaryType, secondaryType, energy, maxEnergy,
                     id.contains("+") ? id.split("\\+", 2)[0] : id,
-                    id.contains("+") ? id.split("\\+", 2)[1] : id);
+                    id.contains("+") ? id.split("\\+", 2)[1] : id,
+                    DEFAULT_EFFECTIVE_DECAY_RATE,
+                    DEFAULT_EFFECTIVE_COMBAT_TRANSFER,
+                    DEFAULT_EFFECTIVE_ATTACK_POWER);
         }
 
         /** Return a copy with adjusted energy, clamped to [0, maxEnergy]. */
         public BondedPair withEnergy(int newEnergy) {
             return new BondedPair(id, primaryType, secondaryType,
                     Math.clamp(newEnergy, 0, maxEnergy), maxEnergy,
-                    primaryEntityId, secondaryEntityId);
+                    primaryEntityId, secondaryEntityId,
+                    effectiveDecayRate, effectiveCombatTransfer, effectiveAttackPower);
         }
 
         public boolean isAlive() {
             return energy > 0;
+        }
+
+        // ── Phase 13 Plan 02: formation-time hybrid vigor (D-05, D-06) ──
+
+        /**
+         * Create a BondedPair with cached hybrid vigor rates (D-05, D-06).
+         * Rates computed once at formation and stored — no per-tick randomness.
+         *
+         * <p>The decay rate (D-06) uses {@code sum * random(costMin, costMax)}.
+         * Combat transfer and attack power (D-05) use
+         * {@code avg + (max - avg) * random(bonusMin, bonusMax)}.
+         *
+         * <p>Uses {@link ThreadLocalRandom} directly. Package-independent signature
+         * (takes primitive ints / doubles) so this can be called without pulling
+         * MetabolicProfile / BondingConfig into the world package.
+         */
+        public static BondedPair formBond(
+                String id,
+                Particle primary, Particle secondary,
+                int primaryDecay, int primaryCombatTransfer, int primaryAttackPower, int primaryMaxEnergy,
+                int secondaryDecay, int secondaryCombatTransfer, int secondaryAttackPower, int secondaryMaxEnergy,
+                double bondRateBonusMin, double bondRateBonusMax,
+                double bondDecayCostMin, double bondDecayCostMax) {
+            ThreadLocalRandom rng = ThreadLocalRandom.current();
+
+            int maxEnergy = primaryMaxEnergy + secondaryMaxEnergy; // D-07
+            int combinedEnergy = primary.energy() + secondary.energy();
+
+            int effectiveDecay = bondDecayCost(primaryDecay, secondaryDecay,
+                    bondDecayCostMin, bondDecayCostMax, rng);
+            int effectiveCombat = hybridRate(primaryCombatTransfer, secondaryCombatTransfer,
+                    bondRateBonusMin, bondRateBonusMax, rng);
+            int effectiveAttack = hybridRate(primaryAttackPower, secondaryAttackPower,
+                    bondRateBonusMin, bondRateBonusMax, rng);
+
+            return new BondedPair(
+                    id,
+                    primary.type(), secondary.type(),
+                    combinedEnergy, maxEnergy,
+                    primary.id(), secondary.id(),
+                    effectiveDecay, effectiveCombat, effectiveAttack);
+        }
+
+        /** Hybrid vigor (D-05): rate = avg + (max-avg) * random(bonusMin, bonusMax). */
+        static int hybridRate(int rateA, int rateB, double bonusMin, double bonusMax, ThreadLocalRandom rng) {
+            int avg = (rateA + rateB) / 2;
+            int max = Math.max(rateA, rateB);
+            // Guard: ThreadLocalRandom.nextDouble(min,max) requires min<max; use min when equal.
+            double bonus = (bonusMin == bonusMax) ? bonusMin : rng.nextDouble(bonusMin, bonusMax);
+            return avg + (int) ((max - avg) * bonus);
+        }
+
+        /** Bond decay cost (D-06): bondedDecay = sum(A,B) * random(costMin, costMax). */
+        static int bondDecayCost(int decayA, int decayB, double costMin, double costMax, ThreadLocalRandom rng) {
+            double factor = (costMin == costMax) ? costMin : rng.nextDouble(costMin, costMax);
+            int raw = (int) ((decayA + decayB) * factor);
+            // Ensure at least 1 unit of decay when the constituents had any decay at all.
+            return (decayA + decayB) > 0 ? Math.max(1, raw) : 0;
         }
     }
 

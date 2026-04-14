@@ -324,15 +324,24 @@ public class SimulationEngine {
                         || !(secondaryCell.occupant() instanceof Particle)) {
                     continue;
                 }
-                // Create BondedPair (per D-05, D-06, D-07)
-                Entity.BondedPair bondedPair = new Entity.BondedPair(
+                // Create BondedPair with cached hybrid vigor / decay cost (D-05, D-06, D-07)
+                var primaryProfile = metabolicProfile.forType(bond.predator.type());
+                var secondaryProfile = metabolicProfile.forType(bond.prey.type());
+                Entity.BondedPair bondedPair = Entity.BondedPair.formBond(
                         bond.predator.id() + "+" + bond.prey.id(),
-                        bond.predator.type(),   // primary = predator
-                        bond.prey.type(),        // secondary = prey
-                        bond.predator.energy() + bond.prey.energy(),
-                        bond.predator.maxEnergy() + bond.prey.maxEnergy(),
-                        bond.predator.id(),      // primaryEntityId for bot cleanup
-                        bond.prey.id()           // secondaryEntityId for bot cleanup
+                        bond.predator, bond.prey,
+                        primaryProfile.decayPerTick(),
+                        primaryProfile.combatEnergyTransfer(),
+                        primaryProfile.attackPower(),
+                        primaryProfile.maxEnergy(),
+                        secondaryProfile.decayPerTick(),
+                        secondaryProfile.combatEnergyTransfer(),
+                        secondaryProfile.attackPower(),
+                        secondaryProfile.maxEnergy(),
+                        bondingConfig.bondRateBonusMin(),
+                        bondingConfig.bondRateBonusMax(),
+                        bondingConfig.bondDecayCostMin(),
+                        bondingConfig.bondDecayCostMax()
                 );
                 worldGrid.setEntity(bond.primaryPos.x(), bond.primaryPos.y(), bondedPair);
                 worldGrid.clearEntity(bond.secondaryPos.x(), bond.secondaryPos.y());
@@ -436,10 +445,12 @@ public class SimulationEngine {
                     worldGrid.setEntity(x, y, updated);
                     decayed++;
                 } else if (cell.occupant() instanceof Entity.BondedPair bp) {
-                    // BondedPair decay uses flat SimulationConfig for now — Plan 02 introduces
-                    // hybrid vigor decay reduction (D-06).
-                    if (config.energyDecayPerTick() == 0) continue;
-                    Entity.BondedPair updated = bp.withEnergy(bp.energy() - config.energyDecayPerTick());
+                    // Phase 13 Plan 02 (D-06): BondedPair decay uses cached effectiveDecayRate
+                    // computed at formation via Entity.BondedPair.formBond. This is strictly
+                    // <= sum of constituent type decays, making bonding metabolically beneficial.
+                    int bondedDecay = bp.effectiveDecayRate();
+                    if (bondedDecay == 0) continue;
+                    Entity.BondedPair updated = bp.withEnergy(bp.energy() - bondedDecay);
                     worldGrid.setEntity(x, y, updated);
                     decayed++;
                 }

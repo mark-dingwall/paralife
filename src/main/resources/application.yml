@@ -80,6 +80,11 @@ paralife:
     bond-energy-threshold: 50
     bonding-probability: 0.10
     bond-defense-chance: 0.25
+    # Phase 13 Plan 02: hybrid vigor (D-05) and bond decay cost reduction (D-06) ranges
+    bond-rate-bonus-min: 0.1
+    bond-rate-bonus-max: 0.5
+    bond-decay-cost-min: 0.6
+    bond-decay-cost-max: 0.9
   composite:
     dissolution-chance: 0.03
     critical-energy-percent: 12
