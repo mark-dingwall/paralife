@@ -176,6 +176,17 @@ Options:
 
 [ASSUMED: per-tick computation is preferred. Confirm if formation-time caching is important for performance.]
 
+### BondedPair Hybrid Vigor — Applicable Domains
+
+D-05 specifies hybrid vigor applies to: combat transfer, nutrient gain, attack power, reproduce cost.
+
+**Applicability analysis based on current entity architecture:**
+- **Combat transfer / attack power:** Applied in `processInteractions()` when a BondedPair is an attacker (currently BondedPairs don't initiate combat — they are passive entities formed during Particle combat). However, they ARE defenders in combat, and attacker stats are per the attacker's type, not the BondedPair's. Hybrid vigor for combat stats applies if BondedPairs ever gain combat agency.
+- **Nutrient gain:** BondedPairs are not bot-controlled and do not take consume actions. `resolveConsume()` only handles Particle entities via `ResolvedAction.particle`. No consume path exists for BondedPairs.
+- **Reproduce cost:** BondedPairs do not take reproduce actions. No reproduce path exists for BondedPairs in `ActionResolver`.
+
+**Conclusion:** D-05 hybrid vigor is fully implemented for **decay cost** (D-06, applied in `processEnergyDecay()`). The `hybridRate()` helper method is available for combat transfer and attack power — these will activate when BondedPairs gain combat/action agency in a future phase. Nutrient gain and reproduce cost hybrid vigor formulas are defined but have no current application path because BondedPairs are passive entities that don't take bot actions.
+
 ### Reproduce Range (SPORE range=2)
 
 `Direction.apply()` returns a single adjacent cell. Range 2 requires finding cells within Chebyshev distance 2. Since direction is user-specified, the simplest interpretation is: apply the direction vector twice (walk 2 steps in that direction on the toroidal grid). Alternative: pick random empty cell within radius 2.
@@ -388,22 +399,25 @@ boolean canReproduce(int energy, int reproduceCost, int starvationThresholdPerce
 | A2 | Hybrid vigor rates computed per-tick (not cached at formation) | Architecture Patterns — BondedPair | Performance overhead if many BondedPairs exist; formation-time caching would require adding fields to BondedPair record |
 | A3 | "reproduce-range: 2" means 2 direction steps on the toroidal grid, not radius search | Architecture Patterns — Reproduce Range | If radius-search intended, needs different target-finding algorithm |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Starvation modifier ordering within the tick**
+1. **Starvation modifier ordering within the tick** (RESOLVED)
    - What we know: combat runs in `processInteractions()` before `processEnergyDecay()` in `processTick()`. Starvation status is determined by energy level after decay.
    - What's unclear: should starvation modifiers on combat apply to the same tick they're detected, or next tick?
    - Recommendation: Accept 1-tick lag (simpler implementation). Document it as intended behavior.
+   - **Resolution:** Accepted 1-tick lag. FLAG_STARVING set during processEnergyDecay; combat modifiers read the flag from the previous tick. Documented as intended behavior in Plan 02 Task 2.
 
-2. **Where does `MetabolicProfile` get injected?**
+2. **Where does `MetabolicProfile` get injected?** (RESOLVED)
    - What we know: `SimulationEngine` already takes `SimulationConfig`. Adding `SimulationMetabolismConfig` means adding a constructor param to `SimulationEngine` and `ActionResolver`.
    - What's unclear: should these share the same config record or inject separately?
    - Recommendation: Single `SimulationMetabolismConfig` injected into both; keeps `SimulationConfig` for non-metabolic fields.
+   - **Resolution:** `MetabolicProfile` (under `paralife.metabolism` prefix) injected as constructor param into both `SimulationEngine` and `ActionResolver`. `SimulationConfig` kept for non-metabolic fields. Specified in Plan 01 Tasks 1 and 2.
 
-3. **Particle spawn max-energy source**
+3. **Particle spawn max-energy source** (RESOLVED)
    - What we know: `WorldWebSocketHandler` calls `Particle.spawn(id, type)` which hardcodes `DEFAULT_MAX_ENERGY = 100`.
    - What's unclear: `WorldWebSocketHandler` doesn't currently have access to `SimulationMetabolismConfig`. Should it, or should particle spawn be moved?
    - Recommendation: Inject `SimulationMetabolismConfig` into `WorldWebSocketHandler` or create a factory method that receives the config.
+   - **Resolution:** `MetabolicProfile` injected into `WorldWebSocketHandler`; uses `metabolicProfile.forType(particleType).maxEnergy()` when spawning. New `Particle.spawn(id, type, maxEnergy)` factory method added. Specified in Plan 01 Task 1.
 
 ## Environment Availability
 
