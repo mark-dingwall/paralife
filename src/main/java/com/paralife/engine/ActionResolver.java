@@ -426,20 +426,24 @@ public class ActionResolver {
             return false;
         }
 
-        // D-18: walk `reproduceRange` steps in the given direction (SPORE=2, others=1)
+        // D-18: walk `reproduceRange` steps in the given direction (SPORE=2, others=1).
+        // FN-9: for range > 1 fall back one step closer if the far cell is blocked, so
+        // SPORE does not become sterile in dense neighborhoods.
         int range = profile.reproduceRange();
-        Position target = ra.bot.position();
-        for (int step = 0; step < range; step++) {
-            target = dir.apply(target, worldGrid.getWidth(), worldGrid.getHeight());
+        int minCandidate = range > 1 ? range - 1 : 1;
+        Position target = null;
+        for (int candidate = range; candidate >= minCandidate; candidate--) {
+            Position t = ra.bot.position();
+            for (int step = 0; step < candidate; step++) {
+                t = dir.apply(t, worldGrid.getWidth(), worldGrid.getHeight());
+            }
+            if (claimedCells.contains(t)) continue;
+            if (worldGrid.getCell(t.x(), t.y()).hasOccupant()) continue;
+            target = t;
+            break;
         }
 
-        if (claimedCells.contains(target)) {
-            sendResult(ra.sessionId, tickNumber, false, "reproduce", "Cell claimed by another entity");
-            return false;
-        }
-
-        Cell targetCell = worldGrid.getCell(target.x(), target.y());
-        if (targetCell.hasOccupant()) {
+        if (target == null) {
             sendResult(ra.sessionId, tickNumber, false, "reproduce", "Target cell is occupied");
             return false;
         }

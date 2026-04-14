@@ -479,6 +479,48 @@ class ActionResolverTest {
     }
 
     @Test
+    void sporeReproduceFallsBackToRangeOneWhenRangeTwoBlocked() throws Exception {
+        // FN-9: SPORE with range=2 should walk back to range=1 when the far
+        // cell is occupied, otherwise dense areas render SPORE sterile.
+        MetabolicProfile profile = uniformProfile(60, 20, 0, 0, 0.0, 2);
+        ActionResolver r = resolverWith(profile);
+
+        mockSession("s1");
+        Particle parent = new Particle("e1", ParticleType.SPORE, 50, 60);
+        worldGrid.setEntity(5, 5, parent);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        // Block the range-2 cell only
+        worldGrid.setEntity(7, 5, new Rock("block"));
+
+        r.resolveActions(1, Map.of("s1", new Messages.Action("reproduce", "E")));
+
+        // Child should land at range-1 (6, 5); range-2 (7, 5) still the rock
+        assertThat(worldGrid.getCell(6, 5).occupant()).isInstanceOf(Particle.class);
+        assertThat(worldGrid.getCell(7, 5).occupant()).isInstanceOf(Rock.class);
+    }
+
+    @Test
+    void sporeReproduceFailsWhenBothRangesBlocked() throws Exception {
+        MetabolicProfile profile = uniformProfile(60, 20, 0, 0, 0.0, 2);
+        ActionResolver r = resolverWith(profile);
+
+        mockSession("s1");
+        Particle parent = new Particle("e1", ParticleType.SPORE, 50, 60);
+        worldGrid.setEntity(5, 5, parent);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        // Block both range-1 and range-2
+        worldGrid.setEntity(6, 5, new Rock("block1"));
+        worldGrid.setEntity(7, 5, new Rock("block2"));
+
+        r.resolveActions(1, Map.of("s1", new Messages.Action("reproduce", "E")));
+
+        // Parent energy unchanged (no child spawned)
+        assertThat(((Particle) worldGrid.getCell(5, 5).occupant()).energy()).isEqualTo(50);
+    }
+
+    @Test
     void sporeBonusOffspringFiresApproximately25Percent() throws Exception {
         // Run many reproductions; record how often a second child appears.
         int trials = 200;
