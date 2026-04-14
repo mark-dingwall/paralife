@@ -156,6 +156,12 @@ public class SimulationEngine {
         List<InteractionResult> results = new ArrayList<>();
         ThreadLocalRandom rng = ThreadLocalRandom.current();
 
+        // FN-3: track combats per attacker kind so composite-member attacks
+        // (1 delta each) are not undercounted when mixed with particle attacks
+        // (2 deltas each). Observability only — combat state is still in deltas.
+        int particleCombats = 0;
+        int compositeMemberCombats = 0;
+
         for (Position pos : particlePositions) {
             Cell cell = worldGrid.getCell(pos.x(), pos.y());
             if (!(cell.occupant() instanceof Particle attacker)) continue;
@@ -183,6 +189,7 @@ public class SimulationEngine {
                         damage = applyDamageVulnerability(damage, prey, defProfile);
                         results.add(new CombatDelta(pos, combat));
                         results.add(new CombatDelta(nPos, -damage));
+                        particleCombats++;
                     }
                 }
 
@@ -198,6 +205,7 @@ public class SimulationEngine {
                         int damage = applyAttackBoost(atkProfile.attackPower(), attacker, atkProfile);
                         results.add(new CombatDelta(pos, combat));
                         results.add(new CombatDelta(nPos, -damage));
+                        particleCombats++;
                     }
                     // If deflected (roll < bondDefenseChance), no deltas added
                 }
@@ -221,6 +229,7 @@ public class SimulationEngine {
                         damage = applyDamageVulnerability(damage, cm.energy(), cm.maxEnergy(), defProfile);
                         results.add(new CombatDelta(pos, combat));
                         results.add(new CombatDelta(nPos, -damage));
+                        particleCombats++;
                     }
                 }
             }
@@ -256,17 +265,21 @@ public class SimulationEngine {
                     if (defender instanceof Particle || defender instanceof Entity.BondedPair
                             || defender instanceof Entity.CompositeMember) {
                         results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                        compositeMemberCombats++;
                     }
                 } else {
                     // Position-based combat: RPS rules based on member's type (D-11)
                     if (defender instanceof Particle prey && attacker.type().prey() == prey.type()) {
                         results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                        compositeMemberCombats++;
                     } else if (defender instanceof Entity.BondedPair bp
                             && attacker.type().prey() == bp.primaryType()) {
                         results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                        compositeMemberCombats++;
                     } else if (defender instanceof Entity.CompositeMember cm
                             && attacker.type().prey() == cm.type()) {
                         results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                        compositeMemberCombats++;
                     }
                 }
                 break; // Each member attacks at most one neighbor per tick
@@ -304,26 +317,23 @@ public class SimulationEngine {
         }
 
         // Apply results — combat deltas first, then bond formations, then composite formations
-        int combatEvents = 0;
         int bondEvents = 0;
         Set<Position> claimedForBonding = new HashSet<>();
 
-        // Apply combat deltas
+        // Apply combat deltas (FN-3: combat count tracked at emission, not here,
+        // so composite-member attacks emitting a single delta are counted correctly)
         for (InteractionResult result : results) {
             if (result instanceof CombatDelta delta) {
                 Cell c = worldGrid.getCell(delta.pos.x(), delta.pos.y());
                 if (c.occupant() instanceof Particle p) {
                     worldGrid.setEntity(delta.pos.x(), delta.pos.y(),
                             p.withEnergy(p.energy() + delta.energyDelta));
-                    combatEvents++;
                 } else if (c.occupant() instanceof Entity.BondedPair bp) {
                     worldGrid.setEntity(delta.pos.x(), delta.pos.y(),
                             bp.withEnergy(bp.energy() + delta.energyDelta));
-                    combatEvents++;
                 } else if (c.occupant() instanceof Entity.CompositeMember cm) {
                     worldGrid.setEntity(delta.pos.x(), delta.pos.y(),
                             cm.withEnergy(cm.energy() + delta.energyDelta));
-                    combatEvents++;
                 }
             }
         }
@@ -420,7 +430,7 @@ public class SimulationEngine {
             }
         }
 
-        return new int[]{combatEvents / 2, bondEvents, compositeEvents};
+        return new int[]{particleCombats + compositeMemberCombats, bondEvents, compositeEvents};
     }
 
     private int countEmptyNeighbors(Position pos) {
