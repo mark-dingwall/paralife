@@ -346,6 +346,9 @@ public class SimulationEngine {
 
                 String compositeId = "composite-" + UUID.randomUUID().toString().substring(0, 8);
                 // Determine surface member (more empty neighbors = surface = FEEDER per D-09)
+                // NOTE: Phase 12 MVP — only FEEDER and LOCOMOTOR roles assigned on formation.
+                // Composites start blind (no SENSOR), unarmed (no ATTACKER/DEFENDER), and
+                // sterile (no REPRODUCER). Role diversification deferred to future phases.
                 int emptyNeighbors1 = countEmptyNeighbors(cf.pos1());
                 int emptyNeighbors2 = countEmptyNeighbors(cf.pos2());
                 Entity.Role role1 = emptyNeighbors1 >= emptyNeighbors2 ? Entity.Role.FEEDER : Entity.Role.LOCOMOTOR;
