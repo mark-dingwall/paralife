@@ -48,6 +48,8 @@ public class SimulationEngine {
     private final BondingConfig bondingConfig;
     private final CompositeRegistry compositeRegistry;
     private final CompositeConfig compositeConfig;
+    private final MetabolicProfile metabolicProfile;
+    private final StarvationConfig starvationConfig;
     private final AtomicLong nutrientIdCounter = new AtomicLong(0);
     private final AtomicInteger lastTickBondCount = new AtomicInteger(0);
     /** Tracks previous tick's pool energy per composite for panic zone decrease detection (D-31). */
@@ -55,13 +57,16 @@ public class SimulationEngine {
 
     public SimulationEngine(WorldGrid worldGrid, SimulationConfig config,
                             BotRegistry botRegistry, BondingConfig bondingConfig,
-                            CompositeRegistry compositeRegistry, CompositeConfig compositeConfig) {
+                            CompositeRegistry compositeRegistry, CompositeConfig compositeConfig,
+                            MetabolicProfile metabolicProfile, StarvationConfig starvationConfig) {
         this.worldGrid = worldGrid;
         this.config = config;
         this.botRegistry = botRegistry;
         this.bondingConfig = bondingConfig;
         this.compositeRegistry = compositeRegistry;
         this.compositeConfig = compositeConfig;
+        this.metabolicProfile = metabolicProfile;
+        this.starvationConfig = starvationConfig;
     }
 
     public int getLastTickBondCount() {
@@ -165,9 +170,10 @@ public class SimulationEngine {
                         // Bond outcome (per D-06, D-07, D-08)
                         results.add(new BondFormation(pos, nPos, attacker, prey));
                     } else {
-                        // Combat outcome (existing logic)
-                        results.add(new CombatDelta(pos, config.combatEnergyTransfer()));
-                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                        // Combat outcome — per-type transfer/attack (Phase 13 D-02)
+                        var atkProfile = metabolicProfile.forType(attacker.type());
+                        results.add(new CombatDelta(pos, atkProfile.combatEnergyTransfer()));
+                        results.add(new CombatDelta(nPos, -atkProfile.attackPower()));
                     }
                 }
 
@@ -176,9 +182,10 @@ public class SimulationEngine {
                         && attacker.type() == bp.primaryType().predator()) {
                     // Defense check: secondary type grants deflection chance
                     if (rng.nextDouble() >= bondingConfig.bondDefenseChance()) {
-                        // Not deflected — normal combat exchange
-                        results.add(new CombatDelta(pos, config.combatEnergyTransfer()));
-                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                        // Not deflected — normal combat exchange (per-type, Phase 13)
+                        var atkProfile = metabolicProfile.forType(attacker.type());
+                        results.add(new CombatDelta(pos, atkProfile.combatEnergyTransfer()));
+                        results.add(new CombatDelta(nPos, -atkProfile.attackPower()));
                     }
                     // If deflected (roll < bondDefenseChance), no deltas added
                 }
@@ -192,9 +199,10 @@ public class SimulationEngine {
                             && rng.nextDouble() < bondingConfig.bondDefenseChance()) {
                         // Deflected by DEFENDER
                     } else {
-                        // Damage hits individual energy (D-12, D-15)
-                        results.add(new CombatDelta(pos, config.combatEnergyTransfer()));
-                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                        // Damage hits individual energy — per-type attacker stats (Phase 13)
+                        var atkProfile = metabolicProfile.forType(attacker.type());
+                        results.add(new CombatDelta(pos, atkProfile.combatEnergyTransfer()));
+                        results.add(new CombatDelta(nPos, -atkProfile.attackPower()));
                     }
                 }
             }
@@ -416,17 +424,21 @@ public class SimulationEngine {
     // replaces base energyDecayPerTick. Drain rates are per-role (see CompositeConfig).
 
     private int processEnergyDecay(int width, int height) {
-        if (config.energyDecayPerTick() == 0) return 0;
-
         int decayed = 0;
         for (int x = 0; x < width; x++) {
             for (int y = 0; y < height; y++) {
                 Cell cell = worldGrid.getCell(x, y);
                 if (cell.occupant() instanceof Particle p) {
-                    Particle updated = p.withEnergy(p.energy() - config.energyDecayPerTick());
+                    // Per-type decay rate (Phase 13 D-02)
+                    int decay = metabolicProfile.forType(p.type()).decayPerTick();
+                    if (decay == 0) continue;
+                    Particle updated = p.withEnergy(p.energy() - decay);
                     worldGrid.setEntity(x, y, updated);
                     decayed++;
                 } else if (cell.occupant() instanceof Entity.BondedPair bp) {
+                    // BondedPair decay uses flat SimulationConfig for now — Plan 02 introduces
+                    // hybrid vigor decay reduction (D-06).
+                    if (config.energyDecayPerTick() == 0) continue;
                     Entity.BondedPair updated = bp.withEnergy(bp.energy() - config.energyDecayPerTick());
                     worldGrid.setEntity(x, y, updated);
                     decayed++;

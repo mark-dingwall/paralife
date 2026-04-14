@@ -35,7 +35,42 @@ import static org.assertj.core.api.Assertions.assertThat;
         "paralife.simulation.nutrient-consume-energy=5",
         "paralife.simulation.enabled=true",
         "paralife.simulation.overcrowding-threshold=6",
-        "paralife.simulation.overcrowding-energy-penalty=2"
+        "paralife.simulation.overcrowding-energy-penalty=2",
+        // Phase 13: per-type decay overrides (override application.yml archetypes
+        // so legacy integration tests still observe a uniform decay of 2 per type)
+        "paralife.simulation.types.catalyst.max-energy=80",
+        "paralife.simulation.types.catalyst.decay-per-tick=2",
+        "paralife.simulation.types.catalyst.combat-energy-transfer=15",
+        "paralife.simulation.types.catalyst.attack-power=15",
+        "paralife.simulation.types.catalyst.nutrient-consume-energy=3",
+        "paralife.simulation.types.catalyst.reproduce-energy-cost=40",
+        "paralife.simulation.types.catalyst.reproduce-cooldown=10",
+        "paralife.simulation.types.catalyst.bonus-offspring-chance=0.0",
+        "paralife.simulation.types.catalyst.reproduce-range=1",
+        "paralife.simulation.types.catalyst.starvation-threshold=30",
+        "paralife.simulation.types.catalyst.starvation-floor=10",
+        "paralife.simulation.types.membrane.max-energy=120",
+        "paralife.simulation.types.membrane.decay-per-tick=2",
+        "paralife.simulation.types.membrane.combat-energy-transfer=5",
+        "paralife.simulation.types.membrane.attack-power=5",
+        "paralife.simulation.types.membrane.nutrient-consume-energy=8",
+        "paralife.simulation.types.membrane.reproduce-energy-cost=35",
+        "paralife.simulation.types.membrane.reproduce-cooldown=8",
+        "paralife.simulation.types.membrane.bonus-offspring-chance=0.0",
+        "paralife.simulation.types.membrane.reproduce-range=1",
+        "paralife.simulation.types.membrane.starvation-threshold=25",
+        "paralife.simulation.types.membrane.starvation-floor=8",
+        "paralife.simulation.types.spore.max-energy=60",
+        "paralife.simulation.types.spore.decay-per-tick=2",
+        "paralife.simulation.types.spore.combat-energy-transfer=8",
+        "paralife.simulation.types.spore.attack-power=8",
+        "paralife.simulation.types.spore.nutrient-consume-energy=5",
+        "paralife.simulation.types.spore.reproduce-energy-cost=20",
+        "paralife.simulation.types.spore.reproduce-cooldown=5",
+        "paralife.simulation.types.spore.bonus-offspring-chance=0.25",
+        "paralife.simulation.types.spore.reproduce-range=2",
+        "paralife.simulation.types.spore.starvation-threshold=35",
+        "paralife.simulation.types.spore.starvation-floor=12"
 })
 class SimulationIntegrationTest {
 

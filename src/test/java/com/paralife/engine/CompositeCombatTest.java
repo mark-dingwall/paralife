@@ -44,7 +44,20 @@ class CompositeCombatTest {
         // No decay, no spawning, no overcrowding — combat only
         var simConfig = new SimulationConfig(0, 10, 0.0, 0, true, 8, 0);
         return new SimulationEngine(grid, simConfig, botRegistry, bondingConfig,
-                compositeRegistry, compositeConfig);
+                compositeRegistry, compositeConfig,
+                uniformProfile(simConfig), StarvationConfig.defaults());
+    }
+
+    /**
+     * Uniform MetabolicProfile matching the legacy flat combat transfer so tests
+     * written before Phase 13 per-type rates continue to observe a transfer of 10.
+     */
+    private MetabolicProfile uniformProfile(SimulationConfig cfg) {
+        int combat = cfg.combatEnergyTransfer();
+        MetabolicProfile.TypeProfile p = new MetabolicProfile.TypeProfile(
+                100, cfg.energyDecayPerTick(), combat, combat,
+                cfg.nutrientConsumeEnergy(), 30, 0, 0.0, 1, 30, 10);
+        return new MetabolicProfile(p, p, p);
     }
 
     /** Create a CompositeMember on the grid and register in CompositeRegistry. */

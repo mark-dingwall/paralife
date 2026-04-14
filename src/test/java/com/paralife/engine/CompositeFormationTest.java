@@ -41,8 +41,10 @@ class CompositeFormationTest {
     }
 
     private SimulationEngine engine(CompositeConfig compositeConfig) {
-        return new SimulationEngine(grid, simConfig(), botRegistry, noBonding(),
-                compositeRegistry, compositeConfig);
+        var sc = simConfig();
+        return new SimulationEngine(grid, sc, botRegistry, noBonding(),
+                compositeRegistry, compositeConfig,
+                MetabolicProfile.defaults(), StarvationConfig.defaults());
     }
 
     /** Config with no decay, no combat, no spawning, no overcrowding. */

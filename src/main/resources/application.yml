@@ -32,6 +32,50 @@ paralife:
     enabled: true
     overcrowding-threshold: 6
     overcrowding-energy-penalty: 2
+    # Per-type metabolic profiles (Phase 13 D-02, D-03).
+    # Nested under simulation.types.* so @ConfigurationProperties on MetabolicProfile
+    # (prefix paralife.simulation.types) doesn't collide with SimulationConfig's flat fields.
+    types:
+      catalyst:
+        max-energy: 80
+        decay-per-tick: 3
+        combat-energy-transfer: 15
+        attack-power: 15
+        nutrient-consume-energy: 3
+        reproduce-energy-cost: 40
+        reproduce-cooldown: 10
+        bonus-offspring-chance: 0.0
+        reproduce-range: 1
+        starvation-threshold: 30
+        starvation-floor: 10
+      membrane:
+        max-energy: 120
+        decay-per-tick: 1
+        combat-energy-transfer: 5
+        attack-power: 5
+        nutrient-consume-energy: 8
+        reproduce-energy-cost: 35
+        reproduce-cooldown: 8
+        bonus-offspring-chance: 0.0
+        reproduce-range: 1
+        starvation-threshold: 25
+        starvation-floor: 8
+      spore:
+        max-energy: 60
+        decay-per-tick: 2
+        combat-energy-transfer: 8
+        attack-power: 8
+        nutrient-consume-energy: 5
+        reproduce-energy-cost: 20
+        reproduce-cooldown: 5
+        bonus-offspring-chance: 0.25
+        reproduce-range: 2
+        starvation-threshold: 35
+        starvation-floor: 12
+    starvation:
+      max-attack-boost: 0.5
+      max-nutrient-boost: 0.5
+      max-damage-vulnerability: 0.5
   bonding:
     bond-energy-threshold: 50
     bonding-probability: 0.10

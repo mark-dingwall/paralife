@@ -17,6 +17,7 @@ public record Cell(Entity occupant, int flags, int nutrientLevel) {
     // ── Flag constants (bitfield) ──────────────────────────────────
     public static final int FLAG_NONE = 0;
     public static final int FLAG_OVERCROWDED = 1;
+    public static final int FLAG_STARVING = 2;
 
     /** An empty cell with no flags or nutrients. */
     public static final Cell EMPTY = new Cell(null, FLAG_NONE, 0);

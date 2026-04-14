@@ -35,12 +35,43 @@ class SimulationEngineTest {
 
     private SimulationEngine engineWith(SimulationConfig config) {
         return new SimulationEngine(grid, config, botRegistry, noBonding(),
-                new CompositeRegistry(), CompositeConfig.defaults());
+                new CompositeRegistry(), CompositeConfig.defaults(),
+                uniformProfile(config), StarvationConfig.defaults());
     }
 
     private SimulationEngine engineWith(SimulationConfig config, BondingConfig bondingConfig) {
         return new SimulationEngine(grid, config, botRegistry, bondingConfig,
-                new CompositeRegistry(), CompositeConfig.defaults());
+                new CompositeRegistry(), CompositeConfig.defaults(),
+                uniformProfile(config), StarvationConfig.defaults());
+    }
+
+    /**
+     * Build a MetabolicProfile where all three types share the legacy flat rates
+     * from SimulationConfig. This preserves Phase 11/12 test semantics: tests that
+     * passed {@code decayOnly(N)} still observe every particle decaying by N, and
+     * combat tests that assumed a flat combatEnergyTransfer keep working.
+     *
+     * <p>Production code uses {@link MetabolicProfile#defaults()} which gives each
+     * type its own archetype (Phase 13 D-03).
+     */
+    private MetabolicProfile uniformProfile(SimulationConfig cfg) {
+        int decay = cfg.energyDecayPerTick();
+        int combat = cfg.combatEnergyTransfer();
+        int nutrient = cfg.nutrientConsumeEnergy();
+        // attackPower = combat so attacker gain == defender loss, matching pre-Phase-13 behavior
+        MetabolicProfile.TypeProfile p = new MetabolicProfile.TypeProfile(
+                100,       // maxEnergy (legacy default)
+                decay,     // decayPerTick
+                combat,    // combatEnergyTransfer
+                combat,    // attackPower
+                nutrient,  // nutrientConsumeEnergy
+                30,        // reproduceEnergyCost (legacy)
+                0,         // reproduceCooldown (no cooldown in legacy tests)
+                0.0,       // bonusOffspringChance
+                1,         // reproduceRange
+                30, 10     // starvationThreshold/floor (unused at engine level)
+        );
+        return new MetabolicProfile(p, p, p);
     }
 
     private BondingConfig bondingConfig(int threshold, double probability, double defense) {

@@ -85,6 +85,14 @@ public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutr
             return new Particle(id, type, DEFAULT_START_ENERGY, DEFAULT_MAX_ENERGY);
         }
 
+        /**
+         * Create a fresh particle with per-type max energy (Phase 13). Starting
+         * energy is half of max, matching {@link com.paralife.engine.MetabolicProfile.TypeProfile#childStartEnergy()}.
+         */
+        public static Particle spawn(String id, ParticleType type, int maxEnergy) {
+            return new Particle(id, type, maxEnergy / 2, maxEnergy);
+        }
+
         /** Return a copy with adjusted energy, clamped to [0, maxEnergy]. */
         public Particle withEnergy(int newEnergy) {
             return new Particle(id, type, Math.clamp(newEnergy, 0, maxEnergy), maxEnergy);
