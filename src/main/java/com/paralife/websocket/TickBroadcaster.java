@@ -2,6 +2,7 @@ package com.paralife.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.paralife.engine.CompositeRegistry;
+import com.paralife.engine.SeasonTracker;
 import com.paralife.engine.SimulationEngine;
 import com.paralife.engine.TickEvent;
 import com.paralife.world.WorldGrid;
@@ -29,15 +30,17 @@ public class TickBroadcaster {
     private final ObjectMapper objectMapper;
     private final SimulationEngine simulationEngine;
     private final CompositeRegistry compositeRegistry;
+    private final SeasonTracker seasonTracker;
 
     public TickBroadcaster(SessionRegistry sessionRegistry, WorldGrid worldGrid,
                            ObjectMapper objectMapper, SimulationEngine simulationEngine,
-                           CompositeRegistry compositeRegistry) {
+                           CompositeRegistry compositeRegistry, SeasonTracker seasonTracker) {
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
         this.objectMapper = objectMapper;
         this.simulationEngine = simulationEngine;
         this.compositeRegistry = compositeRegistry;
+        this.seasonTracker = seasonTracker;
     }
 
     @EventListener
@@ -54,7 +57,9 @@ public class TickBroadcaster {
                 event.timestamp().toEpochMilli(),
                 snapshot.entityCount(),
                 simulationEngine.getLastTickBondCount(),
-                compositeRegistry.size()
+                compositeRegistry.size(),
+                seasonTracker.getSeason(event.tickNumber()).name(),
+                seasonTracker.getSeasonalMultiplier(event.tickNumber())
         );
 
         try {

@@ -45,7 +45,8 @@ class CompositeCombatTest {
         var simConfig = new SimulationConfig(0, 10, 0.0, 0, true, 8, 0);
         return new SimulationEngine(grid, simConfig, botRegistry, bondingConfig,
                 compositeRegistry, compositeConfig,
-                uniformProfile(simConfig), StarvationConfig.defaults());
+                uniformProfile(simConfig), StarvationConfig.defaults(),
+                new SeasonTracker(new SeasonsConfig(200, 0.0)));
     }
 
     /**

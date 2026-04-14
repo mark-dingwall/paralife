@@ -36,13 +36,24 @@ class SimulationEngineTest {
     private SimulationEngine engineWith(SimulationConfig config) {
         return new SimulationEngine(grid, config, botRegistry, noBonding(),
                 new CompositeRegistry(), CompositeConfig.defaults(),
-                uniformProfile(config), StarvationConfig.defaults());
+                uniformProfile(config), StarvationConfig.defaults(),
+                defaultSeasonTracker());
     }
 
     private SimulationEngine engineWith(SimulationConfig config, BondingConfig bondingConfig) {
         return new SimulationEngine(grid, config, botRegistry, bondingConfig,
                 new CompositeRegistry(), CompositeConfig.defaults(),
-                uniformProfile(config), StarvationConfig.defaults());
+                uniformProfile(config), StarvationConfig.defaults(),
+                defaultSeasonTracker());
+    }
+
+    /**
+     * Default SeasonTracker for legacy tests — year=200, amplitude=0 so the
+     * seasonal multiplier is always 1.0. This preserves pre-Phase-13 tests
+     * that assert on flat nutrient-spawn probability.
+     */
+    private SeasonTracker defaultSeasonTracker() {
+        return new SeasonTracker(new SeasonsConfig(200, 0.0));
     }
 
     /**
@@ -373,6 +384,80 @@ class SimulationEngineTest {
                 }
             }
             assertThat(nutrientCount).isBetween(10, 90); // Wide range for probabilistic test
+        }
+
+        // ── Phase 13 Plan 03: fertility + seasonal modulation ─────
+
+        private SimulationEngine engineWithSeasons(SimulationConfig cfg, SeasonTracker seasons) {
+            return new SimulationEngine(grid, cfg, botRegistry, noBonding(),
+                    new CompositeRegistry(), CompositeConfig.defaults(),
+                    uniformProfile(cfg), StarvationConfig.defaults(), seasons);
+        }
+
+        @Test
+        void fertilityClampsAtFullProbability() {
+            // baseRate=1.0, nutrientLevel=100 → fertilityMult=2.0 → effective 2.0
+            // Clamped to 1.0 → every empty cell still gets exactly one nutrient.
+            for (int x = 0; x < WIDTH; x++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    grid.setCell(x, y, grid.getCell(x, y).withNutrientLevel(100));
+                }
+            }
+            engineWith(nutrientSpawnAlways()).processTick(1);
+
+            int nutrientCount = 0;
+            for (int x = 0; x < WIDTH; x++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    if (grid.getCell(x, y).occupant() instanceof Nutrient) nutrientCount++;
+                }
+            }
+            assertThat(nutrientCount).isEqualTo(100);
+        }
+
+        @Test
+        void autumnTroughSpawnsNothingWithLowBaseRate() {
+            // Base rate small enough that seasonal multiplier 0.0 pushes effective to 0.
+            // amplitude=1.0 at yearLength=200, tick=100 (cos(PI)=-1) → multiplier = 0.
+            var seasons = new SeasonTracker(new SeasonsConfig(200, 1.0));
+            var cfg = new SimulationConfig(0, 0, 0.5, 0, true, 8, 0);
+
+            engineWithSeasons(cfg, seasons).processTick(100);
+
+            int nutrientCount = 0;
+            for (int x = 0; x < WIDTH; x++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    if (grid.getCell(x, y).occupant() instanceof Nutrient) nutrientCount++;
+                }
+            }
+            assertThat(nutrientCount).isZero();
+        }
+
+        @RepeatedTest(3)
+        void springPeakOutSpawnsAutumnTrough() {
+            // Probabilistic: more nutrients spawn at spring peak than at autumn trough.
+            var seasons = new SeasonTracker(new SeasonsConfig(200, 0.5));
+            // Half-probability base so seasonal multipliers can push around it.
+            var cfg = new SimulationConfig(0, 0, 0.5, 0, true, 8, 0);
+
+            // Count spring (tick=0, multiplier=1.5) spawns
+            int springCount = countSpawnsOnFreshGrid(cfg, seasons, 0);
+            // Count autumn (tick=100, multiplier=0.5) spawns on a fresh grid
+            int autumnCount = countSpawnsOnFreshGrid(cfg, seasons, 100);
+
+            // Rough band with wide tolerance — spring should spawn noticeably more.
+            assertThat(springCount).isGreaterThan(autumnCount);
+        }
+
+        private int countSpawnsOnFreshGrid(SimulationConfig cfg, SeasonTracker seasons, long tick) {
+            grid.clear();
+            engineWithSeasons(cfg, seasons).processTick(tick);
+            int count = 0;
+            for (int x = 0; x < WIDTH; x++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    if (grid.getCell(x, y).occupant() instanceof Nutrient) count++;
+                }
+            }
+            return count;
         }
     }
 
@@ -809,7 +894,8 @@ class SimulationEngineTest {
             return new SimulationEngine(grid, config, botRegistry,
                     new BondingConfig(Integer.MAX_VALUE, 0.0, 0.0, 0.1, 0.5, 0.6, 0.9),
                     new CompositeRegistry(), CompositeConfig.defaults(),
-                    profile, starv);
+                    profile, starv,
+                    new SeasonTracker(new SeasonsConfig(200, 0.0)));
         }
 
         // ── computeIntensity math ─────────────────────────────────

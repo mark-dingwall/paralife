@@ -45,13 +45,22 @@ public sealed interface Messages {
 
     /**
      * Broadcast to all clients each tick.
+     *
+     * <p>Phase 13 Plan 03 adds {@code seasonPhase} (season enum name, e.g.
+     * {@code "SPRING"}) and {@code seasonalMultiplier} (global cosine-wave
+     * nutrient-spawn multiplier, in {@code [1 - amplitude, 1 + amplitude]}).
+     * Field is named {@code seasonalMultiplier} rather than
+     * {@code fertilityMultiplier} to distinguish from per-cell
+     * {@code Cell.nutrientLevel} soil fertility.
      */
     record Tick(
             long tickNumber,
             long timestamp,
             int entityCount,
             int bondCount,
-            int compositeCount
+            int compositeCount,
+            String seasonPhase,
+            double seasonalMultiplier
     ) implements Messages {}
 
     /**

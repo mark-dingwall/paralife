@@ -42,7 +42,8 @@ class CompositeDissolutionTest {
         var bondConfig = new BondingConfig(Integer.MAX_VALUE, 0.0, 0.0);
         return new SimulationEngine(grid, simConfig, botRegistry, bondConfig,
                 compositeRegistry, compositeConfig,
-                MetabolicProfile.defaults(), StarvationConfig.defaults());
+                MetabolicProfile.defaults(), StarvationConfig.defaults(),
+                new SeasonTracker(new SeasonsConfig(200, 0.0)));
     }
 
     /** Default composite config (3% dissolution). */

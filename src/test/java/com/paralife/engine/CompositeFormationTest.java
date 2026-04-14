@@ -44,7 +44,8 @@ class CompositeFormationTest {
         var sc = simConfig();
         return new SimulationEngine(grid, sc, botRegistry, noBonding(),
                 compositeRegistry, compositeConfig,
-                MetabolicProfile.defaults(), StarvationConfig.defaults());
+                MetabolicProfile.defaults(), StarvationConfig.defaults(),
+                new SeasonTracker(new SeasonsConfig(200, 0.0)));
     }
 
     /** Config with no decay, no combat, no spawning, no overcrowding. */

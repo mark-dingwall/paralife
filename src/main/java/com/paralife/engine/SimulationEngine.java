@@ -50,6 +50,7 @@ public class SimulationEngine {
     private final CompositeConfig compositeConfig;
     private final MetabolicProfile metabolicProfile;
     private final StarvationConfig starvationConfig;
+    private final SeasonTracker seasonTracker;
     private final AtomicLong nutrientIdCounter = new AtomicLong(0);
     private final AtomicInteger lastTickBondCount = new AtomicInteger(0);
     /** Tracks previous tick's pool energy per composite for panic zone decrease detection (D-31). */
@@ -58,7 +59,8 @@ public class SimulationEngine {
     public SimulationEngine(WorldGrid worldGrid, SimulationConfig config,
                             BotRegistry botRegistry, BondingConfig bondingConfig,
                             CompositeRegistry compositeRegistry, CompositeConfig compositeConfig,
-                            MetabolicProfile metabolicProfile, StarvationConfig starvationConfig) {
+                            MetabolicProfile metabolicProfile, StarvationConfig starvationConfig,
+                            SeasonTracker seasonTracker) {
         this.worldGrid = worldGrid;
         this.config = config;
         this.botRegistry = botRegistry;
@@ -67,6 +69,7 @@ public class SimulationEngine {
         this.compositeConfig = compositeConfig;
         this.metabolicProfile = metabolicProfile;
         this.starvationConfig = starvationConfig;
+        this.seasonTracker = seasonTracker;
     }
 
     public int getLastTickBondCount() {
@@ -106,7 +109,7 @@ public class SimulationEngine {
         int deaths = processDeaths(width, height);
 
         // Phase 4: Nutrient spawning
-        int spawned = processNutrientSpawning(width, height);
+        int spawned = processNutrientSpawning(width, height, tickNumber);
 
         if (log.isDebugEnabled()) {
             log.debug("Tick {} simulation: combat={}, bonds={}, composites={}, decayed={}, overcrowded={}, deaths={}, nutrients_spawned={}",
@@ -779,16 +782,26 @@ public class SimulationEngine {
 
     // ── Phase 4: Nutrient spawning ─────────────────────────────────
 
-    private int processNutrientSpawning(int width, int height) {
+    private int processNutrientSpawning(int width, int height, long tickNumber) {
         if (config.nutrientSpawnProbability() <= 0) return 0;
 
         int spawned = 0;
         ThreadLocalRandom rng = ThreadLocalRandom.current();
+        // D-14: seasonal cosine modulator is global — computed once per tick.
+        double seasonalMultiplier = seasonTracker.getSeasonalMultiplier(tickNumber);
 
         for (int x = 0; x < width; x++) {
             for (int y = 0; y < height; y++) {
                 Cell cell = worldGrid.getCell(x, y);
-                if (cell.isEmpty() && rng.nextDouble() < config.nutrientSpawnProbability()) {
+                if (!cell.isEmpty()) continue;
+                // D-12: per-cell soil fertility modulates spawn probability.
+                double fertilityMultiplier = 1.0 + cell.nutrientLevel() / 100.0;
+                double effectiveRate = config.nutrientSpawnProbability()
+                        * fertilityMultiplier * seasonalMultiplier;
+                // Clamp to [0, 1] to remain a valid probability — very fertile
+                // cells during spring peak would otherwise push rate > 1.
+                effectiveRate = Math.clamp(effectiveRate, 0.0, 1.0);
+                if (rng.nextDouble() < effectiveRate) {
                     String id = "nutrient-" + nutrientIdCounter.incrementAndGet();
                     worldGrid.setEntity(x, y, Nutrient.spawn(id));
                     spawned++;

@@ -3,6 +3,8 @@ package com.paralife.websocket;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.paralife.engine.CompositeRegistry;
+import com.paralife.engine.SeasonTracker;
+import com.paralife.engine.SeasonsConfig;
 import com.paralife.engine.SimulationEngine;
 import com.paralife.engine.TickEvent;
 import com.paralife.world.GridConfig;
@@ -28,6 +30,7 @@ class TickBroadcasterTest {
     private ObjectMapper objectMapper;
     private SimulationEngine simulationEngine;
     private CompositeRegistry compositeRegistry;
+    private SeasonTracker seasonTracker;
     private TickBroadcaster broadcaster;
 
     @BeforeEach
@@ -37,9 +40,11 @@ class TickBroadcasterTest {
         objectMapper = new ObjectMapper();
         simulationEngine = mock(SimulationEngine.class);
         compositeRegistry = new CompositeRegistry();
+        // yearLength=200, amplitude=0.5 — tick=0 is SPRING peak (multiplier=1.5).
+        seasonTracker = new SeasonTracker(new SeasonsConfig(200, 0.5));
         when(simulationEngine.getLastTickBondCount()).thenReturn(0);
         broadcaster = new TickBroadcaster(sessionRegistry, worldGrid, objectMapper,
-                simulationEngine, compositeRegistry);
+                simulationEngine, compositeRegistry, seasonTracker);
     }
 
     @Test
@@ -91,6 +96,44 @@ class TickBroadcasterTest {
         assertThat(json.has("entityCount")).isTrue();
         assertThat(json.has("bondCount")).isTrue();
         assertThat(json.has("compositeCount")).isTrue();
+        assertThat(json.has("seasonPhase")).isTrue();
+        assertThat(json.has("seasonalMultiplier")).isTrue();
+    }
+
+    @Test
+    void tickMessageIncludesSpringAtTickZero() throws Exception {
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.getId()).thenReturn("s1");
+        when(session.isOpen()).thenReturn(true);
+        sessionRegistry.register(session);
+
+        broadcaster.onTick(new TickEvent(0));
+
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session).sendMessage(captor.capture());
+
+        JsonNode json = objectMapper.readTree(captor.getValue().getPayload());
+        // Tick 0, amplitude 0.5 → multiplier = 1 + 0.5 * cos(0) = 1.5 (spring peak)
+        assertThat(json.get("seasonPhase").asText()).isEqualTo("SPRING");
+        assertThat(json.get("seasonalMultiplier").asDouble()).isEqualTo(1.5);
+    }
+
+    @Test
+    void tickMessageReportsAutumnTroughAtHalfYear() throws Exception {
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.getId()).thenReturn("s1");
+        when(session.isOpen()).thenReturn(true);
+        sessionRegistry.register(session);
+
+        broadcaster.onTick(new TickEvent(100));
+
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session).sendMessage(captor.capture());
+
+        JsonNode json = objectMapper.readTree(captor.getValue().getPayload());
+        // Tick 100 of 200 → cos(PI) = -1 → multiplier = 1 - 0.5 = 0.5 (autumn trough)
+        assertThat(json.get("seasonPhase").asText()).isEqualTo("AUTUMN");
+        assertThat(json.get("seasonalMultiplier").asDouble()).isEqualTo(0.5);
     }
 
     @Test
