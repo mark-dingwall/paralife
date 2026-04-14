@@ -593,13 +593,9 @@ public class ActionResolver {
             }
         }
 
-        // Initialize tracking for newly formed composites — use MAX_VALUE so first tick passes speed gate,
-        // then resets to 0 on successful movement (WR-02: prevent stale default, but allow first-tick move)
-        for (var composite : compositeRegistry.getAll()) {
-            compositeTicksSinceMove.putIfAbsent(composite.getCompositeId(), Integer.MAX_VALUE);
-        }
-
         // Increment ticks-since-move for all tracked composites
+        // Note: newly formed composites are NOT pre-seeded — getOrDefault(id, moveInterval)
+        // provides the correct default, allowing first-tick movement then resetting to 0.
         for (String compositeId : compositeTicksSinceMove.keySet()) {
             compositeTicksSinceMove.merge(compositeId, 1, Integer::sum);
         }
