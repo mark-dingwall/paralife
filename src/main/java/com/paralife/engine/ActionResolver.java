@@ -2,6 +2,7 @@ package com.paralife.engine;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.paralife.websocket.Messages;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.paralife.websocket.SessionRegistry;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
@@ -68,6 +69,7 @@ public class ActionResolver {
     private final CompositeRegistry compositeRegistry;
     private final CompositeConfig compositeConfig;
     private final MetabolicProfile metabolicProfile;
+    private final StarvationConfig starvationConfig;
     private final AtomicLong childIdCounter = new AtomicLong(0);
 
     /** Tracks ticks since last movement per composite, for speed gating (D-23). */
@@ -94,11 +96,13 @@ public class ActionResolver {
     private final AtomicReference<ConcurrentHashMap<String, List<String>>> pendingRankedPreferences =
             new AtomicReference<>(new ConcurrentHashMap<>());
 
+    @Autowired
     public ActionResolver(WorldGrid worldGrid, BotRegistry botRegistry,
                            SessionRegistry sessionRegistry, SimulationConfig config,
                            ObjectMapper objectMapper,
                            CompositeRegistry compositeRegistry, CompositeConfig compositeConfig,
-                           MetabolicProfile metabolicProfile) {
+                           MetabolicProfile metabolicProfile,
+                           StarvationConfig starvationConfig) {
         this.worldGrid = worldGrid;
         this.botRegistry = botRegistry;
         this.sessionRegistry = sessionRegistry;
@@ -107,6 +111,20 @@ public class ActionResolver {
         this.compositeRegistry = compositeRegistry;
         this.compositeConfig = compositeConfig;
         this.metabolicProfile = metabolicProfile;
+        this.starvationConfig = starvationConfig;
+    }
+
+    /**
+     * Convenience constructor for tests predating Phase 13 Plan 02 that don't
+     * need starvation modifiers (falls back to {@link StarvationConfig#defaults()}).
+     */
+    public ActionResolver(WorldGrid worldGrid, BotRegistry botRegistry,
+                           SessionRegistry sessionRegistry, SimulationConfig config,
+                           ObjectMapper objectMapper,
+                           CompositeRegistry compositeRegistry, CompositeConfig compositeConfig,
+                           MetabolicProfile metabolicProfile) {
+        this(worldGrid, botRegistry, sessionRegistry, config, objectMapper,
+                compositeRegistry, compositeConfig, metabolicProfile, StarvationConfig.defaults());
     }
 
     /**
@@ -330,7 +348,15 @@ public class ActionResolver {
         }
 
         // Consume the nutrient — per-type gain (Phase 13 D-02)
-        int energyGain = metabolicProfile.forType(ra.particle.type()).nutrientConsumeEnergy();
+        var profile = metabolicProfile.forType(ra.particle.type());
+        int energyGain = profile.nutrientConsumeEnergy();
+        // Plan 02 D-10: starvation nutrient boost from CURRENT energy (not FLAG_STARVING).
+        double intensity = StarvationConfig.computeIntensity(
+                ra.particle.energy(), ra.particle.maxEnergy(),
+                profile.starvationThreshold(), profile.starvationFloor());
+        if (intensity > 0.0) {
+            energyGain = (int) (energyGain * (1 + starvationConfig.maxNutrientBoost() * intensity));
+        }
         Particle updated = ra.particle.withEnergy(ra.particle.energy() + energyGain);
         worldGrid.setEntity(pos.x(), pos.y(), updated);
 
@@ -492,7 +518,15 @@ public class ActionResolver {
 
         // Consume nutrient — energy goes to shared pool (D-15), not individual energy
         // Per-type gain based on feeder's ParticleType (Phase 13)
-        int energyGain = metabolicProfile.forType(rca.member.type()).nutrientConsumeEnergy();
+        var feederProfile = metabolicProfile.forType(rca.member.type());
+        int energyGain = feederProfile.nutrientConsumeEnergy();
+        // Plan 02 D-10: starvation nutrient boost from feeder member's CURRENT energy.
+        double feederIntensity = StarvationConfig.computeIntensity(
+                rca.member.energy(), rca.member.maxEnergy(),
+                feederProfile.starvationThreshold(), feederProfile.starvationFloor());
+        if (feederIntensity > 0.0) {
+            energyGain = (int) (energyGain * (1 + starvationConfig.maxNutrientBoost() * feederIntensity));
+        }
         composite.addEnergy(energyGain);
 
         // Deplete nutrient

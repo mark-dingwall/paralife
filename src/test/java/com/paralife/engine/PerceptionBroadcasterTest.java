@@ -135,6 +135,29 @@ class PerceptionBroadcasterTest {
         assertThat(view.occupantType()).isNull();
         assertThat(view.occupantId()).isNull();
         assertThat(view.nutrientLevel()).isZero();
+        assertThat(view.flags()).isZero();
+    }
+
+    // ── Phase 13 Plan 02: FLAG_STARVING visible in perception ──
+
+    @Test
+    void cellToViewIncludesFlags() {
+        // Cell with both FLAG_OVERCROWDED (1) and FLAG_STARVING (2) → flags=3
+        Cell cell = Cell.EMPTY
+                .withOccupant(Particle.spawn("p1", ParticleType.CATALYST))
+                .withAddedFlag(Cell.FLAG_OVERCROWDED)
+                .withAddedFlag(Cell.FLAG_STARVING);
+        CellView view = PerceptionBroadcaster.cellToView(cell);
+        assertThat(view.flags()).isEqualTo(Cell.FLAG_OVERCROWDED | Cell.FLAG_STARVING);
+    }
+
+    @Test
+    void cellToViewFlagStarvingVisible() {
+        Cell cell = Cell.EMPTY
+                .withOccupant(Particle.spawn("p1", ParticleType.SPORE))
+                .withAddedFlag(Cell.FLAG_STARVING);
+        CellView view = PerceptionBroadcaster.cellToView(cell);
+        assertThat((view.flags() & Cell.FLAG_STARVING) != 0).isTrue();
     }
 
     @Test

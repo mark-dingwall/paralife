@@ -171,9 +171,15 @@ public class SimulationEngine {
                         results.add(new BondFormation(pos, nPos, attacker, prey));
                     } else {
                         // Combat outcome — per-type transfer/attack (Phase 13 D-02)
+                        // Plan 02 D-10/D-11: starvation attack boost + defender vulnerability
+                        // computed from CURRENT energy (not FLAG_STARVING) to avoid stale-flag issue.
                         var atkProfile = metabolicProfile.forType(attacker.type());
-                        results.add(new CombatDelta(pos, atkProfile.combatEnergyTransfer()));
-                        results.add(new CombatDelta(nPos, -atkProfile.attackPower()));
+                        var defProfile = metabolicProfile.forType(prey.type());
+                        int combat = applyAttackBoost(atkProfile.combatEnergyTransfer(), attacker, atkProfile);
+                        int damage = applyAttackBoost(atkProfile.attackPower(), attacker, atkProfile);
+                        damage = applyDamageVulnerability(damage, prey, defProfile);
+                        results.add(new CombatDelta(pos, combat));
+                        results.add(new CombatDelta(nPos, -damage));
                     }
                 }
 
@@ -183,9 +189,12 @@ public class SimulationEngine {
                     // Defense check: secondary type grants deflection chance
                     if (rng.nextDouble() >= bondingConfig.bondDefenseChance()) {
                         // Not deflected — normal combat exchange (per-type, Phase 13)
+                        // Plan 02: starvation attack boost from CURRENT attacker energy.
                         var atkProfile = metabolicProfile.forType(attacker.type());
-                        results.add(new CombatDelta(pos, atkProfile.combatEnergyTransfer()));
-                        results.add(new CombatDelta(nPos, -atkProfile.attackPower()));
+                        int combat = applyAttackBoost(atkProfile.combatEnergyTransfer(), attacker, atkProfile);
+                        int damage = applyAttackBoost(atkProfile.attackPower(), attacker, atkProfile);
+                        results.add(new CombatDelta(pos, combat));
+                        results.add(new CombatDelta(nPos, -damage));
                     }
                     // If deflected (roll < bondDefenseChance), no deltas added
                 }
@@ -200,9 +209,15 @@ public class SimulationEngine {
                         // Deflected by DEFENDER
                     } else {
                         // Damage hits individual energy — per-type attacker stats (Phase 13)
+                        // Plan 02: starvation attack boost from CURRENT attacker energy,
+                        // damage vulnerability applied from CURRENT defender energy.
                         var atkProfile = metabolicProfile.forType(attacker.type());
-                        results.add(new CombatDelta(pos, atkProfile.combatEnergyTransfer()));
-                        results.add(new CombatDelta(nPos, -atkProfile.attackPower()));
+                        var defProfile = metabolicProfile.forType(cm.type());
+                        int combat = applyAttackBoost(atkProfile.combatEnergyTransfer(), attacker, atkProfile);
+                        int damage = applyAttackBoost(atkProfile.attackPower(), attacker, atkProfile);
+                        damage = applyDamageVulnerability(damage, cm.energy(), cm.maxEnergy(), defProfile);
+                        results.add(new CombatDelta(pos, combat));
+                        results.add(new CombatDelta(nPos, -damage));
                     }
                 }
             }
@@ -439,24 +454,94 @@ public class SimulationEngine {
                 Cell cell = worldGrid.getCell(x, y);
                 if (cell.occupant() instanceof Particle p) {
                     // Per-type decay rate (Phase 13 D-02)
-                    int decay = metabolicProfile.forType(p.type()).decayPerTick();
-                    if (decay == 0) continue;
-                    Particle updated = p.withEnergy(p.energy() - decay);
-                    worldGrid.setEntity(x, y, updated);
-                    decayed++;
+                    var profile = metabolicProfile.forType(p.type());
+                    int decay = profile.decayPerTick();
+                    Particle updated = p;
+                    if (decay > 0) {
+                        updated = p.withEnergy(p.energy() - decay);
+                        worldGrid.setEntity(x, y, updated);
+                        decayed++;
+                    }
+                    // Plan 02 (D-10): FLAG_STARVING lifecycle for observability only.
+                    // Combat/consume modifiers read current energy directly via
+                    // StarvationConfig.computeIntensity — never read the flag.
+                    updateStarvingFlag(x, y, updated.energy(), updated.maxEnergy(),
+                            profile.starvationThreshold(), profile.starvationFloor());
                 } else if (cell.occupant() instanceof Entity.BondedPair bp) {
                     // Phase 13 Plan 02 (D-06): BondedPair decay uses cached effectiveDecayRate
                     // computed at formation via Entity.BondedPair.formBond. This is strictly
                     // <= sum of constituent type decays, making bonding metabolically beneficial.
                     int bondedDecay = bp.effectiveDecayRate();
-                    if (bondedDecay == 0) continue;
-                    Entity.BondedPair updated = bp.withEnergy(bp.energy() - bondedDecay);
-                    worldGrid.setEntity(x, y, updated);
-                    decayed++;
+                    Entity.BondedPair updated = bp;
+                    if (bondedDecay > 0) {
+                        updated = bp.withEnergy(bp.energy() - bondedDecay);
+                        worldGrid.setEntity(x, y, updated);
+                        decayed++;
+                    }
+                    // Plan 02 (D-10) + review concern #9: BondedPair starvation threshold/floor
+                    // weighted by maxEnergy of constituent types so each contributes
+                    // proportionally to its share of the shared pool.
+                    var profileA = metabolicProfile.forType(bp.primaryType());
+                    var profileB = metabolicProfile.forType(bp.secondaryType());
+                    int totalMax = profileA.maxEnergy() + profileB.maxEnergy();
+                    int weightedThreshold = totalMax == 0 ? 0
+                            : (profileA.starvationThreshold() * profileA.maxEnergy()
+                                    + profileB.starvationThreshold() * profileB.maxEnergy()) / totalMax;
+                    int weightedFloor = totalMax == 0 ? 0
+                            : (profileA.starvationFloor() * profileA.maxEnergy()
+                                    + profileB.starvationFloor() * profileB.maxEnergy()) / totalMax;
+                    updateStarvingFlag(x, y, updated.energy(), updated.maxEnergy(),
+                            weightedThreshold, weightedFloor);
                 }
             }
         }
         return decayed;
+    }
+
+    /**
+     * Apply starvation attack boost (D-10, D-11) to a base combat value, using
+     * the attacker's CURRENT energy to compute intensity. Never reads
+     * {@link Cell#FLAG_STARVING} — that flag is observability-only.
+     */
+    private int applyAttackBoost(int base, Particle attacker, MetabolicProfile.TypeProfile profile) {
+        double intensity = StarvationConfig.computeIntensity(
+                attacker.energy(), attacker.maxEnergy(),
+                profile.starvationThreshold(), profile.starvationFloor());
+        if (intensity <= 0.0) return base;
+        return (int) (base * (1 + starvationConfig.maxAttackBoost() * intensity));
+    }
+
+    /** Damage vulnerability boost (D-10, D-11) for Particle defenders. */
+    private int applyDamageVulnerability(int damage, Particle defender, MetabolicProfile.TypeProfile profile) {
+        return applyDamageVulnerability(damage, defender.energy(), defender.maxEnergy(), profile);
+    }
+
+    /** Damage vulnerability boost (D-10, D-11) — generalized to any entity's energy/max. */
+    private int applyDamageVulnerability(int damage, int energy, int maxEnergy,
+                                          MetabolicProfile.TypeProfile profile) {
+        double intensity = StarvationConfig.computeIntensity(
+                energy, maxEnergy, profile.starvationThreshold(), profile.starvationFloor());
+        if (intensity <= 0.0) return damage;
+        return (int) (damage * (1 + starvationConfig.maxDamageVulnerability() * intensity));
+    }
+
+    /**
+     * Set or clear {@link Cell#FLAG_STARVING} based on current energy vs the given
+     * starvation threshold/floor. Observability-only — combat/consume modifiers
+     * do not read this flag (they recompute intensity from current energy).
+     */
+    private void updateStarvingFlag(int x, int y, int energy, int maxEnergy,
+                                     int thresholdPercent, int floorPercent) {
+        double intensity = StarvationConfig.computeIntensity(
+                energy, maxEnergy, thresholdPercent, floorPercent);
+        Cell currentCell = worldGrid.getCell(x, y);
+        boolean starving = intensity > 0.0;
+        boolean hasFlag = currentCell.hasFlag(Cell.FLAG_STARVING);
+        if (starving && !hasFlag) {
+            worldGrid.setCell(x, y, currentCell.withAddedFlag(Cell.FLAG_STARVING));
+        } else if (!starving && hasFlag) {
+            worldGrid.setCell(x, y, currentCell.withRemovedFlag(Cell.FLAG_STARVING));
+        }
     }
 
     // ── Phase 2.5: Overcrowding ─────────────────────────────────────

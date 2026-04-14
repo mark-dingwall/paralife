@@ -589,4 +589,56 @@ class ActionResolverTest {
         // If prune worked, cooldown from tick 1 is gone and reproduction succeeds at tick 3
         assertThat(worldGrid.getCell(6, 5).hasOccupant()).isTrue();
     }
+
+    // ── Phase 13 Plan 02: Starvation nutrient boost ───────────────
+
+    @Test
+    void starvingParticleConsumingNutrientGetsBoostedGain() throws Exception {
+        // maxEnergy=100, threshold=30, floor=10, nutrientBase=5, maxNutrientBoost=0.5
+        // particle energy=20 → intensity = (30-20)/(30-10) = 0.5
+        // boosted gain = 5 * (1 + 0.5*0.5) = 5 * 1.25 = 6 (int truncation)
+        MetabolicProfile.TypeProfile starved = new MetabolicProfile.TypeProfile(
+                100, 0, 10, 10, /*nutrient*/5, 30, 0, 0.0, 1, 30, 10);
+        MetabolicProfile profile = new MetabolicProfile(starved, starved, starved);
+
+        ActionResolver r = new ActionResolver(worldGrid, botRegistry, sessionRegistry, config,
+                objectMapper, new CompositeRegistry(), CompositeConfig.defaults(),
+                profile, StarvationConfig.defaults());
+
+        mockSession("s1");
+        Particle p = new Particle("e1", ParticleType.CATALYST, 20, 100);
+        worldGrid.setEntity(5, 5, p);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+        worldGrid.setEntity(6, 5, Nutrient.spawn("n1"));
+
+        r.resolveActions(1, Map.of("s1", new Messages.Action("consume", null)));
+
+        Particle updated = (Particle) worldGrid.getCell(5, 5).occupant();
+        // 20 + boosted 6 = 26
+        assertThat(updated.energy()).isEqualTo(26);
+    }
+
+    @Test
+    void nonStarvingParticleConsumingNutrientGetsBaseGain() throws Exception {
+        // Same profile, but particle energy=80 (above threshold=30) → no boost
+        MetabolicProfile.TypeProfile healthy = new MetabolicProfile.TypeProfile(
+                100, 0, 10, 10, 5, 30, 0, 0.0, 1, 30, 10);
+        MetabolicProfile profile = new MetabolicProfile(healthy, healthy, healthy);
+
+        ActionResolver r = new ActionResolver(worldGrid, botRegistry, sessionRegistry, config,
+                objectMapper, new CompositeRegistry(), CompositeConfig.defaults(),
+                profile, StarvationConfig.defaults());
+
+        mockSession("s1");
+        Particle p = new Particle("e1", ParticleType.CATALYST, 80, 100);
+        worldGrid.setEntity(5, 5, p);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+        worldGrid.setEntity(6, 5, Nutrient.spawn("n1"));
+
+        r.resolveActions(1, Map.of("s1", new Messages.Action("consume", null)));
+
+        Particle updated = (Particle) worldGrid.getCell(5, 5).occupant();
+        // 80 + base 5 = 85 (no boost)
+        assertThat(updated.energy()).isEqualTo(85);
+    }
 }

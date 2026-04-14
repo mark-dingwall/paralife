@@ -786,4 +786,188 @@ class SimulationEngineTest {
             return null;
         }
     }
+
+    // ════════════════════════════════════════════════════════════════
+    // Phase 13 Plan 02: Starvation mechanic (D-09, D-10, D-11)
+    // ════════════════════════════════════════════════════════════════
+
+    @Nested
+    class StarvationTests {
+
+        /** Profile with explicit starvation thresholds — all three types share values. */
+        private MetabolicProfile profile(int maxEnergy, int decay, int combat, int attack,
+                                         int threshold, int floor) {
+            MetabolicProfile.TypeProfile p = new MetabolicProfile.TypeProfile(
+                    maxEnergy, decay, combat, attack, /*nutrient*/5,
+                    /*reproduceCost*/30, /*cooldown*/0, /*bonusOffspring*/0.0, /*range*/1,
+                    threshold, floor);
+            return new MetabolicProfile(p, p, p);
+        }
+
+        private SimulationEngine engineWith(SimulationConfig config, MetabolicProfile profile,
+                                             StarvationConfig starv) {
+            return new SimulationEngine(grid, config, botRegistry,
+                    new BondingConfig(Integer.MAX_VALUE, 0.0, 0.0, 0.1, 0.5, 0.6, 0.9),
+                    new CompositeRegistry(), CompositeConfig.defaults(),
+                    profile, starv);
+        }
+
+        // ── computeIntensity math ─────────────────────────────────
+
+        @Test
+        void computeIntensityZeroWhenAboveThreshold() {
+            // energy=50% of max, threshold=30% → 50 > 30 → not starving
+            assertThat(StarvationConfig.computeIntensity(50, 100, 30, 10)).isZero();
+        }
+
+        @Test
+        void computeIntensityHalfAtMidpoint() {
+            // energy=20% of max, threshold=30%, floor=10%
+            // → intensity = (30-20) / (30-10) = 0.5
+            assertThat(StarvationConfig.computeIntensity(20, 100, 30, 10)).isEqualTo(0.5);
+        }
+
+        @Test
+        void computeIntensityClampedAtOne() {
+            // energy=5% of max, threshold=30%, floor=10% → (30-5)/(30-10)=1.25 → clamped 1.0
+            assertThat(StarvationConfig.computeIntensity(5, 100, 30, 10)).isEqualTo(1.0);
+        }
+
+        @Test
+        void computeIntensityThresholdEqualsFloorReturnsOne() {
+            // threshold==floor → binary: either not starving or fully starving (avoid div by zero)
+            assertThat(StarvationConfig.computeIntensity(20, 100, 30, 30)).isEqualTo(1.0);
+            assertThat(StarvationConfig.computeIntensity(40, 100, 30, 30)).isZero();
+        }
+
+        // ── FLAG_STARVING lifecycle (observability) ───────────────
+
+        @Test
+        void starvingParticleGetsFlagStarving() {
+            // maxEnergy=100, threshold=30%, floor=10%, particle at 20 → starving
+            Particle p = new Particle("e1", ParticleType.CATALYST, 20, 100);
+            grid.setEntity(5, 5, p);
+
+            engineWith(decayOnly(0), profile(100, 0, 10, 10, 30, 10), StarvationConfig.defaults())
+                    .processTick(1);
+
+            assertThat(grid.getCell(5, 5).hasFlag(Cell.FLAG_STARVING)).isTrue();
+        }
+
+        @Test
+        void nonStarvingParticleHasNoFlag() {
+            Particle p = new Particle("e1", ParticleType.CATALYST, 80, 100);
+            grid.setEntity(5, 5, p);
+
+            engineWith(decayOnly(0), profile(100, 0, 10, 10, 30, 10), StarvationConfig.defaults())
+                    .processTick(1);
+
+            assertThat(grid.getCell(5, 5).hasFlag(Cell.FLAG_STARVING)).isFalse();
+        }
+
+        @Test
+        void flagStarvingClearedWhenParticleRecovers() {
+            // Seed a starving particle and set the flag, then replace with a healthy one.
+            Particle starving = new Particle("e1", ParticleType.CATALYST, 20, 100);
+            grid.setEntity(5, 5, starving);
+            grid.setCell(5, 5, grid.getCell(5, 5).withAddedFlag(Cell.FLAG_STARVING));
+            assertThat(grid.getCell(5, 5).hasFlag(Cell.FLAG_STARVING)).isTrue();
+
+            // Replace with healthy particle (preserve flags since setEntity keeps flags)
+            Particle healthy = new Particle("e1", ParticleType.CATALYST, 80, 100);
+            grid.setEntity(5, 5, healthy);
+            // confirm flag still set after setEntity
+            assertThat(grid.getCell(5, 5).hasFlag(Cell.FLAG_STARVING)).isTrue();
+
+            engineWith(decayOnly(0), profile(100, 0, 10, 10, 30, 10), StarvationConfig.defaults())
+                    .processTick(1);
+
+            // Engine should have cleared the flag this tick
+            assertThat(grid.getCell(5, 5).hasFlag(Cell.FLAG_STARVING)).isFalse();
+        }
+
+        @Test
+        void bondedPairStarvationUsesWeightedThresholdFloor() {
+            // primary CATALYST (max=80, thr=30, floor=10), secondary MEMBRANE (max=120, thr=60, floor=20)
+            // weighted threshold = (30*80 + 60*120)/(80+120) = (2400+7200)/200 = 48
+            // weighted floor     = (10*80 + 20*120)/(80+120) = (800+2400)/200 = 16
+            // pair energy = 40, max = 200 → 20% < 48 → starving
+            MetabolicProfile p = new MetabolicProfile(
+                    new MetabolicProfile.TypeProfile(80, 0, 10, 10, 5, 30, 0, 0.0, 1, 30, 10),
+                    new MetabolicProfile.TypeProfile(120, 0, 10, 10, 5, 30, 0, 0.0, 1, 60, 20),
+                    new MetabolicProfile.TypeProfile(100, 0, 10, 10, 5, 30, 0, 0.0, 1, 30, 10));
+            Entity.BondedPair bp = new Entity.BondedPair(
+                    "bp1", ParticleType.CATALYST, ParticleType.MEMBRANE, 40, 200,
+                    "cat", "mem", 0, 10, 10);
+            grid.setEntity(5, 5, bp);
+
+            engineWith(decayOnly(0), p, StarvationConfig.defaults()).processTick(1);
+
+            assertThat(grid.getCell(5, 5).hasFlag(Cell.FLAG_STARVING)).isTrue();
+        }
+
+        // ── Combat modifiers computed from CURRENT energy (no stale flag) ──
+
+        @Test
+        void starvingAttackerDealsMoreDamageAndGainsMoreEnergy() {
+            // CATALYST beats SPORE. With threshold=30, floor=10, attacker at energy=20 → intensity=0.5
+            // baseAttack=10 → boosted = 10 * (1 + 0.5*0.5) = 12 (maxAttackBoost=0.5)
+            // baseCombat=10 → boosted = 12
+            Particle cat = new Particle("cat", ParticleType.CATALYST, 20, 100);
+            Particle spo = new Particle("spo", ParticleType.SPORE, 60, 100);
+            grid.setEntity(5, 5, cat);
+            grid.setEntity(5, 6, spo);
+
+            MetabolicProfile mp = profile(100, 0, 10, 10, 30, 10);
+            engineWith(combatOnly(), mp, StarvationConfig.defaults()).processTick(1);
+
+            Particle updatedCat = (Particle) grid.getCell(5, 5).occupant();
+            Particle updatedSpo = (Particle) grid.getCell(5, 6).occupant();
+            // Attacker gained 12 (boosted from 10)
+            assertThat(updatedCat.energy()).isEqualTo(32);
+            // Defender lost 12 (boosted damage)
+            assertThat(updatedSpo.energy()).isEqualTo(48);
+        }
+
+        @Test
+        void starvingDefenderTakesMoreDamage() {
+            // Healthy attacker (no attack boost), starving defender (damage vulnerability)
+            // attacker energy=80 (>threshold, no intensity), defender energy=20 (intensity=0.5)
+            // baseDamage=10, defenderVulnerability = 10 * (1 + 0.5*0.5) = 12
+            Particle cat = new Particle("cat", ParticleType.CATALYST, 80, 100);
+            Particle spo = new Particle("spo", ParticleType.SPORE, 20, 100);
+            grid.setEntity(5, 5, cat);
+            grid.setEntity(5, 6, spo);
+
+            MetabolicProfile mp = profile(100, 0, 10, 10, 30, 10);
+            engineWith(combatOnly(), mp, StarvationConfig.defaults()).processTick(1);
+
+            Particle updatedCat = (Particle) grid.getCell(5, 5).occupant();
+            Particle updatedSpo = (Particle) grid.getCell(5, 6).occupant();
+            // Attacker gained base 10 (no boost since not starving)
+            assertThat(updatedCat.energy()).isEqualTo(90);
+            // Defender lost boosted damage 12
+            assertThat(updatedSpo.energy()).isEqualTo(8);
+        }
+
+        @Test
+        void recoveredEntityHasNoStaleFlagModifier() {
+            // Plan 02 explicit: modifiers are computed from CURRENT energy, not from FLAG_STARVING.
+            // Seed a cell with FLAG_STARVING set, then place a healthy attacker there. No boost.
+            grid.setCell(5, 5, grid.getCell(5, 5).withAddedFlag(Cell.FLAG_STARVING));
+            Particle cat = new Particle("cat", ParticleType.CATALYST, 80, 100);
+            Particle spo = new Particle("spo", ParticleType.SPORE, 60, 100);
+            grid.setEntity(5, 5, cat);
+            grid.setEntity(5, 6, spo);
+
+            MetabolicProfile mp = profile(100, 0, 10, 10, 30, 10);
+            engineWith(combatOnly(), mp, StarvationConfig.defaults()).processTick(1);
+
+            Particle updatedCat = (Particle) grid.getCell(5, 5).occupant();
+            Particle updatedSpo = (Particle) grid.getCell(5, 6).occupant();
+            // No stale-flag modifier — attacker gained exactly 10, defender lost exactly 10.
+            assertThat(updatedCat.energy()).isEqualTo(90);
+            assertThat(updatedSpo.energy()).isEqualTo(50);
+        }
+    }
 }

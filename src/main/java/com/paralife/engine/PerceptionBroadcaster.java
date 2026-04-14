@@ -267,20 +267,23 @@ public class PerceptionBroadcaster {
      * Convert a Cell to a compact CellView for the perception message.
      */
     static CellView cellToView(Cell cell) {
+        // Phase 13 Plan 02: include cell.flags() so bots can detect FLAG_STARVING
+        // (and FLAG_OVERCROWDED) in perception — enables targeting of weakened entities.
+        int flags = cell.flags();
         if (cell.isEmpty()) {
-            return new CellView(null, null, cell.nutrientLevel());
+            return new CellView(null, null, cell.nutrientLevel(), flags);
         }
         Entity occupant = cell.occupant();
         return switch (occupant) {
-            case Particle p -> new CellView(p.type().name(), p.id(), cell.nutrientLevel());
-            case Entity.Rock r -> new CellView("ROCK", r.id(), cell.nutrientLevel());
-            case Entity.Nutrient n -> new CellView("NUTRIENT", n.id(), cell.nutrientLevel());
+            case Particle p -> new CellView(p.type().name(), p.id(), cell.nutrientLevel(), flags);
+            case Entity.Rock r -> new CellView("ROCK", r.id(), cell.nutrientLevel(), flags);
+            case Entity.Nutrient n -> new CellView("NUTRIENT", n.id(), cell.nutrientLevel(), flags);
             case Entity.BondedPair bp -> new CellView(
                     "BONDED_" + bp.primaryType() + "_" + bp.secondaryType(),
-                    bp.id(), cell.nutrientLevel());
+                    bp.id(), cell.nutrientLevel(), flags);
             case Entity.CompositeMember cm -> new CellView(
                     "COMPOSITE_" + cm.type() + "_" + cm.role(),
-                    cm.id(), cell.nutrientLevel());
+                    cm.id(), cell.nutrientLevel(), flags);
         };
     }
 }

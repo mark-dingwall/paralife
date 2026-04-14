@@ -171,10 +171,25 @@ public sealed interface Messages {
     /**
      * Compact view of a single cell in the neighbourhood.
      * Null occupantType means empty cell. "rock" / "nutrient" / particle type name for occupied.
+     *
+     * <p>Phase 13 Plan 02 adds {@code flags}, the bitfield of {@link com.paralife.world.Cell}
+     * environmental flags (e.g. {@code FLAG_OVERCROWDED=1}, {@code FLAG_STARVING=2}).
+     * Bots can inspect these to target weakened entities (cornered-animal D-10).
+     *
+     * @param occupantType   entity type name or {@code null} for empty
+     * @param occupantId     entity id or {@code null} for empty
+     * @param nutrientLevel  soil fertility level
+     * @param flags          bitfield of Cell flags (0 = none)
      */
     record CellView(
             String occupantType,
             String occupantId,
-            int nutrientLevel
-    ) {}
+            int nutrientLevel,
+            int flags
+    ) {
+        /** Back-compat 3-arg constructor — defaults {@code flags} to 0. */
+        public CellView(String occupantType, String occupantId, int nutrientLevel) {
+            this(occupantType, occupantId, nutrientLevel, 0);
+        }
+    }
 }
