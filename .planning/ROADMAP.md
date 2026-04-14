@@ -92,6 +92,12 @@ Plans:
 ### Phase 13: Energy & Metabolism System
 **Goal:** Richer energy model — entities need food, starve, and reproduce based on metabolic state
 **Depends on:** Phase 12 (composites need metabolism to be interesting)
+**Plans:** 4 plans
+Plans:
+- [ ] 13-01-PLAN.md — Per-type metabolic profiles (MetabolicProfile, StarvationConfig), per-type decay/combat in SimulationEngine, surplus-gated reproduction with cooldown and SPORE bonuses in ActionResolver
+- [ ] 13-02-PLAN.md — BondedPair hybrid vigor metabolism (BondingConfig extension, bond decay cost) + progressive starvation mechanic (FLAG_STARVING, combat modifiers, nutrient boost)
+- [ ] 13-03-PLAN.md — Soil fertility (FertilityInitializer, FertilityConfig) + seasonal cycles (SeasonTracker, SeasonsConfig) + fertility/season-modulated nutrient spawning + Messages.Tick season data
+- [ ] 13-04-PLAN.md — Integration test: 300-tick population dynamics with full metabolism system
 **Success Criteria:**
 - Metabolism rates differ by entity type and composite size
 - Starvation mechanic with configurable thresholds
@@ -135,8 +141,8 @@ Plans:
 | 08 | Perception & Action Protocol | ✅ Complete |
 | 09 | Bot Client — Heuristic AI | ✅ Complete |
 | 10 | Integration Test — Population Dynamics & Load | ✅ Complete |
-| 11 | Bonding Rules Engine | Not started |
-| 12 | Composite Entities | Planning complete |
-| 13 | Energy & Metabolism System | Not started |
+| 11 | Bonding Rules Engine | ✅ Complete |
+| 12 | Composite Entities | ✅ Complete |
+| 13 | Energy & Metabolism System | Planning complete |
 | 14 | Environmental Rules | Not started |
 | 15 | Emergent Behavior Tests | Not started |
