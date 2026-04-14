@@ -159,6 +159,26 @@ class ActionResolverTest {
         verify(session).sendMessage(any(TextMessage.class));
     }
 
+    @Test
+    void moveOntoNutrientAutoConsumes() throws Exception {
+        // FN-2: moving onto a nutrient grants per-type nutrientConsumeEnergy
+        // so move and consume paths have parity rather than silently discarding.
+        mockSession("s1");
+        placeBot("s1", "e1", ParticleType.CATALYST, new Position(5, 5));
+        worldGrid.setEntity(6, 5, Nutrient.spawn("n1"));
+
+        int energyBefore = ((Particle) worldGrid.getCell(5, 5).occupant()).energy();
+
+        resolver.resolveActions(1, Map.of("s1", new Messages.Action("move", "E")));
+
+        // Entity moved east onto the nutrient cell
+        assertThat(worldGrid.getCell(5, 5).isEmpty()).isTrue();
+        Particle moved = (Particle) worldGrid.getCell(6, 5).occupant();
+        assertThat(moved.id()).isEqualTo("e1");
+        // And gained per-type nutrient energy (legacyProfile nutrientConsumeEnergy = 5)
+        assertThat(moved.energy()).isEqualTo(energyBefore + 5);
+    }
+
     // ── Consume tests ─────────────────────────────────────────────
 
     @Test

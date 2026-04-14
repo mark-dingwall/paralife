@@ -314,8 +314,22 @@ public class ActionResolver {
         claimedCells.add(target);
         worldGrid.clearEntity(ra.bot.position().x(), ra.bot.position().y());
 
-        // If target has a nutrient, the particle replaces it (auto-consume on move)
-        worldGrid.setEntity(target.x(), target.y(), ra.particle);
+        // If target has a nutrient, auto-consume on move — parity with resolveConsume
+        // (per-type gain + starvation boost). Overwriting the nutrient without
+        // granting energy would be a silent drop (WR-02).
+        Particle placed = ra.particle;
+        if (targetCell.occupant() instanceof Nutrient) {
+            var profile = metabolicProfile.forType(ra.particle.type());
+            int energyGain = profile.nutrientConsumeEnergy();
+            double intensity = StarvationConfig.computeIntensity(
+                    ra.particle.energy(), ra.particle.maxEnergy(),
+                    profile.starvationThreshold(), profile.starvationFloor());
+            if (intensity > 0.0) {
+                energyGain = (int) (energyGain * (1 + starvationConfig.maxNutrientBoost() * intensity));
+            }
+            placed = ra.particle.withEnergy(ra.particle.energy() + energyGain);
+        }
+        worldGrid.setEntity(target.x(), target.y(), placed);
         botRegistry.updatePosition(ra.sessionId, target);
 
         sendResult(ra.sessionId, tickNumber, true, "move", "Moved " + dir.name());
