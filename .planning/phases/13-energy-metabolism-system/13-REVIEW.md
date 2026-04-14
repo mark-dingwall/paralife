@@ -263,3 +263,36 @@ string patterns, or add optional `subtype`/`role` fields and keep
 _Reviewed: 2026-04-15T00:00:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+
+## Resolutions (2026-04-15 triage pass)
+
+Triage plan mapped each warning/info finding to Fix Now / Defer. Every
+non-deferred item is landed as an atomic commit on `master`. Deferred items
+are carried forward in `v2.0-TECH-DEBT.md` (tech-debt log) until the
+milestone closes.
+
+| Finding | Resolution | Commit |
+|---|---|---|
+| WR-01 SeasonTracker divide-by-zero | FIXED (subsumed by FN-4 validation bump to `yearLengthTicks >= 8`) | 106c578 |
+| WR-02 Move-onto-nutrient silently destroys it | FIXED — auto-consume on move with per-type gain + starvation boost | ecbddc7 |
+| WR-03 Combat event count undercounts composite attacks | FIXED — count at emission, split particle vs composite-member attackers | d73b5a3 |
+| IN-01 Hybrid vigor integer truncation | DEFERRED (DF-C) — defensible behavior; float math would churn a record for a minor tuning concern | — |
+| IN-02 Dead `totalMax==0` guard | FIXED — ternary replaced by invariant comment | 7f09bad |
+| IN-03 Composite attacker break-on-first-neighbour | DEFERRED (DF-D) — design intent unclear; revisit during composite combat tuning | — |
+| IN-04 Deprecated flat constants with no consumers | PARTIALLY FIXED — grep proved the `@Deprecated` + "no consumers" claim false. Constants removed from `@Deprecated`, javadoc corrected to describe their actual role as shared test fixtures | 7f09bad |
+| IN-05 `revertToBondedPair` same-type ambiguity | FIXED — inline comment documents the intentional placeholder | 7f09bad |
+| IN-06 Synthetic wire-format type strings | DEFERRED (DF-E) — single-client today; restructure when a second consumer appears | — |
+
+Cross-AI plan review (`13-REVIEWS.md`) additions:
+
+| Concern | Resolution | Commit |
+|---|---|---|
+| E (sin vs cos seasons) | FIXED — sin-based formula + `+L/8` shift so SPRING/SUMMER/AUTUMN/WINTER are centered on rising/max/falling/min phases | 106c578 |
+| F (SPORE reproduction fails in dense areas) | FIXED — range-1 fallback preserves r-strategist ergonomics without erasing range-2 preference | c76f699 |
+| B (`WorldGrid.clear()` wipes `nutrientLevel`) | FIXED — added `clearOccupants()` alongside `clear()` with distinct-behavior javadoc | 441064c |
+| D (BondedPair speculative cached fields) | DEFERRED (DF-A) — future-proof for active-agent BondedPairs | — |
+| C (MetabolismIntegrationTest weakness) | DEFERRED (DF-B) — passes today; revisit if it flakes | — |
+| G (Cell.nutrientLevel regen/decay) | DEFERRED (DF-F) — out of scope for Phase 13; revisit once ecology exposes a need | — |
+
+All post-fix tests green (`./gradlew test`), bootRun smoke clean (no
+ArithmeticException, tick engine running, seasonal multiplier cycling).

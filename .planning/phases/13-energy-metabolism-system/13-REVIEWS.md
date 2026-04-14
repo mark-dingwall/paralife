@@ -181,3 +181,48 @@ Both reviewers agree the Phase 13 plans are architecturally sound and ready to e
 3. Trim 13-02's BondedPair cached fields to the ones actually consumed this phase, or justify each speculative field with a named future plan.
 4. Tighten 13-04 assertions: assert `bondedPairObserved`, define a quantitative seasonal-correlation check, drive sampling off tick numbers not `Thread.sleep`, and mark the test as slow/integration-only.
 5. Reconcile season-enum labels with the "winter = scarcity" narrative or document the deliberate drift.
+
+## Post-Review Actions (2026-04-15)
+
+Cross-AI findings triaged alongside the internal review; fixes landed as
+atomic commits on `master`. Deferred items carried forward in
+`v2.0-TECH-DEBT.md`.
+
+### Fixed now
+
+- **E. Sin-based seasons + centered labels** (commit 106c578). Switched
+  to `1 + amplitude * sin(2π·t/L)` with a `+L/8` enum shift so SPRING /
+  SUMMER / AUTUMN / WINTER align with rising / max / falling / min of
+  the curve. Reconciles the Codex "trough at AUTUMN" concern by moving
+  trough to mid-WINTER. Subsumes WR-01 (ArithmeticException for tiny
+  `yearLengthTicks`) via a `yearLengthTicks >= 8` validation bump.
+- **F. SPORE range-1 fallback** (commit c76f699). Types with
+  `reproduceRange > 1` now fall back one cell closer when the far target
+  is blocked, preserving the r-strategist archetype in dense regions.
+  Range-1 types unchanged.
+- **B. WorldGrid fertility-safe clear** (commit 441064c). Added
+  `clearOccupants()` alongside `clear()`; new javadoc on both
+  distinguishes occupant-only vs full-reset semantics. Chose Gemini's
+  additive API option over Codex's "re-invoke fertility init" option —
+  smaller blast radius, no existing caller required to change.
+
+### Deferred (see `v2.0-TECH-DEBT.md`)
+
+- **D. BondedPair speculative cached fields** (DF-A). `effectiveCombatTransfer`
+  / `effectiveAttackPower` are unused until BondedPairs gain active agency.
+  Leaving them documents the intended future wiring; deleting now means
+  re-adding later.
+- **C. MetabolismIntegrationTest weakness** (DF-B). Sleep-driven sampling,
+  qualitative seasonal check, no `bondedPairObserved` assertion. Test
+  passes today and demonstrates the full pipeline; strengthening is a
+  testing-quality pass, not a correctness fix. Revisit on flake.
+- **G. Cell.nutrientLevel regen/decay** (DF-F). Not in Phase 13 scope;
+  ecology observations in later phases will indicate whether regen is
+  needed.
+
+### Not actioned
+
+Codex's "pre-execution" items 1, 3, 4 were already resolved during planning
+(namespace locked, cached fields rationalized, UAT scope set). Item 2 is
+the `clearOccupants()` work above. Item 5 was the season label concern,
+now fixed in E.
