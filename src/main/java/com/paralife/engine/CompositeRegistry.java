@@ -85,8 +85,8 @@ public class CompositeRegistry {
 
         /** Replace all member positions atomically (used after rigid-body movement). */
         public void updateAllPositions(Map<String, Position> positions) {
-            memberPositions.clear();
             memberPositions.putAll(positions);
+            memberPositions.keySet().retainAll(positions.keySet());
         }
 
         /** Add a new member with its initial position. */
