@@ -40,7 +40,7 @@ class CompositeActionTest {
         config = SimulationConfig.defaults();
         objectMapper = new ObjectMapper();
         resolver = new ActionResolver(worldGrid, botRegistry, sessionRegistry, config,
-                objectMapper, compositeRegistry, compositeConfig);
+                objectMapper, compositeRegistry, compositeConfig, ActionResolverTest.legacyProfile());
     }
 
     private WebSocketSession mockSession(String id) {

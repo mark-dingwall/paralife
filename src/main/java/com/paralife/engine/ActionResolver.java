@@ -44,9 +44,20 @@ public class ActionResolver {
 
     private static final Logger log = LoggerFactory.getLogger(ActionResolver.class);
 
-    /** Energy cost to reproduce. Parent must have at least this much energy. */
+    /**
+     * Energy cost to reproduce (legacy flat default).
+     * @deprecated Phase 13 replaces this with per-type
+     * {@link MetabolicProfile.TypeProfile#reproduceEnergyCost()}. Kept for
+     * backward compatibility with tests that assert against the flat value.
+     */
+    @Deprecated
     public static final int REPRODUCE_ENERGY_COST = 30;
-    /** Starting energy for a child entity produced by reproduction. */
+    /**
+     * Starting energy for a child entity (legacy flat default).
+     * @deprecated Phase 13 replaces this with per-type
+     * {@link MetabolicProfile.TypeProfile#childStartEnergy()} (= maxEnergy/2).
+     */
+    @Deprecated
     public static final int CHILD_START_ENERGY = 20;
 
     private final WorldGrid worldGrid;
@@ -56,10 +67,18 @@ public class ActionResolver {
     private final ObjectMapper objectMapper;
     private final CompositeRegistry compositeRegistry;
     private final CompositeConfig compositeConfig;
+    private final MetabolicProfile metabolicProfile;
     private final AtomicLong childIdCounter = new AtomicLong(0);
 
     /** Tracks ticks since last movement per composite, for speed gating (D-23). */
     private final ConcurrentHashMap<String, Integer> compositeTicksSinceMove = new ConcurrentHashMap<>();
+
+    /**
+     * Tracks last-reproduced tick per entity id for per-type reproduce cooldown
+     * enforcement (Phase 13 D-02). Pruned each tick alongside
+     * {@link #compositeTicksSinceMove} to avoid unbounded growth.
+     */
+    private final ConcurrentHashMap<String, Long> lastReproducedTick = new ConcurrentHashMap<>();
 
     /**
      * Pending action: sessionId → action. Only the last action per session per tick is kept.
@@ -78,7 +97,8 @@ public class ActionResolver {
     public ActionResolver(WorldGrid worldGrid, BotRegistry botRegistry,
                            SessionRegistry sessionRegistry, SimulationConfig config,
                            ObjectMapper objectMapper,
-                           CompositeRegistry compositeRegistry, CompositeConfig compositeConfig) {
+                           CompositeRegistry compositeRegistry, CompositeConfig compositeConfig,
+                           MetabolicProfile metabolicProfile) {
         this.worldGrid = worldGrid;
         this.botRegistry = botRegistry;
         this.sessionRegistry = sessionRegistry;
@@ -86,6 +106,7 @@ public class ActionResolver {
         this.objectMapper = objectMapper;
         this.compositeRegistry = compositeRegistry;
         this.compositeConfig = compositeConfig;
+        this.metabolicProfile = metabolicProfile;
     }
 
     /**
@@ -308,8 +329,8 @@ public class ActionResolver {
             return;
         }
 
-        // Consume the nutrient
-        int energyGain = config.nutrientConsumeEnergy();
+        // Consume the nutrient — per-type gain (Phase 13 D-02)
+        int energyGain = metabolicProfile.forType(ra.particle.type()).nutrientConsumeEnergy();
         Particle updated = ra.particle.withEnergy(ra.particle.energy() + energyGain);
         worldGrid.setEntity(pos.x(), pos.y(), updated);
 
@@ -328,9 +349,34 @@ public class ActionResolver {
     // ── Reproduce ─────────────────────────────────────────────────
 
     private boolean resolveReproduce(ResolvedAction ra, Set<Position> claimedCells, long tickNumber) {
-        if (ra.particle.energy() < REPRODUCE_ENERGY_COST) {
+        // Per-type reproduce profile (Phase 13 D-02, D-16, D-18)
+        var profile = metabolicProfile.forType(ra.particle.type());
+        int reproduceCost = profile.reproduceEnergyCost();
+
+        // Baseline: must have at least the reproduce cost
+        if (ra.particle.energy() < reproduceCost) {
             sendResult(ra.sessionId, tickNumber, false, "reproduce",
-                    "Not enough energy (need " + REPRODUCE_ENERGY_COST + ", have " + ra.particle.energy() + ")");
+                    "Not enough energy (need " + reproduceCost + ", have " + ra.particle.energy() + ")");
+            return false;
+        }
+
+        // D-16 surplus gate: post-cost energy must remain above the starvation threshold
+        int energyAfterCost = ra.particle.energy() - reproduceCost;
+        int starvationFloor = (int) (profile.starvationThreshold() / 100.0 * ra.particle.maxEnergy());
+        if (energyAfterCost < starvationFloor) {
+            sendResult(ra.sessionId, tickNumber, false, "reproduce",
+                    "Would starve after reproduction (surplus " + energyAfterCost
+                            + " < threshold " + starvationFloor + ")");
+            return false;
+        }
+
+        // Per-type cooldown gate (Phase 13)
+        int cooldown = profile.reproduceCooldown();
+        long lastTick = lastReproducedTick.getOrDefault(ra.particle.id(), Long.MIN_VALUE / 2);
+        long ticksSince = tickNumber - lastTick;
+        if (ticksSince < cooldown) {
+            sendResult(ra.sessionId, tickNumber, false, "reproduce",
+                    "Reproduce cooldown (" + (cooldown - ticksSince) + " ticks remaining)");
             return false;
         }
 
@@ -340,7 +386,12 @@ public class ActionResolver {
             return false;
         }
 
-        Position target = dir.apply(ra.bot.position(), worldGrid.getWidth(), worldGrid.getHeight());
+        // D-18: walk `reproduceRange` steps in the given direction (SPORE=2, others=1)
+        int range = profile.reproduceRange();
+        Position target = ra.bot.position();
+        for (int step = 0; step < range; step++) {
+            target = dir.apply(target, worldGrid.getWidth(), worldGrid.getHeight());
+        }
 
         if (claimedCells.contains(target)) {
             sendResult(ra.sessionId, tickNumber, false, "reproduce", "Cell claimed by another entity");
@@ -353,19 +404,46 @@ public class ActionResolver {
             return false;
         }
 
-        // Spawn child
+        // Spawn child with per-type start energy and max energy
         claimedCells.add(target);
         String childId = "child-" + childIdCounter.incrementAndGet();
-        Particle child = new Particle(childId, ra.particle.type(), CHILD_START_ENERGY, ra.particle.maxEnergy());
+        Particle child = new Particle(childId, ra.particle.type(),
+                profile.childStartEnergy(), profile.maxEnergy());
         worldGrid.setEntity(target.x(), target.y(), child);
 
         // Deduct parent energy
-        Particle updatedParent = ra.particle.withEnergy(ra.particle.energy() - REPRODUCE_ENERGY_COST);
+        Particle updatedParent = ra.particle.withEnergy(ra.particle.energy() - reproduceCost);
         worldGrid.setEntity(ra.bot.position().x(), ra.bot.position().y(), updatedParent);
+
+        // Record cooldown and check bonus offspring (D-18, guard ensures no rng call at chance=0)
+        lastReproducedTick.put(ra.particle.id(), tickNumber);
+        if (profile.bonusOffspringChance() > 0.0
+                && ThreadLocalRandom.current().nextDouble() < profile.bonusOffspringChance()) {
+            Position bonusTarget = findEmptyAdjacentCell(target, claimedCells);
+            if (bonusTarget != null) {
+                String bonusChildId = "child-" + childIdCounter.incrementAndGet();
+                Particle bonusChild = new Particle(bonusChildId, ra.particle.type(),
+                        profile.childStartEnergy(), profile.maxEnergy());
+                worldGrid.setEntity(bonusTarget.x(), bonusTarget.y(), bonusChild);
+                claimedCells.add(bonusTarget);
+            }
+        }
 
         sendResult(ra.sessionId, tickNumber, true, "reproduce",
                 "Spawned child " + childId + " at " + target);
         return true;
+    }
+
+    /**
+     * Return the first empty, unclaimed neighbor of the given position, or null.
+     * Used for SPORE bonus-offspring placement (D-18).
+     */
+    private Position findEmptyAdjacentCell(Position pos, Set<Position> claimedCells) {
+        for (Position np : worldGrid.getNeighbors(pos.x(), pos.y())) {
+            if (claimedCells.contains(np)) continue;
+            if (worldGrid.getCell(np.x(), np.y()).isEmpty()) return np;
+        }
+        return null;
     }
 
     // ── Result delivery ───────────────────────────────────────────
@@ -413,7 +491,8 @@ public class ActionResolver {
         }
 
         // Consume nutrient — energy goes to shared pool (D-15), not individual energy
-        int energyGain = config.nutrientConsumeEnergy();
+        // Per-type gain based on feeder's ParticleType (Phase 13)
+        int energyGain = metabolicProfile.forType(rca.member.type()).nutrientConsumeEnergy();
         composite.addEnergy(energyGain);
 
         // Deplete nutrient
@@ -517,10 +596,25 @@ public class ActionResolver {
     private void resolveReproducerBud(ResolvedCompositeAction rca,
                                        CompositeRegistry.CompositeState composite,
                                        Set<Position> claimedCells, long tickNumber) {
-        if (composite.getSharedPoolEnergy() < REPRODUCE_ENERGY_COST) {
+        // Per-type reproduce profile for this member (Phase 13 D-17)
+        var profile = metabolicProfile.forType(rca.member.type());
+        int reproduceCost = profile.reproduceEnergyCost();
+
+        if (composite.getSharedPoolEnergy() < reproduceCost) {
             sendResult(rca.sessionId, tickNumber, false, "reproduce",
-                    "Not enough pool energy (need " + REPRODUCE_ENERGY_COST
+                    "Not enough pool energy (need " + reproduceCost
                             + ", have " + composite.getSharedPoolEnergy() + ")");
+            return;
+        }
+
+        // D-17 surplus gate: pool must remain above starvation threshold post-cost
+        int poolAfterCost = composite.getSharedPoolEnergy() - reproduceCost;
+        int poolStarvationFloor =
+                (int) (profile.starvationThreshold() / 100.0 * composite.getMaxPoolEnergy());
+        if (poolAfterCost < poolStarvationFloor) {
+            sendResult(rca.sessionId, tickNumber, false, "reproduce",
+                    "Would deplete pool below survival threshold (surplus " + poolAfterCost
+                            + " < threshold " + poolStarvationFloor + ")");
             return;
         }
 
@@ -543,17 +637,18 @@ public class ActionResolver {
             return;
         }
 
-        // Spawn child Particle with member's type (D-32)
+        // Spawn child Particle with member's type and per-type child energy (Phase 13)
         claimedCells.add(target);
         String childId = "child-" + childIdCounter.incrementAndGet();
-        Particle child = new Particle(childId, rca.member.type(), CHILD_START_ENERGY, rca.member.maxEnergy());
+        Particle child = new Particle(childId, rca.member.type(),
+                profile.childStartEnergy(), profile.maxEnergy());
         worldGrid.setEntity(target.x(), target.y(), child);
 
         // Deduct energy from shared pool (graceful degradation: partial drain logged)
-        int reproduceCostDrained = composite.drainEnergy(REPRODUCE_ENERGY_COST);
-        if (reproduceCostDrained < REPRODUCE_ENERGY_COST) {
+        int reproduceCostDrained = composite.drainEnergy(reproduceCost);
+        if (reproduceCostDrained < reproduceCost) {
             log.debug("Partial reproduce cost drain: {} of {} for composite {}",
-                    reproduceCostDrained, REPRODUCE_ENERGY_COST, rca.member.compositeId());
+                    reproduceCostDrained, reproduceCost, rca.member.compositeId());
         }
 
         // Charge active drain
@@ -643,6 +738,15 @@ public class ActionResolver {
             activeCompositeIds.add(composite.getCompositeId());
         }
         compositeTicksSinceMove.keySet().retainAll(activeCompositeIds);
+
+        // Phase 13: prune stale reproduce cooldown entries — mirror the
+        // compositeTicksSinceMove pattern to prevent unbounded growth as
+        // entities die. Active entity ids are taken from BotRegistry.
+        Set<String> activeEntityIds = new HashSet<>();
+        for (var bot : botRegistry.getAllBots()) {
+            activeEntityIds.add(bot.entityId());
+        }
+        lastReproducedTick.keySet().retainAll(activeEntityIds);
     }
 
     /**

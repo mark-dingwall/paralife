@@ -3,6 +3,7 @@ package com.paralife.websocket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.paralife.engine.ActionResolver;
 import com.paralife.engine.BotRegistry;
+import com.paralife.engine.MetabolicProfile;
 import com.paralife.engine.TickEngine;
 import com.paralife.world.Entity;
 import com.paralife.world.Entity.Particle;
@@ -36,16 +37,19 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
     private final BotRegistry botRegistry;
     private final ActionResolver actionResolver;
     private final ObjectMapper objectMapper;
+    private final MetabolicProfile metabolicProfile;
 
     public WorldWebSocketHandler(SessionRegistry sessionRegistry, WorldGrid worldGrid,
                                   TickEngine tickEngine, BotRegistry botRegistry,
-                                  ActionResolver actionResolver, ObjectMapper objectMapper) {
+                                  ActionResolver actionResolver, ObjectMapper objectMapper,
+                                  MetabolicProfile metabolicProfile) {
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
         this.tickEngine = tickEngine;
         this.botRegistry = botRegistry;
         this.actionResolver = actionResolver;
         this.objectMapper = objectMapper;
+        this.metabolicProfile = metabolicProfile;
     }
 
     @Override
@@ -121,7 +125,9 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
             particleType = ParticleType.CATALYST;
         }
 
-        Particle particle = Particle.spawn(entityId, particleType);
+        // Phase 13: spawn with per-type max energy (D-02)
+        int maxEnergy = metabolicProfile.forType(particleType).maxEnergy();
+        Particle particle = Particle.spawn(entityId, particleType, maxEnergy);
 
         // Try random positions until we find an empty cell
         var rng = ThreadLocalRandom.current();

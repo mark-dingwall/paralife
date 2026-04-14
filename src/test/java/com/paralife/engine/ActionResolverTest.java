@@ -39,7 +39,31 @@ class ActionResolverTest {
         config = SimulationConfig.defaults();
         objectMapper = new ObjectMapper();
         resolver = new ActionResolver(worldGrid, botRegistry, sessionRegistry, config, objectMapper,
-                new CompositeRegistry(), CompositeConfig.defaults());
+                new CompositeRegistry(), CompositeConfig.defaults(), legacyProfile());
+    }
+
+    /**
+     * MetabolicProfile whose values match the legacy flat {@link SimulationConfig}
+     * defaults — preserves pre-Phase-13 assertions in this test class (reproduce
+     * cost = REPRODUCE_ENERGY_COST = 30, child start energy = CHILD_START_ENERGY = 20,
+     * no cooldown, no bonus offspring, range 1, wide surplus gate).
+     */
+    static MetabolicProfile legacyProfile() {
+        // maxEnergy=100 → childStartEnergy() = 50; tests that assert CHILD_START_ENERGY=20
+        // instead use maxEnergy=40 so the child energy lands on 20.
+        MetabolicProfile.TypeProfile p = new MetabolicProfile.TypeProfile(
+                /* maxEnergy */ 40,
+                /* decayPerTick */ 1,
+                /* combatEnergyTransfer */ 10,
+                /* attackPower */ 10,
+                /* nutrientConsumeEnergy */ 5,
+                /* reproduceEnergyCost */ ActionResolver.REPRODUCE_ENERGY_COST, // 30
+                /* reproduceCooldown */ 0,
+                /* bonusOffspringChance */ 0.0,
+                /* reproduceRange */ 1,
+                /* starvationThreshold */ 0,
+                /* starvationFloor */ 0);
+        return new MetabolicProfile(p, p, p);
     }
 
     private WebSocketSession mockSession(String id) {
@@ -317,5 +341,252 @@ class ActionResolverTest {
     void emptyActionsIsNoOp() {
         resolver.resolveActions(1, Map.of());
         // Should not throw
+    }
+
+    // ── Phase 13: Per-type reproduction tests ────────────────────
+
+    /**
+     * Build an ActionResolver with an explicit MetabolicProfile so tests can
+     * exercise per-type reproduction semantics (cost, cooldown, surplus gate,
+     * SPORE range/bonus, per-type consume).
+     */
+    private ActionResolver resolverWith(MetabolicProfile profile) {
+        return new ActionResolver(worldGrid, botRegistry, sessionRegistry, config, objectMapper,
+                new CompositeRegistry(), CompositeConfig.defaults(), profile);
+    }
+
+    private MetabolicProfile uniformProfile(int maxEnergy, int reproduceCost, int cooldown,
+                                            int starvationThreshold, double bonusChance, int range) {
+        MetabolicProfile.TypeProfile p = new MetabolicProfile.TypeProfile(
+                maxEnergy, 1, 10, 10, 5,
+                reproduceCost, cooldown, bonusChance, range,
+                starvationThreshold, 0);
+        return new MetabolicProfile(p, p, p);
+    }
+
+    @Test
+    void reproduceSurplusGateBlocksIfWouldStarve() throws Exception {
+        // CATALYST: maxEnergy=80, cost=40, threshold=30% → floor = 24
+        // energy=50 → after cost = 10 < 24 → FAIL
+        MetabolicProfile profile = new MetabolicProfile(
+                new MetabolicProfile.TypeProfile(80, 1, 15, 15, 3, 40, 0, 0.0, 1, 30, 10),
+                new MetabolicProfile.TypeProfile(80, 1, 15, 15, 3, 40, 0, 0.0, 1, 30, 10),
+                new MetabolicProfile.TypeProfile(80, 1, 15, 15, 3, 40, 0, 0.0, 1, 30, 10));
+        ActionResolver r = resolverWith(profile);
+
+        mockSession("s1");
+        Particle p = new Particle("e1", ParticleType.CATALYST, 50, 80);
+        worldGrid.setEntity(5, 5, p);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        r.resolveActions(1, Map.of("s1", new Messages.Action("reproduce", "E")));
+
+        // Parent unchanged, no child
+        assertThat(((Particle) worldGrid.getCell(5, 5).occupant()).energy()).isEqualTo(50);
+        assertThat(worldGrid.getCell(6, 5).isEmpty()).isTrue();
+    }
+
+    @Test
+    void reproduceSurplusGatePassesWithEnoughEnergy() throws Exception {
+        // CATALYST: maxEnergy=80, cost=40, threshold=30% → floor = 24
+        // energy=70 → after cost = 30 >= 24 → PASS
+        MetabolicProfile profile = new MetabolicProfile(
+                new MetabolicProfile.TypeProfile(80, 1, 15, 15, 3, 40, 0, 0.0, 1, 30, 10),
+                new MetabolicProfile.TypeProfile(80, 1, 15, 15, 3, 40, 0, 0.0, 1, 30, 10),
+                new MetabolicProfile.TypeProfile(80, 1, 15, 15, 3, 40, 0, 0.0, 1, 30, 10));
+        ActionResolver r = resolverWith(profile);
+
+        mockSession("s1");
+        Particle p = new Particle("e1", ParticleType.CATALYST, 70, 80);
+        worldGrid.setEntity(5, 5, p);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        r.resolveActions(1, Map.of("s1", new Messages.Action("reproduce", "E")));
+
+        // Parent lost 40, child spawned east at half maxEnergy=40
+        assertThat(((Particle) worldGrid.getCell(5, 5).occupant()).energy()).isEqualTo(30);
+        assertThat(worldGrid.getCell(6, 5).occupant()).isInstanceOf(Particle.class);
+        Particle child = (Particle) worldGrid.getCell(6, 5).occupant();
+        assertThat(child.energy()).isEqualTo(40); // childStartEnergy = maxEnergy/2
+        assertThat(child.maxEnergy()).isEqualTo(80);
+    }
+
+    @Test
+    void reproduceCooldownBlocksRepeatedReproduction() throws Exception {
+        // cooldown=10, surplus gate disabled (threshold=0)
+        MetabolicProfile profile = uniformProfile(80, 30, 10, 0, 0.0, 1);
+        ActionResolver r = resolverWith(profile);
+
+        mockSession("s1");
+        Particle p = new Particle("e1", ParticleType.CATALYST, 70, 80);
+        worldGrid.setEntity(5, 5, p);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        // Tick 5: reproduce east → succeeds
+        r.resolveActions(5, Map.of("s1", new Messages.Action("reproduce", "E")));
+        assertThat(worldGrid.getCell(6, 5).hasOccupant()).isTrue();
+
+        // Remove child and set parent back to 70 to isolate the cooldown check
+        worldGrid.clearEntity(6, 5);
+        worldGrid.setEntity(5, 5,
+                new Particle("e1", ParticleType.CATALYST, 70, 80));
+
+        // Tick 8: still within cooldown (3 < 10) → should fail
+        r.resolveActions(8, Map.of("s1", new Messages.Action("reproduce", "E")));
+        assertThat(worldGrid.getCell(6, 5).isEmpty()).isTrue();
+
+        // Tick 16: cooldown elapsed (11 >= 10) → should succeed
+        r.resolveActions(16, Map.of("s1", new Messages.Action("reproduce", "E")));
+        assertThat(worldGrid.getCell(6, 5).hasOccupant()).isTrue();
+    }
+
+    @Test
+    void sporeReproduceRangeIsTwoCells() throws Exception {
+        // SPORE profile: range=2
+        MetabolicProfile profile = uniformProfile(60, 20, 0, 0, 0.0, 2);
+        ActionResolver r = resolverWith(profile);
+
+        mockSession("s1");
+        Particle p = new Particle("e1", ParticleType.SPORE, 50, 60);
+        worldGrid.setEntity(5, 5, p);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        r.resolveActions(1, Map.of("s1", new Messages.Action("reproduce", "E")));
+
+        // Child should land at (7, 5), not (6, 5)
+        assertThat(worldGrid.getCell(6, 5).isEmpty()).isTrue();
+        assertThat(worldGrid.getCell(7, 5).occupant()).isInstanceOf(Particle.class);
+    }
+
+    @Test
+    void sporeBonusOffspringFiresApproximately25Percent() throws Exception {
+        // Run many reproductions; record how often a second child appears.
+        int trials = 200;
+        int bonusObserved = 0;
+        for (int i = 0; i < trials; i++) {
+            // Fresh resolver/grid each trial to isolate cooldown state
+            worldGrid = new WorldGrid(new GridConfig(16, 16));
+            botRegistry = new BotRegistry();
+            sessionRegistry = new SessionRegistry();
+            MetabolicProfile profile = uniformProfile(60, 20, 0, 0, 0.25, 1);
+            ActionResolver r = resolverWith(profile);
+
+            String sid = "s" + i;
+            mockSession(sid);
+            Particle parent = new Particle("e" + i, ParticleType.SPORE, 50, 60);
+            worldGrid.setEntity(5, 5, parent);
+            botRegistry.register(sid, "e" + i, new Position(5, 5));
+
+            r.resolveActions(i, Map.of(sid, new Messages.Action("reproduce", "E")));
+
+            // Count child particles within 2 cells of origin (primary + possible bonus)
+            int kids = 0;
+            for (int x = 4; x <= 7; x++) {
+                for (int y = 4; y <= 6; y++) {
+                    if (x == 5 && y == 5) continue;
+                    if (worldGrid.getCell(x, y).occupant() instanceof Particle) kids++;
+                }
+            }
+            if (kids > 1) bonusObserved++;
+        }
+
+        // 25% ± wide band — probabilistic, allow 10-40%
+        double rate = bonusObserved / (double) trials;
+        assertThat(rate).as("bonus offspring rate (observed=%.2f)", rate).isBetween(0.10, 0.40);
+    }
+
+    @Test
+    void membraneReproduceRangeIsOneCell() throws Exception {
+        MetabolicProfile profile = uniformProfile(120, 35, 0, 0, 0.0, 1);
+        ActionResolver r = resolverWith(profile);
+
+        mockSession("s1");
+        Particle p = new Particle("e1", ParticleType.MEMBRANE, 100, 120);
+        worldGrid.setEntity(5, 5, p);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        r.resolveActions(1, Map.of("s1", new Messages.Action("reproduce", "E")));
+
+        // Child lands at (6,5), not (7,5)
+        assertThat(worldGrid.getCell(6, 5).occupant()).isInstanceOf(Particle.class);
+        assertThat(worldGrid.getCell(7, 5).isEmpty()).isTrue();
+    }
+
+    @Test
+    void consumeUsesPerTypeNutrientGain() throws Exception {
+        // MEMBRANE should gain 8 per nutrient (vs the flat legacy 5)
+        MetabolicProfile profile = new MetabolicProfile(
+                new MetabolicProfile.TypeProfile(80, 1, 15, 15, 3, 40, 0, 0.0, 1, 0, 0),
+                new MetabolicProfile.TypeProfile(120, 1, 5, 5, 8, 35, 0, 0.0, 1, 0, 0),
+                new MetabolicProfile.TypeProfile(60, 2, 8, 8, 5, 20, 0, 0.25, 2, 0, 0));
+        ActionResolver r = resolverWith(profile);
+
+        mockSession("s1");
+        Particle m = new Particle("e1", ParticleType.MEMBRANE, 50, 120);
+        worldGrid.setEntity(5, 5, m);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+        worldGrid.setEntity(6, 5, Nutrient.spawn("n1"));
+
+        r.resolveActions(1, Map.of("s1", new Messages.Action("consume", null)));
+
+        Particle after = (Particle) worldGrid.getCell(5, 5).occupant();
+        assertThat(after.energy()).isEqualTo(58); // 50 + 8
+    }
+
+    @Test
+    void childInheritsPerTypeMaxEnergy() throws Exception {
+        MetabolicProfile profile = new MetabolicProfile(
+                new MetabolicProfile.TypeProfile(80, 1, 15, 15, 3, 40, 0, 0.0, 1, 0, 0),
+                new MetabolicProfile.TypeProfile(120, 1, 5, 5, 8, 35, 0, 0.0, 1, 0, 0),
+                new MetabolicProfile.TypeProfile(60, 2, 8, 8, 5, 20, 0, 0.0, 1, 0, 0));
+        ActionResolver r = resolverWith(profile);
+
+        mockSession("s1");
+        Particle parent = new Particle("e1", ParticleType.CATALYST, 70, 80);
+        worldGrid.setEntity(5, 5, parent);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        r.resolveActions(1, Map.of("s1", new Messages.Action("reproduce", "E")));
+
+        Particle child = (Particle) worldGrid.getCell(6, 5).occupant();
+        // CATALYST maxEnergy=80 → childStartEnergy = 40
+        assertThat(child.maxEnergy()).isEqualTo(80);
+        assertThat(child.energy()).isEqualTo(40);
+    }
+
+    @Test
+    void cooldownMapPrunedOnEntityRemoval() throws Exception {
+        MetabolicProfile profile = uniformProfile(80, 30, 10, 0, 0.0, 1);
+        ActionResolver r = resolverWith(profile);
+
+        mockSession("s1");
+        Particle p = new Particle("e1", ParticleType.CATALYST, 70, 80);
+        worldGrid.setEntity(5, 5, p);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        // Reproduce to populate cooldown map
+        r.resolveActions(1, Map.of("s1", new Messages.Action("reproduce", "E")));
+
+        // Unregister the bot (simulating death)
+        botRegistry.unregisterByEntity("e1");
+
+        // A subsequent resolveActions call should prune the stale cooldown entry
+        // Trigger the prune by running onTick with any action (empty queue skips prune,
+        // so we use an action from a non-existent session to force the phase).
+        r.resolveActions(2, Map.of("ghost-session", new Messages.Action("rest", null)));
+
+        // The entry for e1 should be gone — we verify indirectly by creating a new
+        // entity with the same id and confirming it can reproduce immediately.
+        mockSession("s2");
+        Particle p2 = new Particle("e1", ParticleType.CATALYST, 70, 80);
+        worldGrid.clearEntity(5, 5);
+        worldGrid.clearEntity(6, 5);
+        worldGrid.setEntity(5, 5, p2);
+        botRegistry.register("s2", "e1", new Position(5, 5));
+
+        r.resolveActions(3, Map.of("s2", new Messages.Action("reproduce", "E")));
+
+        // If prune worked, cooldown from tick 1 is gone and reproduction succeeds at tick 3
+        assertThat(worldGrid.getCell(6, 5).hasOccupant()).isTrue();
     }
 }
