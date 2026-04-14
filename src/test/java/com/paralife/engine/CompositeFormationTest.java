@@ -152,7 +152,7 @@ class CompositeFormationTest {
         CompositeMember cm = (CompositeMember) grid.getCell(3, 3).occupant();
         var composite = compositeRegistry.getComposite(cm.compositeId());
         assertThat(composite).isPresent();
-        assertThat(composite.get().getSharedPoolEnergy()).isEqualTo(140); // 80 + 60
+        assertThat(composite.get().getSharedPoolEnergy()).isEqualTo(70); // remainder: (80-40) + (60-30)
     }
 
     @Test
