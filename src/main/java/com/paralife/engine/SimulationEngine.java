@@ -496,12 +496,13 @@ public class SimulationEngine {
                     // proportionally to its share of the shared pool.
                     var profileA = metabolicProfile.forType(bp.primaryType());
                     var profileB = metabolicProfile.forType(bp.secondaryType());
+                    // totalMax is guaranteed >= 2: TypeProfile validates maxEnergy > 0.
                     int totalMax = profileA.maxEnergy() + profileB.maxEnergy();
-                    int weightedThreshold = totalMax == 0 ? 0
-                            : (profileA.starvationThreshold() * profileA.maxEnergy()
+                    int weightedThreshold =
+                            (profileA.starvationThreshold() * profileA.maxEnergy()
                                     + profileB.starvationThreshold() * profileB.maxEnergy()) / totalMax;
-                    int weightedFloor = totalMax == 0 ? 0
-                            : (profileA.starvationFloor() * profileA.maxEnergy()
+                    int weightedFloor =
+                            (profileA.starvationFloor() * profileA.maxEnergy()
                                     + profileB.starvationFloor() * profileB.maxEnergy()) / totalMax;
                     updateStarvingFlag(x, y, updated.energy(), updated.maxEnergy(),
                             weightedThreshold, weightedFloor);
@@ -716,6 +717,10 @@ public class SimulationEngine {
 
         Cell cell = worldGrid.getCell(pos.x(), pos.y());
         if (cell.occupant() instanceof Entity.CompositeMember cm) {
+            // D-30 placeholder: we lost the original partner type when the other
+            // member died, so both primary and secondary default to cm.type().
+            // Flat bondDefenseChance makes this functionally equivalent today;
+            // revisit if defense ever keys on the predator/prey pairing.
             var bondedPair = new Entity.BondedPair(
                     "bp-" + cm.id(), cm.type(), cm.type(), cm.energy(), cm.maxEnergy(),
                     cm.id(), cm.id());

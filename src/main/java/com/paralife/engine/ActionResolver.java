@@ -46,19 +46,19 @@ public class ActionResolver {
     private static final Logger log = LoggerFactory.getLogger(ActionResolver.class);
 
     /**
-     * Energy cost to reproduce (legacy flat default).
-     * @deprecated Phase 13 replaces this with per-type
-     * {@link MetabolicProfile.TypeProfile#reproduceEnergyCost()}. Kept for
-     * backward compatibility with tests that assert against the flat value.
+     * Legacy flat reproduce cost shared by {@link ActionResolverTest} and
+     * {@link CompositeActionTest} as a canonical fixture value — those tests
+     * build a {@link MetabolicProfile.TypeProfile} with this cost so their
+     * per-type assertions line up with the pre-Phase-13 expected energy math.
+     * Production code never reads this; it uses
+     * {@link MetabolicProfile.TypeProfile#reproduceEnergyCost()}.
      */
-    @Deprecated
     public static final int REPRODUCE_ENERGY_COST = 30;
     /**
-     * Starting energy for a child entity (legacy flat default).
-     * @deprecated Phase 13 replaces this with per-type
+     * Legacy flat child start energy — paired with {@link #REPRODUCE_ENERGY_COST}
+     * as a shared test fixture. Production code uses
      * {@link MetabolicProfile.TypeProfile#childStartEnergy()} (= maxEnergy/2).
      */
-    @Deprecated
     public static final int CHILD_START_ENERGY = 20;
 
     private final WorldGrid worldGrid;
