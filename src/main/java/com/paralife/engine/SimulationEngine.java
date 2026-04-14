@@ -787,7 +787,7 @@ public class SimulationEngine {
 
         int spawned = 0;
         ThreadLocalRandom rng = ThreadLocalRandom.current();
-        // D-14: seasonal cosine modulator is global — computed once per tick.
+        // D-14: global seasonal sine modulator — computed once per tick.
         double seasonalMultiplier = seasonTracker.getSeasonalMultiplier(tickNumber);
 
         for (int x = 0; x < width; x++) {
@@ -799,7 +799,7 @@ public class SimulationEngine {
                 double effectiveRate = config.nutrientSpawnProbability()
                         * fertilityMultiplier * seasonalMultiplier;
                 // Clamp to [0, 1] to remain a valid probability — very fertile
-                // cells during spring peak would otherwise push rate > 1.
+                // cells during the summer peak would otherwise push rate > 1.
                 effectiveRate = Math.clamp(effectiveRate, 0.0, 1.0);
                 if (rng.nextDouble() < effectiveRate) {
                     String id = "nutrient-" + nutrientIdCounter.incrementAndGet();

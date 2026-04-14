@@ -415,13 +415,13 @@ class SimulationEngineTest {
         }
 
         @Test
-        void autumnTroughSpawnsNothingWithLowBaseRate() {
+        void winterTroughSpawnsNothingWithLowBaseRate() {
             // Base rate small enough that seasonal multiplier 0.0 pushes effective to 0.
-            // amplitude=1.0 at yearLength=200, tick=100 (cos(PI)=-1) → multiplier = 0.
+            // amplitude=1.0 at yearLength=200, tick=150 (sin(3PI/2)=-1) → multiplier = 0.
             var seasons = new SeasonTracker(new SeasonsConfig(200, 1.0));
             var cfg = new SimulationConfig(0, 0, 0.5, 0, true, 8, 0);
 
-            engineWithSeasons(cfg, seasons).processTick(100);
+            engineWithSeasons(cfg, seasons).processTick(150);
 
             int nutrientCount = 0;
             for (int x = 0; x < WIDTH; x++) {
@@ -433,19 +433,19 @@ class SimulationEngineTest {
         }
 
         @RepeatedTest(3)
-        void springPeakOutSpawnsAutumnTrough() {
-            // Probabilistic: more nutrients spawn at spring peak than at autumn trough.
+        void summerPeakOutSpawnsWinterTrough() {
+            // Probabilistic: more nutrients spawn at summer peak than at winter trough.
             var seasons = new SeasonTracker(new SeasonsConfig(200, 0.5));
             // Half-probability base so seasonal multipliers can push around it.
             var cfg = new SimulationConfig(0, 0, 0.5, 0, true, 8, 0);
 
-            // Count spring (tick=0, multiplier=1.5) spawns
-            int springCount = countSpawnsOnFreshGrid(cfg, seasons, 0);
-            // Count autumn (tick=100, multiplier=0.5) spawns on a fresh grid
-            int autumnCount = countSpawnsOnFreshGrid(cfg, seasons, 100);
+            // Count summer (tick=50, multiplier=1.5) spawns
+            int summerCount = countSpawnsOnFreshGrid(cfg, seasons, 50);
+            // Count winter (tick=150, multiplier=0.5) spawns on a fresh grid
+            int winterCount = countSpawnsOnFreshGrid(cfg, seasons, 150);
 
-            // Rough band with wide tolerance — spring should spawn noticeably more.
-            assertThat(springCount).isGreaterThan(autumnCount);
+            // Rough band with wide tolerance — summer should spawn noticeably more.
+            assertThat(summerCount).isGreaterThan(winterCount);
         }
 
         private int countSpawnsOnFreshGrid(SimulationConfig cfg, SeasonTracker seasons, long tick) {

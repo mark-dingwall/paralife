@@ -5,24 +5,21 @@ import org.springframework.stereotype.Component;
 /**
  * Stateless seasonal multiplier computation (Phase 13 D-14, D-15).
  *
- * <p>Uses {@link Math#cos} (not sin — see review changes in 13-03-PLAN) so
- * {@code tick 0} coincides with the spring peak where the multiplier equals
- * {@code 1 + amplitude}. CONTEXT.md D-14 describes the shape as a sine wave;
- * cosine is the phase-corrected version for intuitive season labels.
+ * <p>Uses {@link Math#sin} so season landmarks land on the expected phase points:
+ * <ul>
+ *   <li>{@code tick 0} — sin=0 ascending, mid-SPRING (multiplier 1.0)</li>
+ *   <li>{@code L/4} — sin=+1, mid-SUMMER peak (multiplier 1 + amplitude)</li>
+ *   <li>{@code L/2} — sin=0 descending, mid-AUTUMN (multiplier 1.0)</li>
+ *   <li>{@code 3L/4} — sin=-1, mid-WINTER trough (multiplier 1 - amplitude)</li>
+ * </ul>
  *
  * <p>Formula:
  * <pre>
- *   multiplier = 1 + amplitude * cos(2 * PI * tick / yearLength)
+ *   multiplier = 1 + amplitude * sin(2 * PI * tick / yearLength)
  * </pre>
  *
- * <p>Reference values at yearLength=200, amplitude=0.5:
- * <table>
- *   <tr><th>tick</th><th>cos</th><th>multiplier</th><th>season</th></tr>
- *   <tr><td>0</td><td>1</td><td>1.5</td><td>SPRING peak</td></tr>
- *   <tr><td>50</td><td>0</td><td>1.0</td><td>SUMMER equinox</td></tr>
- *   <tr><td>100</td><td>-1</td><td>0.5</td><td>AUTUMN trough</td></tr>
- *   <tr><td>150</td><td>0</td><td>1.0</td><td>WINTER equinox</td></tr>
- * </table>
+ * <p>Season enum indexing uses an {@code L/8} shift so each season is
+ * centered on its landmark rather than starting at it.
  */
 @Component
 public class SeasonTracker {
@@ -42,20 +39,19 @@ public class SeasonTracker {
      */
     public double getSeasonalMultiplier(long tick) {
         return 1.0 + config.amplitude()
-                * Math.cos(2.0 * Math.PI * tick / config.yearLengthTicks());
+                * Math.sin(2.0 * Math.PI * tick / config.yearLengthTicks());
     }
 
     /**
-     * Current season enum for the given tick. Year is divided into four
-     * equal quarters: SPRING at cosine peak, AUTUMN at cosine trough.
+     * Current season enum for the given tick. Seasons span a quarter of the
+     * year centered on their landmarks, produced by the {@code +L/8} shift.
      */
     public Season getSeason(long tick) {
         int yearLength = config.yearLengthTicks();
         long position = Math.floorMod(tick, (long) yearLength);
-        int quarter = (int) (position / (yearLength / 4));
-        // Clamp for edge case when yearLength isn't divisible by 4 and position
-        // exceeds the last quarter boundary — still WINTER.
-        return Season.values()[Math.min(quarter, 3)];
+        long shifted = position + yearLength / 8L;
+        int quarter = (int) Math.floorMod(shifted / (yearLength / 4L), 4L);
+        return Season.values()[quarter];
     }
 
     public SeasonsConfig getConfig() {

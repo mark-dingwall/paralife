@@ -47,7 +47,7 @@ public sealed interface Messages {
      * Broadcast to all clients each tick.
      *
      * <p>Phase 13 Plan 03 adds {@code seasonPhase} (season enum name, e.g.
-     * {@code "SPRING"}) and {@code seasonalMultiplier} (global cosine-wave
+     * {@code "SPRING"}) and {@code seasonalMultiplier} (global sine-wave
      * nutrient-spawn multiplier, in {@code [1 - amplitude, 1 + amplitude]}).
      * Field is named {@code seasonalMultiplier} rather than
      * {@code fertilityMultiplier} to distinguish from per-cell

@@ -113,26 +113,26 @@ class TickBroadcasterTest {
         verify(session).sendMessage(captor.capture());
 
         JsonNode json = objectMapper.readTree(captor.getValue().getPayload());
-        // Tick 0, amplitude 0.5 → multiplier = 1 + 0.5 * cos(0) = 1.5 (spring peak)
+        // Tick 0, amplitude 0.5 → multiplier = 1 + 0.5 * sin(0) = 1.0 (mid-SPRING)
         assertThat(json.get("seasonPhase").asText()).isEqualTo("SPRING");
-        assertThat(json.get("seasonalMultiplier").asDouble()).isEqualTo(1.5);
+        assertThat(json.get("seasonalMultiplier").asDouble()).isEqualTo(1.0);
     }
 
     @Test
-    void tickMessageReportsAutumnTroughAtHalfYear() throws Exception {
+    void tickMessageReportsWinterTroughAtThreeQuarterYear() throws Exception {
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getId()).thenReturn("s1");
         when(session.isOpen()).thenReturn(true);
         sessionRegistry.register(session);
 
-        broadcaster.onTick(new TickEvent(100));
+        broadcaster.onTick(new TickEvent(150));
 
         ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session).sendMessage(captor.capture());
 
         JsonNode json = objectMapper.readTree(captor.getValue().getPayload());
-        // Tick 100 of 200 → cos(PI) = -1 → multiplier = 1 - 0.5 = 0.5 (autumn trough)
-        assertThat(json.get("seasonPhase").asText()).isEqualTo("AUTUMN");
+        // Tick 150 of 200 → sin(3PI/2) = -1 → multiplier = 1 - 0.5 = 0.5 (winter trough)
+        assertThat(json.get("seasonPhase").asText()).isEqualTo("WINTER");
         assertThat(json.get("seasonalMultiplier").asDouble()).isEqualTo(0.5);
     }
 

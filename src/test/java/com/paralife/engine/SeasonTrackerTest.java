@@ -1,5 +1,6 @@
 package com.paralife.engine;
 
+import org.assertj.core.data.Offset;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -10,33 +11,32 @@ class SeasonTrackerTest {
         return new SeasonTracker(new SeasonsConfig(yearLength, amplitude));
     }
 
-    // ── Multiplier math (cosine, tick 0 = spring peak) ────────────
+    // ── Multiplier math (sin, tick 0 = mid-SPRING, L/4 = SUMMER peak) ─────
 
     @Test
-    void tickZeroIsSpringPeak() {
-        // cos(0) = 1 → multiplier = 1 + 0.5 = 1.5
+    void tickZeroIsMidSpringMultiplierOne() {
+        // sin(0) = 0 → multiplier = 1.0
         double m = tracker(200, 0.5).getSeasonalMultiplier(0);
-        assertThat(m).isEqualTo(1.5);
+        assertThat(m).isCloseTo(1.0, Offset.offset(1e-9));
     }
 
     @Test
-    void halfYearIsAutumnTrough() {
-        // tick = yearLength/2 → cos(PI) = -1 → multiplier = 1 - 0.5 = 0.5
-        double m = tracker(200, 0.5).getSeasonalMultiplier(100);
-        assertThat(m).isEqualTo(0.5);
-    }
-
-    @Test
-    void quarterYearIsSummerEquinox() {
-        // tick = yearLength/4 → cos(PI/2) = 0 → multiplier = 1.0
+    void quarterYearIsSummerPeak() {
+        // sin(PI/2) = 1 → multiplier = 1 + amplitude
         double m = tracker(200, 0.5).getSeasonalMultiplier(50);
-        assertThat(m).isCloseTo(1.0, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(m).isCloseTo(1.5, Offset.offset(1e-9));
     }
 
     @Test
-    void threeQuarterYearIsWinterEquinox() {
+    void halfYearIsMidAutumnMultiplierOne() {
+        double m = tracker(200, 0.5).getSeasonalMultiplier(100);
+        assertThat(m).isCloseTo(1.0, Offset.offset(1e-9));
+    }
+
+    @Test
+    void threeQuarterYearIsWinterTrough() {
         double m = tracker(200, 0.5).getSeasonalMultiplier(150);
-        assertThat(m).isCloseTo(1.0, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(m).isCloseTo(0.5, Offset.offset(1e-9));
     }
 
     @Test
@@ -51,14 +51,13 @@ class SeasonTrackerTest {
     @Test
     void yearWrapsAround() {
         SeasonTracker t = tracker(200, 0.5);
-        // tick=200 is identical to tick=0
-        assertThat(t.getSeasonalMultiplier(200)).isEqualTo(t.getSeasonalMultiplier(0));
+        assertThat(t.getSeasonalMultiplier(200))
+                .isCloseTo(t.getSeasonalMultiplier(0), Offset.offset(1e-9));
     }
 
     @Test
     void zeroAmplitudeMeansNoSwing() {
         SeasonTracker t = tracker(200, 0.0);
-        // cos(x)*0 = 0 → multiplier = 1.0 always
         assertThat(t.getSeasonalMultiplier(0)).isEqualTo(1.0);
         assertThat(t.getSeasonalMultiplier(50)).isEqualTo(1.0);
         assertThat(t.getSeasonalMultiplier(100)).isEqualTo(1.0);
@@ -73,7 +72,7 @@ class SeasonTrackerTest {
         assertThat(a).isEqualTo(b).isEqualTo(c);
     }
 
-    // ── Season enum cycling ────────────────────────────────────────
+    // ── Season enum cycling (seasons centered on landmarks) ──────────────
 
     @Test
     void tickZeroIsSpring() {
@@ -97,18 +96,26 @@ class SeasonTrackerTest {
 
     @Test
     void seasonWrapsAtYearBoundary() {
-        // tick=200 should cycle back to SPRING
         assertThat(tracker(200, 0.5).getSeason(200)).isEqualTo(SeasonTracker.Season.SPRING);
         assertThat(tracker(200, 0.5).getSeason(250)).isEqualTo(SeasonTracker.Season.SUMMER);
     }
 
     @Test
-    void edgeOfSpring() {
+    void seasonBoundariesCenteredOnLandmarks() {
+        // Seasons span ±L/8 around each landmark. For L=200, L/8=25.
         SeasonTracker t = tracker(200, 0.5);
-        assertThat(t.getSeason(49)).isEqualTo(SeasonTracker.Season.SPRING);
-        assertThat(t.getSeason(99)).isEqualTo(SeasonTracker.Season.SUMMER);
-        assertThat(t.getSeason(149)).isEqualTo(SeasonTracker.Season.AUTUMN);
-        assertThat(t.getSeason(199)).isEqualTo(SeasonTracker.Season.WINTER);
+        // SPRING: [-25, 25) wrapped → [175, 200) ∪ [0, 25)
+        assertThat(t.getSeason(175)).isEqualTo(SeasonTracker.Season.SPRING);
+        assertThat(t.getSeason(24)).isEqualTo(SeasonTracker.Season.SPRING);
+        // SUMMER: [25, 75)
+        assertThat(t.getSeason(25)).isEqualTo(SeasonTracker.Season.SUMMER);
+        assertThat(t.getSeason(74)).isEqualTo(SeasonTracker.Season.SUMMER);
+        // AUTUMN: [75, 125)
+        assertThat(t.getSeason(75)).isEqualTo(SeasonTracker.Season.AUTUMN);
+        assertThat(t.getSeason(124)).isEqualTo(SeasonTracker.Season.AUTUMN);
+        // WINTER: [125, 175)
+        assertThat(t.getSeason(125)).isEqualTo(SeasonTracker.Season.WINTER);
+        assertThat(t.getSeason(174)).isEqualTo(SeasonTracker.Season.WINTER);
     }
 
     // ── Config validation ──────────────────────────────────────────
@@ -121,6 +128,29 @@ class SeasonTrackerTest {
         } catch (IllegalArgumentException expected) {
             assertThat(expected.getMessage()).contains("yearLengthTicks");
         }
+    }
+
+    @Test
+    void seasonsConfigRejectsYearLengthBelowMinimum() {
+        // Minimum is 8 so L/8 >= 1 — prevents divide-by-zero in season index math.
+        for (int invalid : new int[] {1, 2, 3, 7}) {
+            try {
+                new SeasonsConfig(invalid, 0.5);
+                org.junit.jupiter.api.Assertions.fail("expected IAE for " + invalid);
+            } catch (IllegalArgumentException expected) {
+                assertThat(expected.getMessage()).contains("yearLengthTicks");
+            }
+        }
+    }
+
+    @Test
+    void seasonsConfigAcceptsMinimumYearLength() {
+        // yearLengthTicks=8 must be usable. Exercises getSeason across all quarters.
+        SeasonTracker t = tracker(8, 0.5);
+        assertThat(t.getSeason(0)).isEqualTo(SeasonTracker.Season.SPRING);
+        assertThat(t.getSeason(2)).isEqualTo(SeasonTracker.Season.SUMMER);
+        assertThat(t.getSeason(4)).isEqualTo(SeasonTracker.Season.AUTUMN);
+        assertThat(t.getSeason(6)).isEqualTo(SeasonTracker.Season.WINTER);
     }
 
     @Test
