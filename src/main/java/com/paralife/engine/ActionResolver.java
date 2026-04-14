@@ -424,8 +424,12 @@ public class ActionResolver {
             worldGrid.setEntity(nutrientPos.x(), nutrientPos.y(), depleted);
         }
 
-        // Charge active drain from shared pool
-        composite.drainEnergy(compositeConfig.feederActiveDrain());
+        // Charge active drain from shared pool (graceful degradation: partial drain logged)
+        int feederDrained = composite.drainEnergy(compositeConfig.feederActiveDrain());
+        if (feederDrained < compositeConfig.feederActiveDrain()) {
+            log.debug("Partial feeder active drain: {} of {} for composite {}",
+                    feederDrained, compositeConfig.feederActiveDrain(), rca.member.compositeId());
+        }
 
         sendResult(rca.sessionId, tickNumber, true, "consume",
                 "Consumed nutrient, pool energy: " + composite.getSharedPoolEnergy());
@@ -481,8 +485,12 @@ public class ActionResolver {
             return;
         }
 
-        // Charge active drain from shared pool
-        composite.drainEnergy(compositeConfig.attackerActiveDrain());
+        // Charge active drain from shared pool (graceful degradation: partial drain logged)
+        int attackerDrained = composite.drainEnergy(compositeConfig.attackerActiveDrain());
+        if (attackerDrained < compositeConfig.attackerActiveDrain()) {
+            log.debug("Partial attacker active drain: {} of {} for composite {}",
+                    attackerDrained, compositeConfig.attackerActiveDrain(), rca.member.compositeId());
+        }
 
         sendResult(rca.sessionId, tickNumber, true, "attack", "Attacked target, dealt " + damage + " damage");
     }
@@ -541,11 +549,19 @@ public class ActionResolver {
         Particle child = new Particle(childId, rca.member.type(), CHILD_START_ENERGY, rca.member.maxEnergy());
         worldGrid.setEntity(target.x(), target.y(), child);
 
-        // Deduct energy from shared pool
-        composite.drainEnergy(REPRODUCE_ENERGY_COST);
+        // Deduct energy from shared pool (graceful degradation: partial drain logged)
+        int reproduceCostDrained = composite.drainEnergy(REPRODUCE_ENERGY_COST);
+        if (reproduceCostDrained < REPRODUCE_ENERGY_COST) {
+            log.debug("Partial reproduce cost drain: {} of {} for composite {}",
+                    reproduceCostDrained, REPRODUCE_ENERGY_COST, rca.member.compositeId());
+        }
 
         // Charge active drain
-        composite.drainEnergy(compositeConfig.reproducerActiveDrain());
+        int reproducerDrained = composite.drainEnergy(compositeConfig.reproducerActiveDrain());
+        if (reproducerDrained < compositeConfig.reproducerActiveDrain()) {
+            log.debug("Partial reproducer active drain: {} of {} for composite {}",
+                    reproducerDrained, compositeConfig.reproducerActiveDrain(), rca.member.compositeId());
+        }
 
         sendResult(rca.sessionId, tickNumber, true, "reproduce",
                 "Budded child " + childId + " at " + target);
@@ -615,8 +631,13 @@ public class ActionResolver {
             boolean moved = executeCompositeMovement(compositeId, direction, composite, claimedCells);
             if (moved) {
                 compositeTicksSinceMove.put(compositeId, 0);
-                // Charge LOCOMOTOR active drain
-                composite.drainEnergy(locomotorCount * compositeConfig.locomotorActiveDrain());
+                // Charge LOCOMOTOR active drain (graceful degradation: partial drain logged)
+                int locomotorCost = locomotorCount * compositeConfig.locomotorActiveDrain();
+                int locomotorDrained = composite.drainEnergy(locomotorCost);
+                if (locomotorDrained < locomotorCost) {
+                    log.debug("Partial locomotor active drain: {} of {} for composite {}",
+                            locomotorDrained, locomotorCost, compositeId);
+                }
             }
         }
 
