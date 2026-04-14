@@ -114,7 +114,9 @@ public class WorldGrid {
     }
 
     /**
-     * Reset the entire grid to empty cells.
+     * Reset the entire grid to empty cells — wipes both occupants and
+     * environmental state (nutrientLevel, flags). Use {@link #clearOccupants()}
+     * if you want to reset entities but keep soil fertility / flags intact.
      */
     public void clear() {
         lock.writeLock().lock();
@@ -122,6 +124,25 @@ public class WorldGrid {
             for (int x = 0; x < width; x++) {
                 for (int y = 0; y < height; y++) {
                     cells[x][y] = Cell.EMPTY;
+                }
+            }
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Remove every occupant but preserve environmental state
+     * ({@code nutrientLevel}, {@code flags}) on each cell. Counterpart to
+     * {@link #clear()} for tests that reset entities between iterations
+     * without disturbing soil fertility.
+     */
+    public void clearOccupants() {
+        lock.writeLock().lock();
+        try {
+            for (int x = 0; x < width; x++) {
+                for (int y = 0; y < height; y++) {
+                    cells[x][y] = cells[x][y].cleared();
                 }
             }
         } finally {

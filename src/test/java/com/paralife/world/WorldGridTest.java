@@ -51,6 +51,34 @@ class WorldGridTest {
     }
 
     @Test
+    void clearOccupantsPreservesEnvironmentalState() {
+        // Set nutrientLevel + flags + an occupant on one cell
+        Cell seeded = Cell.EMPTY.withNutrientLevel(42).withAddedFlag(Cell.FLAG_STARVING);
+        seeded = seeded.withOccupant(Particle.spawn("p1", ParticleType.CATALYST));
+        grid.setCell(1, 1, seeded);
+        // Set another cell with just nutrientLevel, no occupant
+        grid.setCell(2, 2, Cell.EMPTY.withNutrientLevel(7));
+
+        grid.clearOccupants();
+
+        Cell c11 = grid.getCell(1, 1);
+        assertThat(c11.hasOccupant()).isFalse();
+        assertThat(c11.nutrientLevel()).isEqualTo(42);
+        assertThat(c11.hasFlag(Cell.FLAG_STARVING)).isTrue();
+
+        Cell c22 = grid.getCell(2, 2);
+        assertThat(c22.isEmpty()).isTrue();
+        assertThat(c22.nutrientLevel()).isEqualTo(7);
+    }
+
+    @Test
+    void clearWipesEnvironmentalStateUnlikeClearOccupants() {
+        grid.setCell(1, 1, Cell.EMPTY.withNutrientLevel(42));
+        grid.clear();
+        assertThat(grid.getCell(1, 1).nutrientLevel()).isZero();
+    }
+
+    @Test
     void setCellReplacesEntireCell() {
         Cell cell = new Cell(new Rock("r1"), 0, 5);
         grid.setCell(2, 2, cell);
