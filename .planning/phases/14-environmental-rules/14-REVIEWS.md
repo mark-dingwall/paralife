@@ -1,281 +1,261 @@
 ---
 phase: 14
 reviewers: [gemini, codex]
-reviewed_at: 2026-04-16T21:00:33Z
-plans_reviewed:
-  - 14-01-PLAN.md
-  - 14-02-PLAN.md
-  - 14-03-PLAN.md
-  - 14-04-PLAN.md
-  - 14-05-PLAN.md
-  - 14-06-PLAN.md
-skipped_reviewers:
-  - claude (runtime environment — would not be independent)
-  - coderabbit, opencode, qwen, cursor (not installed)
+reviewed_at: 2026-04-16T22:02:14Z
+plans_reviewed: [14-01-PLAN.md, 14-02-PLAN.md, 14-03-PLAN.md, 14-04-PLAN.md, 14-05-PLAN.md, 14-06-PLAN.md]
+skipped: [claude (self), coderabbit (missing), opencode (missing), qwen (missing), cursor (missing)]
 ---
 
-# Cross-AI Plan Review — Phase 14: Environmental Rules
+# Cross-AI Plan Review — Phase 14
 
 ## Gemini Review
 
 # Phase 14: Environmental Rules - Plan Review
 
-This review covers the six-part execution plan for Phase 14, introducing spatially-propagating environmental effects (toxin, mutagen, lightning, compost) into the Paralife simulation.
+This review evaluates the implementation plans (14-01 through 14-06) for introducing spatially-propagating environmental effects into the Paralife simulation.
 
 ## 1. Summary
-The plans are exceptionally detailed, demonstrating a deep understanding of both the existing codebase and the numerical requirements of cellular-automaton (CA) simulations. The strategy for integrating four distinct environmental effects is sound, utilizing a robust foundation of shadow registries and double-buffered grids to ensure thread safety and order-independent updates. The inclusion of high-signal emergent mechanics, particularly the "attack-accelerates-cure" gamble, adds significant tactical depth. The testing strategy is comprehensive, moving from unit-level verification of math to seeded integration tests that assert outcomes via direct counters rather than indirect proxies.
+The implementation plans for Phase 14 are exceptionally thorough and demonstrate a high level of technical rigor. They directly address the complex architectural challenges identified in earlier research—specifically the same-tick death problem (Blocker 1), composite entity integration (Blocker 2), and performance bottlenecks (HIGH 2). The strategy of establishing a solid interface foundation in Wave 1 and then layering on numerical complexity (Catmull-Rom splines, CA diffusion) is well-reasoned. The transition from JSON protocol assumptions to observable-only bot behavior prepares the system well for the Phase 15 protocol overhaul.
 
 ## 2. Strengths
-*   **Tactical Emergence:** The "attack-accelerates-cure" mechanic (D-20) and "toxic zones as cover" (D-10) are well-designed features that transform environmental hazards into strategic terrain for bots.
-*   **Robust Numerical Foundation:** Hand-rolling Catmull-Rom splines and double-buffered CA diffusion keeps the simulation lightweight and dependency-free while avoiding common pitfalls like dirty reads or signed-byte arithmetic errors.
-*   **Vision-Scoped Overcrowding:** The decision to compute overcrowding per-bot based only on visible neighbors (D-40) is a sophisticated implementation of incomplete information that preserves server authority.
-*   **Pipeline Integrity:** Wrapping `EnvironmentEngine.onTick` in a try/catch (Pitfall 9) and ensuring status caches are cleared/rebuilt even when disabled (Pitfall 7) ensures the tick pipeline remains resilient.
-*   **Exhaustive Composite Integration:** The role-specific mutagen buff mapping (D-18) is handled via an exhaustive switch on the `Role` enum, ensuring no "wasted" buffs for specialized composite members.
-*   **Seeded Reproducibility:** Using an injectable `Random` in the engine ensures that complex path generation and Poisson rolls can be pinned in tests, eliminating flakes.
+*   **Robust Same-Tick Death Model:** The decision to centralize environment-caused deaths in a `processEnvDeaths` sweep at the end of the `EnvironmentEngine` tick (Plan 14-01) is the most critical design choice. It ensures consistency between the engine state and bot perception without requiring expensive re-ordering of existing components.
+*   **Comprehensive Composite Support:** Blocker 2 is addressed with impressive granularity. Buffs and hazards are wired through both the solo `SimulationEngine`/`ActionResolver` paths and the composite-specific `ActionResolver`/`CompositeEnergyDistributor` paths.
+*   **Numerical Precision & Balance:** Normalizing toxin intensity to a 0.0–1.0 fraction (Plan 14-02) prevents the "balance explosion" risk (where a raw byte value would deal 255 damage) and ensures effects scale meaningfully with config.
+*   **Performance Awareness:** Adding `Position` to the `Infection` record and utilizing single-pass grid scans (Plan 14-03) mitigates the O(N * Area) complexity risk, ensuring the simulation remains scalable despite the added CA shadow grids.
+*   **Sophisticated Testing Strategy:** The integration test (Plan 14-06) avoids "lazy" assertions. By tracking `everBuffed` latches and localized compost at death sites, the tests prove specific mechanics rather than just global state deltas.
 
 ## 3. Concerns
-*   **Performance: Infection Damage Iteration (Plan 03, Task 1, Step 3g) [Severity: MEDIUM]**
-    The `applyInfectionDamage` method in `EnvironmentEngine` iterates the entire grid ($W \times H$) for *each* infected entity to apply damage. If many entities are infected (e.g., 200 entities in a large outbreak on a $256 \times 256$ grid), this results in $13$ million iterations per tick. While Java is fast, this O(Infected $\times$ Area) approach is suboptimal.
-*   **Buff Stacking vs. Deduplication (Plan 03, Task 1, Step 3g) [Severity: LOW]**
-    For `DEFENDER` roles, both the universal buff (`UPKEEP_MINUS_1`) and the role-specific perk (`UPKEEP_MINUS_1`) are granted. The current `BuffRegistry` uses a `CopyOnWriteArrayList` which will store both. In Plan 05, `SimulationEngine` checks `hasBuff(...)`. If `hasBuff` is a boolean check, the effects won't stack (net -1 decay). If stacking (-2 decay) is intended, the logic must count them. If not intended, the duplicate record is a minor memory leak.
-*   **Circular Dependency Handling [Severity: LOW]**
-    Using `@Lazy` in `SimulationEngine` to break the cycle with `EnvironmentEngine` is effective, but requires careful testing of the Spring context initialization to ensure proxies are correctly applied to the constructor-injected fields.
-*   **HeuristicBrain Constant Brittleness [Severity: LOW]**
-    `HeuristicBrain` hardcodes `ATTACK_CURE_REDUCTION_DEFAULT = 3`. While acceptable for an MVP, this creates a disconnect if the server config is changed via `application.yml`.
+*   **`@DirtiesContext` Test Performance (Plan 14-06) [Severity: LOW]**
+    Using `@DirtiesContext` on the deterministic double-run test is the correct way to ensure a fresh Random seed in Spring, but it forces a full context restart. Given the simulation runs for 300 ticks, this might push the test execution time toward the project's upper limits.
+*   **Grid Scan Density [Severity: LOW]**
+    Between toxin, mutagen, status building, and death sweeps, the simulation performs multiple O(Area) scans per tick. While well within the 500ms budget for a 256x256 grid, the "fast path" guard for toxin (Plan 14-02) is a necessary optimization that should be monitored for other effects if grid size increases in M4.
 
 ## 4. Suggestions
-*   **Optimize Infection Damage:** Replace the per-entity grid scan in `applyInfectionDamage` with a single grid pass that checks each occupant against the `infections` map, or store the `Position` within the `Infection` record. Since `EnvironmentEngine` runs after `SimulationEngine` deaths but before `ActionResolver` moves, the position is stable during this phase.
-*   **Clarify Buff Stacking:** Explicitly decide in Plan 05 whether multiple buffs of the same type stack their numerical benefits. If they do not stack, modify `BuffRegistry.grant` to avoid adding duplicates of the same `BuffType` for the same entity.
-*   **Expose Overcrowding Constant:** Ensure `SimulationEngine.OVERCROWDED_THRESHOLD` is a `public static final` constant to allow `PerceptionBroadcaster` and its tests to reference the single source of truth.
-*   **Coordinate Spline Wrapping:** Document in `ToxinPathGenerator` that the path generation must handle the toroidal boundary carefully—intermediate waypoints should be generated in "unwrapped" space and wrapped only when converted to grid cells to prevent the spline from "jumping" across the center of the grid.
+*   **STV Voting Clarity:** In Plan 14-05 Task 2, specify if multiple `LOCOMOTOR` members with `MOVEMENT_PLUS_1` each contribute a range-2 vote, or if the buff on a single locomotor is sufficient for the whole composite to shift 2 cells. The current plan implies the latter ("LOCOMOTOR member has the buff"), which is simpler and likely sufficient.
+*   **Dead-Cell Status:** In `buildStatusCaches`, consider ensuring that `TOXIN_PRESENT` or `MUTAGEN_ZONE` bits are set even for empty cells. Plans 02/03 already do this via `cellStatusCache.put(new Position(x, y), bits)` regardless of occupancy. Confirm this behavior during implementation to ensure bots can see "danger zones" before entering them.
 
 ## 5. Risk Assessment
 **Overall Risk: LOW**
 
-The architectural patterns (shadow registries, synchronous events, back-compat constructors) are already proven in earlier phases of the project. The new math elements are self-contained and unit-testable. The performance concern regarding infection damage is the primary risk to the tick budget, but it is easily optimized. The dependency sequence is logical, with the final integration test serving as a robust gate before the Phase 15 protocol overhaul.
+The risk level has been significantly downgraded from the previous cycle because these plans explicitly resolve the identified structural blockers. The dependency chain is clear: foundation → effects → perception/behavior → integration. The inclusion of `EnvDeathSweepTest` in the very first wave acts as an immediate safety check for the entire phase's semantic integrity. The codebase conventions (immutable records, sealed interfaces) are strictly honored.
+
+---
+**Reviewer:** Gemini CLI
+**Date:** 2026-04-17
 
 ---
 
 ## Codex Review
 
-## Overall
-The phase is well thought through and mostly aligned with the codebase, but there are three cross-plan issues that materially raise execution risk. First, [SimulationEngine.java](/home/mark/kramtime/paralife/src/main/java/com/paralife/engine/SimulationEngine.java:603) removes deaths before the proposed environment phase, so toxin/lightning/infection damage at `@Order(14)` can leave zero-energy entities alive long enough to act and be perceived that tick. Second, [CompositeEnergyDistributor.java](/home/mark/kramtime/paralife/src/main/java/com/paralife/engine/CompositeEnergyDistributor.java:48) already owns `@Order(15)`, so ordering is not just an implementation detail; it changes composite semantics. Third, [ActionResolver.java](/home/mark/kramtime/paralife/src/main/java/com/paralife/engine/ActionResolver.java:279) and [PerceptionBroadcaster.java](/home/mark/kramtime/paralife/src/main/java/com/paralife/engine/PerceptionBroadcaster.java:48) have separate solo/composite paths, and several buff/status plans currently cover solo paths better than composite ones.
+**Overall**
+The phase is planned with unusually strong detail, good dependency sequencing, and solid awareness of prior patterns in the codebase. The main risks are not missing algorithms; they are integration mismatches with the current engine shape: same-tick env deaths are not fully wired into existing registries, toxin/combat side effects are being inserted into a deferred-delta combat phase, composite buff application in Plan 05 does not match the current rigid-body composite architecture, and the Plan 06 determinism harness is weaker than it looks.
 
-- Strengths
-- The plans are unusually explicit about contracts, test intent, and traceability.
-- The shadow-grid plus registry approach fits the existing code style.
-- The phase scope does satisfy R12 and R14 in spirit if implemented correctly.
+### **14-01**
+**Summary**  
+Strong foundation plan. It correctly front-loads config, registry, message shape, and test scaffolding, and it resolves the `@Order(15)` collision cleanly with `@Order(14)`. The biggest issue is that its same-tick env-death model is incomplete for the current codebase.
 
-- Concerns
-- [HIGH] Environment-caused deaths are not resolved in the same tick under the current ordering.
-- [HIGH] Composite-specific pathways are under-covered in plans 02, 03, and 05.
-- [MEDIUM] R13 says "use Cell flags system," but the plans mostly use shadow grids plus `cellStatus` projection instead of actual `Cell.flags`; that is fine given the locked context, but the requirement wording should be reconciled.
+**Strengths**
+- Good sequencing: config, registry, message extension, and death hooks are the right first wave.
+- Correctly avoids global `application-test.yml` bleed.
+- Good call on `@Order(14)` because [`CompositeEnergyDistributor`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/CompositeEnergyDistributor.java:52>) already owns `15`.
+- `BuffRegistry` dedup semantics are clear and testable.
 
-- Suggestions
-- Decide and document one same-tick death model before execution starts.
-- Treat composite buff application as a first-class design track, not an extension of solo-entity behavior.
-- Prefer per-test `@TestPropertySource` overrides over a global `application-test.yml` for new environment defaults.
+**Concerns**
+- `HIGH`: `processEnvDeaths()` does not unregister dead bots from [`BotRegistry`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/SimulationEngine.java:610>). If env deaths clear the cell same tick, the normal death sweep next tick never sees them, so dead sessions can linger indefinitely.
+- `HIGH`: env-killed `CompositeMember`s are cleared from the grid without updating [`CompositeRegistry`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/CompositeRegistry.java:189>) or running current composite death logic in [`SimulationEngine.handleMemberDeath`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/SimulationEngine.java:665>). That is not “acceptable next-tick latency” because [`CompositeEnergyDistributor`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/CompositeEnergyDistributor.java:54>) and [`ActionResolver`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/ActionResolver.java:157>) run later in the same tick.
+- `MEDIUM`: death finalization is split between SimulationEngine and EnvironmentEngine. That is likely to drift.
+- `MEDIUM`: `processEnvDeaths()` adds a full-grid pass every tick even when no env effect did damage.
 
-- Risk Assessment
-- **HIGH**. The plans are strong, but the ordering/death semantics and composite-path gaps can produce behavior that looks "implemented" while still violating the intended phase rules.
+**Suggestions**
+- Make env death finalization call the same canonical death path used by SimulationEngine, or extract a shared death-finalizer service.
+- Include `BotRegistry` cleanup in the env death path.
+- Handle composite env deaths by removing members from `CompositeRegistry` same tick, not “later”.
+- Short-circuit `processEnvDeaths()` when no env effect applied lethal-capable damage that tick.
 
-## 14-01-PLAN
-**Summary**
-Good foundation plan. It establishes the right primitives early, but it carries a few structural assumptions that should be corrected before downstream plans build on them.
+**Risk Assessment**  
+`MEDIUM-HIGH` — good structure, but the current same-tick death model is not safe until bot and composite cleanup are unified.
 
-- Strengths
-- Clear interface freeze for `EnvironmentConfig`, `BuffRegistry`, `EnvironmentEngine`, and `Messages.CellView`.
-- Good attention to back-compat in `CellView`.
-- Compost + buff cleanup are correctly identified as death-hook concerns.
+---
 
-- Concerns
-- [HIGH] It does not solve the same-tick env-death problem; later plans inherit that defect.
-- [MEDIUM] The `@Lazy` "break the cycle" note appears unnecessary; `SimulationEngine -> EnvironmentEngine` does not create a cycle by itself.
-- [MEDIUM] Adding a global `src/test/resources/application-test.yml` with env enabled/seeded can change unrelated Spring tests.
-- [LOW] New tests under `com.paralife.engine.environment` do not mirror the source package structure.
+### **14-02**
+**Summary**  
+The toxin mechanics are well thought through: spline path, double-buffered CA, type-scaled damage, and persistence all fit the phase goals. The weak point is combat integration: the plan tries to inject splash into code paths that currently rely on deferred combat deltas and it does not fully match all existing attack paths.
 
-- Suggestions
-- Replace the "@Lazy to break cycle" idea with a simpler direct dependency unless a real cycle appears.
-- Use class-scoped test properties for env config instead of globally enabling env in all test contexts.
-- Add an explicit hook contract for future death-side cleanup (`buffs`, `infections`, `compost`) now.
+**Strengths**
+- Good numerical choices: pre-sampled spline path plus double-buffered CA is the right level of complexity.
+- Explicit normalization by `intensity / 255.0` is a strong correction.
+- Good fast-path for cold toxin grids.
+- Covers all occupant types for env collision damage.
 
-- Risk Assessment
-- **MEDIUM**. Strong setup, but it needs one design correction on death ordering and one on test-profile isolation.
+**Concerns**
+- `HIGH`: [`SimulationEngine.processInteractions`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/SimulationEngine.java:141>) is deferred-delta based. Writing splash damage directly to the grid inside combat branches will violate current tick semantics and make results order-dependent.
+- `HIGH`: the plan covers splash in solo combat and `ActionResolver` composite attack, but current composite-member attacks also exist in [`SimulationEngine`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/SimulationEngine.java:238>). That path is easy to miss.
+- `MEDIUM`: `diffusionRate` is effectively hardcoded at `0.5`, even though D-07 describes it as configurable.
+- `MEDIUM`: status cache semantics are a bit inconsistent: D-39 says `TOXIC` for intensity `> 0`, but the cache logic tends to threshold it.
 
-## 14-02-PLAN
-**Summary**
-This is a solid implementation split for toxin, with good math/testing separation. The main risk is that the current plan under-specifies entity-form coverage and same-tick consequences.
+**Suggestions**
+- Keep toxin splash in the same delta model as other interaction effects inside SimulationEngine.
+- Audit all attack sites, not just “solo vs composite”; there are at least three families now.
+- Add explicit toxin diffusion-rate config or document why it is intentionally fixed.
+- Separate cell-visibility threshold from entity “currently toxic” semantics.
 
-- Strengths
-- `ToxinPathGenerator`, `CellularAutomaton`, and `ToxinEvent` are sensible separations.
-- The CA test plan is good and catches the signed-byte pitfall.
-- Pre-sampled paths are pragmatic for "cells per tick" motion.
+**Risk Assessment**  
+`MEDIUM` — the toxin core is strong, but the combat-path integration needs tightening to avoid regressions.
 
-- Concerns
-- [HIGH] The plan's own sketch only fully applies toxin collision damage to `Particle`; `BondedPair` and `CompositeMember` are left as comments.
-- [HIGH] Splash damage is wired only through `SimulationEngine` combat, but composite attacker combat lives in `ActionResolver`.
-- [HIGH] Zero-energy entities damaged by toxin can still survive into `ActionResolver` on the same tick.
-- [MEDIUM] `diffusionRadius` is configured but not actually used; diffusion behavior is effectively hardcoded.
-- [MEDIUM] `splashFraction * intensity` on a `0..255` scale is very large; `0.2 * 255 = 51` is a balance red flag.
+---
 
-- Suggestions
-- Make toxin effects exhaustive across `Particle`, `BondedPair`, and `CompositeMember`.
-- Either normalize intensity to `0..1` for damage/splash formulas or rename/document the 8-bit scaling explicitly.
-- Add a fast path so toxin diffusion does not scan the full grid when there is no active toxin and no residual intensity.
+### **14-03**
+**Summary**  
+This is the most feature-dense plan and mostly hangs together: gossip, infections, buffs, cure acceleration, immunity, and zone decay are all covered. The main remaining risks are cure/buff ordering around lethal hits, a few underspecified semantics, and a brittle perf test strategy.
 
-- Risk Assessment
-- **HIGH**. The math is fine; the game-rule integration is not complete enough yet.
+**Strengths**
+- Good reuse of the shadow-registry pattern.
+- `zoneDecayTicks` closes a real lifecycle gap.
+- Explicit composite role mapping is good; it removes “wasted buff” outcomes.
+- Single-pass infected-entity indexing is the right performance direction.
 
-## 14-03-PLAN
-**Summary**
-Mutagen is the most ambitious sub-plan and the most fragile. The buff-duration handling is good, but the cell-state lifecycle and cleanup story are not complete.
+**Concerns**
+- `HIGH`: buff grant ordering is unsafe around lethal hits. A target cured by `reduceInfection()` or DoT expiry can receive a survivor buff even if the same tick’s combat/DoT also killed it.
+- `HIGH`: this still inherits the 14-01 composite death problem; infected composite members removed by env death can leave stale composite registry state.
+- `MEDIUM`: BondedPair mutagen semantics are not really decided. They are treated like a single entity, but D-18 only clearly specifies Particle and CompositeMember outcomes.
+- `MEDIUM`: outbreak lifetime is implicit (`infectionDurationMax * 10`) instead of a named config value.
+- `MEDIUM`: the `< 50ms` performance assertion is likely flaky on CI and is a poor proxy for algorithmic complexity.
 
-- Strengths
-- Capturing `initialTicks` for D-16 is correct.
-- The exhaustive role-perk mapping is strong.
-- `reduceInfection` is the right public seam for D-20.
+**Suggestions**
+- Only grant survivor buffs after confirming the entity is still alive after all damage for that tick.
+- Make outbreak lifetime an explicit config field.
+- Decide BondedPair mutagen semantics explicitly.
+- Replace the wall-clock perf assertion with an instrumented structural assertion or at least a much looser smoke bound.
 
-- Concerns
-- [HIGH] `mutagenGrid` appears to spread but never decay or clear; outbreak zones risk becoming permanent.
-- [HIGH] Infection cleanup on death is mentioned in threat/verification text but not actually integrated in the task steps.
-- [HIGH] `grantSurvivorBuffs` can grant buffs to dead/missing entities if cleanup timing is off.
-- [MEDIUM] `applyInfectionDamage` and `findOccupantById` scan the full grid repeatedly; this can get expensive under heavy infection counts.
-- [MEDIUM] Outbreak lifetime is arbitrary and not obviously tied to config.
+**Risk Assessment**  
+`MEDIUM` — broad coverage, but same-tick cure/death ordering needs explicit rules or this will produce edge-case bugs.
 
-- Suggestions
-- Add explicit mutagen-zone decay/clear semantics to the plan, not just entity infection expiry.
-- Add `clearInfectionOnDeath(entityId)` to the main task body, not just the threat model.
-- Track infected entity positions or resolve infection against the per-tick grid scan once, rather than full-grid lookup per infected entity.
+---
 
-- Risk Assessment
-- **HIGH**. Good mechanics, incomplete lifecycle.
+### **14-04**
+**Summary**  
+This is the cleanest plan. Lightning is simple, well-bounded, and correctly uses direct aftermath instead of new protocol. Most of its risk is inherited from the Plan 14-01 env-death model.
 
-## 14-04-PLAN
-**Summary**
-Lightning is the cleanest plan. It is focused, testable, and low-overhead, but it still inherits the same ordering problem as toxin and mutagen.
+**Strengths**
+- Scope is tight and appropriate.
+- Dual-radius implementation matches the requirement well.
+- Good use of existing nutrient-level infrastructure.
+- Counter-based observability is a good testing choice.
 
-- Strengths
-- Simple dual-radius effect with clear rules.
-- The `lightningStrikeCount()` counter is a good testing affordance.
-- Test coverage is appropriately direct.
+**Concerns**
+- `HIGH`: lethal lightning hits still depend on the incomplete env-death finalizer from 14-01.
+- `LOW`: `lightningStrikeCount` increment-before-apply is fine for tests, but it should be documented as “attempted/applied strike” semantics if exceptions can happen mid-apply.
+- `LOW`: no explicit test coverage for bot/session cleanup after lethal lightning, but that is really the shared 14-01 problem.
 
-- Concerns
-- [HIGH] Lightning kills still occur after `SimulationEngine.processDeaths`, so dead entities may persist and act that tick.
-- [MEDIUM] The test accessor increments the same strike counter; that is fine, but the contract must be documented clearly.
-- [LOW] No dedicated event record is fine, but the plan should state that this is intentionally single-tick state.
+**Suggestions**
+- Treat lightning as blocked until shared env death cleanup is correct.
+- Document the strike counter semantics precisely.
 
-- Suggestions
-- Pair lightning damage with a same-tick death-finalization pass.
-- Keep the counter semantics strict: increment only on real strikes, plus a clearly named test helper wrapper.
+**Risk Assessment**  
+`LOW-MEDIUM` — mechanically straightforward; risk is mostly inherited, not local.
 
-- Risk Assessment
-- **MEDIUM**. Low algorithmic risk, moderate integration risk.
+---
 
-## 14-05-PLAN
-**Summary**
-Necessary plan, but currently the weakest in completeness. It closes the loop for solo bots well, yet misses several composite-specific buff applications and adds some unnecessary client work.
+### **14-05**
+**Summary**  
+This is the weakest plan in the set. The perception changes are mostly sound, but the buff-application design for composites does not match how composites currently move, attack, and consume energy. This is where the plans drift furthest from the actual code.
 
-- Strengths
-- Vision-scoped overcrowding is well targeted and worth testing directly.
-- Reusing the SPORE range helper for movement is a good idea.
-- Extending `CellView` through `PerceptionBroadcaster` is the right integration point.
+**Strengths**
+- Perception-side status encoding and dynamic vision radius are well aligned with the current broadcaster shape.
+- Good instinct to keep `HeuristicBrain` observable-only.
+- Good attention to dedup/stacking semantics.
 
-- Concerns
-- [HIGH] `ATTACK_PLUS_1`, `MOVEMENT_PLUS_1`, and `UPKEEP_MINUS_1` are planned mainly for solo pathways; composite attack/move/upkeep paths live elsewhere.
-- [HIGH] Composite universal `UPKEEP_MINUS_1` should affect `CompositeEnergyDistributor`, not just `SimulationEngine.processEnergyDecay`.
-- [HIGH] Composite `LOCOMOTOR` movement buff should affect composite movement resolution, not just `resolveMove`.
-- [MEDIUM] The proposed HeuristicBrain "commit-or-flee" logic assumes info the protocol does not expose, like remaining infection ticks.
-- [MEDIUM] BotClient parsing changes are mostly unnecessary because Jackson already deserializes the expanded `Messages.CellView`.
-- [MEDIUM] The test sketch references a hardcoded `SimulationEngine.OVERCROWDED_THRESHOLD`, but the real threshold is config-driven.
+**Concerns**
+- `HIGH`: using a public static `OVERCROWDED_THRESHOLD` as the runtime source of truth conflicts with current config-driven overcrowding in [`SimulationEngine.processOvercrowding`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/SimulationEngine.java:565>). Perception can diverge from actual sim behavior when config changes.
+- `HIGH`: composite `MOVEMENT_PLUS_1` is planned as a per-member 2-cell hop, but current composite movement is rigid-body whole-organism movement in [`executeCompositeMovement`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/ActionResolver.java:830>). That design does not fit.
+- `HIGH`: composite `UPKEEP_MINUS_1` is planned as reducing a shared-pool decay contribution, but current [`CompositeEnergyDistributor`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/CompositeEnergyDistributor.java:60>) drains member energy, not a pool-decay scalar. The proposed implementation targets the wrong mechanism.
+- `HIGH`: composite `ATTACK_PLUS_1` is planned in `ActionResolver`, but composite-member attacks also exist in [`SimulationEngine.processInteractions`](</home/mark/kramtime/paralife/src/main/java/com/paralife/engine/SimulationEngine.java:238). Buff behavior will be inconsistent if that path is not updated too.
+- `MEDIUM`: “enter toxic cell if it’s the only path toward an attractor” is beyond the current brain’s model and risks scope creep.
 
-- Suggestions
-- Split buff application explicitly into solo-path and composite-path work.
-- Drop BotClient manual parsing unless you intentionally stop using typed deserialization.
-- Simplify HeuristicBrain changes to what bots can actually observe: status bits, distance, and own energy.
+**Suggestions**
+- Keep `OVERCROWDED_THRESHOLD` as a named default only; use live config for runtime perception logic.
+- Redesign composite movement buff as a colony-level speed/rate modifier, not a per-member hop distance.
+- Apply `UPKEEP_MINUS_1` to member passive drain, not a nonexistent pool-decay term.
+- Audit both composite attack systems before claiming Blocker 2 is closed.
+- Keep HeuristicBrain changes to local priority adjustments only.
 
-- Risk Assessment
-- **HIGH**. This plan is the main gap between "environment exists" and "environment actually changes behavior."
+**Risk Assessment**  
+`HIGH` — the perception half is fine, but the composite buff application model is not aligned with current architecture.
 
-## 14-06-PLAN
-**Summary**
-Good capstone intent, but the current assertions are not reliable enough to be the final gate. Several "must haves" are either indirect or not actually implemented in the task body.
+---
 
-- Strengths
-- Manual tick publishing matches existing integration-test style.
-- Rising-edge counting for toxin/mutagen is a good pattern.
-- Direct lightning assertion via counter is the right idea.
+### **14-06**
+**Summary**  
+Good intent, but the integration harness overstates what it proves. It validates environment activity, but not full protocol/bot integration, and the deterministic double-run approach is not robust against the amount of singleton mutable state already in the Spring context.
 
-- Concerns
-- [HIGH] "Buff observed" is asserted as "buff exists at the end," which can miss valid runs where buffs expired.
-- [HIGH] Compost is still asserted via total nutrient sum, which is confounded by lightning/fertility/spawn and is not localized.
-- [HIGH] The plan claims perception status-byte observation and deterministic double-run behavior, but those checks are not actually implemented.
-- [MEDIUM] Population counting only `Particle` undercounts when bonded/composite forms exist.
-- [MEDIUM] Putting env defaults into global `application-test.yml` can bleed into unrelated tests.
+**Strengths**
+- Good move to use per-class `@TestPropertySource`.
+- Good use of direct observables for lightning, buffs, status, and event counts.
+- Composite-aware population counting is correct.
 
-- Suggestions
-- Track `everBuffed`, `nonZeroStatusSeen`, and a direct compost observable during the run.
-- Count `Particle`, `BondedPair`, and `CompositeMember`, like the existing metabolism test does.
-- Use `@TestPropertySource` on this test class instead of widening the global test profile.
+**Concerns**
+- `HIGH`: the deterministic double-run/reset strategy is insufficient. Clearing the grid and `BuffRegistry` does not reset env shadow grids, active events, infection maps, composite state, bot registry, or RNG-driven singleton state.
+- `HIGH`: this is not really “full-stack” in the same sense as existing bot integration tests; it publishes `TickEvent`s directly and does not actually exercise WebSocket perception delivery or bot decision loops.
+- `MEDIUM-HIGH`: `deathPositions` inferred from disappeared occupied cells is noisy because movement also creates disappeared positions. That is not a reliable death detector.
+- `MEDIUM`: the population stability bound may be too brittle for seeded stochastic runs.
+- `MEDIUM`: direct status-cache probing is useful, but it does not prove `CellView` serialization or broadcaster integration.
 
-- Risk Assessment
-- **HIGH**. Good direction, but not yet a trustworthy phase gate.
+**Suggestions**
+- Split this into two tests: a deterministic engine-only harness and a lighter real-bot integration smoke test.
+- Add explicit reset hooks to `EnvironmentEngine`, `CompositeRegistry`, and `BotRegistry` if determinism is required in one JVM.
+- Replace “disappeared position” compost detection with an explicit death/compost event counter or callback.
+- Assert at least one real `Perception`/`CellView` payload if protocol integration is in scope.
 
-## Bottom Line
-The plans are strong enough to proceed, but not as-is. I would approve them only after three fixes are made explicit:
+**Risk Assessment**  
+`MEDIUM-HIGH` — useful coverage, but the determinism claim and “full-stack” framing are stronger than the harness actually supports.
 
-- Same-tick handling for environment-caused deaths.
-- Composite-path coverage for toxin/mutagen/buff effects.
-- A stricter, direct integration-test strategy for compost, buffs, and status visibility.
+---
 
-With those corrected, the phase looks capable of meeting R12-R14 cleanly.
+**Bottom Line**
+The phase plan is broadly good and should achieve R12/R14 if executed carefully. The main blocker to R13-quality confidence is the shared death/finalization model: fix env death cleanup first, then revisit composite buff application in Plan 05. If those two areas are corrected, the rest of the phase is mostly `MEDIUM` risk rather than `HIGH`.
 
 ---
 
 ## Consensus Summary
 
-Two reviewers, one diverging strongly on overall risk. Gemini rates the phase LOW risk, treating the plans as architecturally proven with a single performance nit. Codex, grounding claims against specific files and line numbers (`SimulationEngine.java:603`, `CompositeEnergyDistributor.java:48`), rates the phase HIGH risk due to structural ordering/semantics gaps. The divergence itself is the most important signal: Codex found concrete structural problems that Gemini missed, which argues for Codex's assessment being more load-bearing — but Gemini's performance concern is also real and should not be lost.
+Two independent reviewers — Gemini and Codex — reached sharply different overall risk assessments (Gemini: LOW; Codex: MEDIUM-HIGH with HIGH items on Plans 01/02/03/05). The divergence is signal: Codex cross-referenced plans against specific source lines in the current codebase and surfaced integration mismatches Gemini missed. Gemini assessed design coherence; Codex assessed fit-to-code. Both are useful, but the Codex findings should be treated as blocking unless refuted.
 
 ### Agreed Strengths
-- **Contract clarity and traceability** — both cite the explicit interface freeze, test intent, and requirement mapping.
-- **Shadow-grid + registry architecture** — both view the pattern as well-suited to the existing codebase style and thread-safety model.
-- **Direct/counter-based test assertions** (lightning strike counter, role perk mapping) over indirect proxies.
+
+- Same-tick env-death *intent* is correct (centralize in EnvironmentEngine sweep)
+- Composite awareness is substantially better than prior cycle
+- Numerical choices are strong — intensity normalization to 0.0–1.0, double-buffered CA, Catmull-Rom spline
+- Fast-path guard for cold toxin grids is appropriate perf hygiene
+- Shadow-registry pattern (BuffRegistry) is a clean reuse of BotRegistry/CompositeRegistry
+- Dependency sequencing (foundation → effects → perception/behavior → integration) is sound
 
 ### Agreed Concerns
-- **Infection damage performance (Plan 03)** — both flag `applyInfectionDamage` / full-grid scan per infected entity. Gemini MEDIUM, Codex MEDIUM. Fix: per-tick single grid pass, or store `Position` on the `Infection` record. *(Gemini's proposed fix depends on entities being stable during `EnvironmentEngine` — which collides with Codex's death-ordering concern; address ordering first, then optimize.)*
-- **Circular-dependency / `@Lazy` risk (Plan 01)** — Gemini LOW (initialization care), Codex MEDIUM (cycle may not actually exist). Consolidated: re-evaluate whether `@Lazy` is needed at all; if not, drop it.
 
-### Divergent Views (worth investigating)
+- Status-cache semantics around `TOXIC` vs `TOXIN_PRESENT` (Gemini noted visibility of empty danger cells; Codex noted threshold drift between cell-bit and entity-bit) — confirm intensity > 0 vs > threshold rule is consistent across plans
 
-| Issue | Gemini | Codex | Action |
-|---|---|---|---|
-| **Overall risk** | LOW | HIGH | Side with Codex — its concerns are file-grounded. |
-| **Same-tick environment-caused death** | Not flagged | HIGH (pervades 02/03/04) | Decide and document one same-tick death model in 14-01 before touching 02/03/04. |
-| **Composite-path coverage (Plans 02/03/05)** | Not flagged (Gemini believed role mapping covered it) | HIGH — composite buff/damage pathways miss `CompositeEnergyDistributor`, composite `ActionResolver` branch, `BondedPair`/`CompositeMember` toxin damage | Split buff/damage application explicitly into solo-path vs composite-path tasks in 14-05 (and toxin collision in 14-02). |
-| **Mutagen-zone decay** | Not flagged | HIGH — `mutagenGrid` spreads but never decays/clears | Add explicit zone decay semantics to 14-03. |
-| **Infection cleanup on death** | Not flagged | HIGH — referenced in threat model but missing from task steps | Promote `clearInfectionOnDeath(entityId)` into 14-03 main task body. |
-| **Global `application-test.yml`** | Not flagged | MEDIUM — can bleed into unrelated tests | Use `@TestPropertySource` per test class in 14-01 and 14-06. |
-| **R13 wording vs shadow grids** | Not flagged | MEDIUM — requirement says "Cell flags system" but plans use shadow grids + `cellStatus` | Reconcile requirement wording or note deviation in CONTEXT.md. |
-| **Splash damage scale (0.2×255 = 51)** | Not flagged | MEDIUM balance concern | Normalize intensity to 0..1 or document 8-bit scaling in 14-02. |
-| **`diffusionRadius` configured but unused** | Not flagged | MEDIUM dead config | Wire it or remove it in 14-02. |
-| **14-06 buff-exists-at-end assertion** | Not flagged | HIGH — misses valid runs with expired buffs | Track `everBuffed` / `nonZeroStatusSeen` booleans across ticks. |
-| **14-06 compost via total nutrient sum** | Not flagged | HIGH — confounded by fertility/spawn | Add direct localized compost observable. |
-| **Buff stacking semantics** | LOW (Plan 03) | Not flagged | Clarify in 14-05 whether same-type buffs stack numerically. |
-| **HeuristicBrain hardcoded `ATTACK_CURE_REDUCTION_DEFAULT`** | LOW cosmetic | Not flagged directly (flagged broader brain scope MEDIUM) | Drive from config or accept as documented MVP constant. |
-| **Spline toroidal wrapping** | LOW — wrap only at grid-cell conversion | Not flagged | Document in `ToxinPathGenerator` in 14-02. |
+### Codex-Only Concerns (Gemini did not catch)
 
-### Recommended Pre-Execution Fixes (prioritized)
+HIGH items flagged by Codex only, worth investigating:
 
-1. **[BLOCKER]** Decide same-tick death model in 14-01 (affects 02/03/04).
-2. **[BLOCKER]** Add composite-path coverage tasks to 14-02 (toxin collision + splash through `ActionResolver`) and 14-05 (`CompositeEnergyDistributor` + composite movement buff path).
-3. **[BLOCKER]** Add mutagen-zone decay semantics + `clearInfectionOnDeath` task to 14-03.
-4. **[BLOCKER]** Rewrite 14-06 assertions: `everBuffed` tracking, localized compost observable, explicit status-byte check, composite-aware population count.
-5. **[HIGH]** Replace global `application-test.yml` with per-test `@TestPropertySource` in 14-01 and 14-06.
-6. **[HIGH]** Fix infection damage algorithm — single per-tick grid pass or `Position` on `Infection` (after death-ordering is decided).
-7. **[MEDIUM]** Reconcile R13 wording or add CONTEXT note explaining shadow-grid + `cellStatus` satisfies the flag-system spirit.
-8. **[MEDIUM]** Normalize toxin intensity scale or document 8-bit scaling in 14-02; wire or remove `diffusionRadius`.
-9. **[LOW]** Drop `@Lazy` unless a real cycle appears; clarify buff stacking; document spline toroidal wrapping.
+1. **Env death cleanup incomplete (Plan 14-01, inherited by 14-03/04)** — `processEnvDeaths()` does not unregister dead bots from `BotRegistry` or update `CompositeRegistry`. Since `CompositeEnergyDistributor` (@Order 15) and `ActionResolver` (@Order 20) run later in the same tick, stale composite state can persist. Extract a canonical death-finalizer service shared with `SimulationEngine.handleMemberDeath`.
+2. **Toxin splash in deferred-delta combat (Plan 14-02)** — `SimulationEngine.processInteractions` uses deferred deltas. Writing splash directly to the grid inside combat branches violates tick semantics and introduces order-dependence. Keep splash in the delta model.
+3. **Attack-path coverage (Plan 14-02, 14-05)** — composite-member attacks exist in both `ActionResolver` AND `SimulationEngine.processInteractions` (~line 238). Plans only cover one path. Audit all three attack families before claiming Blocker 2 closed.
+4. **Cure/buff grant ordering (Plan 14-03)** — a target cured by `reduceInfection()` in the same tick it took lethal damage can receive a survivor buff post-death. Gate buff grant on "still alive after all damage this tick."
+5. **Composite buff model mismatch (Plan 14-05)** — `MOVEMENT_PLUS_1` is designed as per-member 2-cell hop, but `executeCompositeMovement` uses rigid-body whole-organism movement. `UPKEEP_MINUS_1` targets a pool-decay scalar that doesn't exist; `CompositeEnergyDistributor` drains member energy directly. Redesign as colony-level modifiers.
+6. **Deterministic double-run harness (Plan 14-06)** — clearing grid + BuffRegistry does not reset env shadow grids, active events, infection maps, composite state, bot registry, or RNG singletons. Determinism claim is weaker than advertised. Add explicit reset hooks or split into engine-only deterministic test + lighter real-bot smoke.
+7. **OVERCROWDED_THRESHOLD public static (Plan 14-05)** — conflicts with config-driven `processOvercrowding`. Perception can diverge from sim when config changes. Use live config for runtime path.
 
-Feed this review back into planning:
-```
-/gsd-plan-phase 14 --reviews
-```
+### Divergent Views
+
+- **Overall risk:** Gemini LOW vs Codex MEDIUM-HIGH. Codex's line-level cross-references are more credible here — Gemini reviewed plans for internal consistency, not fit to existing code.
+- **Plan 06 quality:** Gemini flagged only `@DirtiesContext` perf cost (LOW); Codex identified the harness does not actually exercise WebSocket/bot loops, infers deaths from "disappeared positions" (movement false-positives), and does not reset env state between runs (MEDIUM-HIGH).
+- **Plan 05 buff application:** Gemini gave suggestions on STV voting clarity; Codex flagged the entire composite buff model as architecturally misaligned (HIGH). Codex is more likely correct — the plan appears to assume a movement model the codebase does not implement.
+
+### Recommended Next Actions
+
+1. Replan Plan 14-01 env-death finalization: extract shared death-finalizer, include BotRegistry + CompositeRegistry cleanup same-tick.
+2. Replan Plan 14-02 toxin splash: route through existing deferred-delta combat model; audit all three attack-path families.
+3. Replan Plan 14-05 composite buff application: colony-level movement modifier, member-drain `UPKEEP_MINUS_1`, audit composite attack paths.
+4. Tighten Plan 14-03 cure/death ordering: explicit "alive after damage" gate on survivor buff grant.
+5. Rework Plan 14-06: split deterministic engine-only + real-bot smoke; add env reset hooks; replace disappeared-position compost detection with event counter.
+6. Re-run `/gsd-plan-phase 14 --reviews` after the above changes.
