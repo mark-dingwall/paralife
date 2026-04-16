@@ -1,7 +1,7 @@
 # Paralife Roadmap
 
 - ✅ **v1.0 Foundation & Living Simulation** — Phases 01-10 (shipped 2026-04-12)
-- 🚧 **v2.0 Combination & Emergence** — Phases 11-15 (in progress)
+- 🚧 **v2.0 Combination & Emergence** — Phases 11-16 (in progress)
 
 ---
 
@@ -92,12 +92,12 @@ Plans:
 ### Phase 13: Energy & Metabolism System
 **Goal:** Richer energy model — entities need food, starve, and reproduce based on metabolic state
 **Depends on:** Phase 12 (composites need metabolism to be interesting)
-**Plans:** 4 plans
+**Plans:** 4/4 plans complete
 Plans:
-- [ ] 13-01-PLAN.md — Per-type metabolic profiles (MetabolicProfile, StarvationConfig), per-type decay/combat in SimulationEngine, surplus-gated reproduction with cooldown and SPORE bonuses in ActionResolver
-- [ ] 13-02-PLAN.md — BondedPair hybrid vigor metabolism (BondingConfig extension, bond decay cost) + progressive starvation mechanic (FLAG_STARVING, combat modifiers, nutrient boost)
-- [ ] 13-03-PLAN.md — Soil fertility (FertilityInitializer, FertilityConfig) + seasonal cycles (SeasonTracker, SeasonsConfig) + fertility/season-modulated nutrient spawning + Messages.Tick season data
-- [ ] 13-04-PLAN.md — Integration test: 300-tick population dynamics with full metabolism system
+- [x] 13-01-PLAN.md — Per-type metabolic profiles (MetabolicProfile, StarvationConfig), per-type decay/combat in SimulationEngine, surplus-gated reproduction with cooldown and SPORE bonuses in ActionResolver
+- [x] 13-02-PLAN.md — BondedPair hybrid vigor metabolism (BondingConfig extension, bond decay cost) + progressive starvation mechanic (FLAG_STARVING, combat modifiers, nutrient boost)
+- [x] 13-03-PLAN.md — Soil fertility (FertilityInitializer, FertilityConfig) + seasonal cycles (SeasonTracker, SeasonsConfig) + fertility/season-modulated nutrient spawning + Messages.Tick season data
+- [x] 13-04-PLAN.md — Integration test: 300-tick population dynamics with full metabolism system
 **Success Criteria:**
 - Metabolism rates differ by entity type and composite size
 - Starvation mechanic with configurable thresholds
@@ -115,9 +115,24 @@ Plans:
 - Configurable parameters in application.yml
 - Unit tests for each environmental effect
 
-### Phase 15: Emergent Behavior Tests
-**Goal:** Validate that complex behaviors emerge from the combination of bonding, composites, metabolism, and environment
-**Depends on:** Phase 14 (all M3 systems must be active)
+### Phase 15: Protocol & Transport Overhaul
+**Goal:** Replace JSON per-tick messaging with compact text perception protocol; switch container to Jetty; enable permessage-deflate with precompress fan-out infrastructure; redesign bots as stateless reactive agents
+**Depends on:** Phase 14 (env effects provide diverse message types to exercise codec)
+**Success Criteria:**
+- Compact text Perception protocol with sparse relative coords, base36 encoding, fixed-width status bitmasks
+- Stateless bot redesign — server sends complete authoritative state per tick; no client-side caching
+- Zero-trust perception filtering — server sends only data derivable from entity's vision range
+- Tomcat → Jetty container swap, permessage-deflate negotiated both sides with `server_no_context_takeover=true`
+- Precompress fan-out infrastructure (`BroadcastChannel` + `CompressedFrame`) ready for future visualizer broadcast channel
+- PerceptionCodec with shared encode/decode used by both server and bot client
+- Bot→Server compact action format
+- Actuator custom metrics (bytes saved, compress ops saved, active sessions)
+- Rock generation algorithm defined (enables run-length encoding decision)
+- All existing tests pass under new protocol
+
+### Phase 16: Emergent Behavior Tests
+**Goal:** Validate that complex behaviors emerge from the combination of bonding, composites, metabolism, environment, and protocol
+**Depends on:** Phase 15 (all systems including new protocol must be active)
 **Success Criteria:**
 - Deterministic seed test demonstrating composite formation from simple rules
 - Population dynamics test with metabolism + environment showing stable ecosystems
@@ -144,5 +159,6 @@ Plans:
 | 11 | Bonding Rules Engine | ✅ Complete |
 | 12 | Composite Entities | ✅ Complete |
 | 13 | Energy & Metabolism System | Planning complete |
-| 14 | Environmental Rules | Not started |
-| 15 | Emergent Behavior Tests | Not started |
+| 14 | Environmental Rules | Context complete |
+| 15 | Protocol & Transport Overhaul | Not started |
+| 16 | Emergent Behavior Tests | Not started |

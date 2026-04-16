@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Combination & Emergence
-current_phase: 13
-current_phase_name: energy & metabolism system
+current_phase: 14
+current_phase_name: environmental rules
 current_plan: Not started
-status: executing
-stopped_at: Phase 13 review triage complete
-last_updated: "2026-04-15T06:45:00Z"
-last_activity: 2026-04-15
+status: discuss complete
+stopped_at: Phase 14 context gathered — ready for /gsd-plan-phase
+last_updated: "2026-04-17T00:00:00Z"
+last_activity: 2026-04-17
 progress:
-  total_phases: 5
-  completed_phases: 2
+  total_phases: 6
+  completed_phases: 3
   total_plans: 12
-  completed_plans: 8
-  percent: 67
+  completed_plans: 12
+  percent: 50
 ---
 
 # Project State
@@ -25,38 +25,40 @@ See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
 
-**Current focus:** Phase 11 — bonding-rules-engine
+**Current focus:** Phase 14 — environmental rules
 
-**Status:** Ready to execute
-**Current Phase:** 13
-**Current Phase Name:** energy & metabolism system
-**Total Phases:** 15
-**Current Plan:** Not started
-**Total Plans in Phase:** 4
+**Status:** Discuss complete — ready to plan
+**Current Phase:** 14
+**Current Phase Name:** environmental rules
+**Total Phases:** 16
+**Current Plan:** Not started (planning not yet invoked)
+**Total Plans in Phase:** TBD (expected ~5-6 plans)
 **Progress:** [░░░░░░░░░░] 0%
-**Last Activity:** 2026-04-15
+**Last Activity:** 2026-04-17
 
 ## Current Position
 
-Phase: 11 (bonding-rules-engine) — EXECUTING
-Plan: 1 of 2
-Status: Ready to execute
-Last activity: 2026-04-14 -- Phase 13 planning complete
+Phase: 14 (environmental rules) — DISCUSS COMPLETE
+Plan: Not started
+Status: Ready for /gsd-plan-phase 14
+Last activity: 2026-04-17 -- Phase 14 context gathered, phase split into 14 (env) + 15 (protocol)
 
 ## Accumulated Context
 
 ### Decisions
 
 7 decisions made during v1.0 (D001-D007). See PROJECT.md Key Decisions table.
+Phase 14: 48 decisions captured in 14-CONTEXT.md.
 
 ### Blockers/Concerns
 
-None. Fresh milestone — open design questions listed in PROJECT.md.
+None.
 
 ## Session Continuity
 
-Last session: 2026-04-15T06:45:00Z
-Stopped at: Phase 13 review triage complete — warnings WR-01/02/03 fixed,
-selected info/cross-AI findings fixed, remainder deferred to
-`v2.0-TECH-DEBT.md`. All tests green; bootRun smoke clean.
-Resume file: .planning/phases/13-energy-metabolism-system/13-REVIEW.md (Resolutions section)
+Last session: 2026-04-17T00:00:00Z
+Stopped at: Phase 14 context gathered. 14-CONTEXT.md + 14-DISCUSSION-LOG.md written.
+ROADMAP updated — inserted Phase 15 (Protocol & Transport Overhaul), renumbered
+emergence tests to Phase 16. Phase 14 ships with existing JSON protocol.
+Resume file: .planning/phases/14-environmental-rules/14-CONTEXT.md
+Next command: /gsd-plan-phase 14
