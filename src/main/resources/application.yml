@@ -131,6 +131,7 @@ paralife:
         strain-mutation-chance: 0.1
         gossip-probability: 0.3
         zone-decay-ticks: 50
+        outbreak-lifetime-ticks: 300
       compost:
         full-strength: 30
         half-strength: 15

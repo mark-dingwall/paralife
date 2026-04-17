@@ -198,7 +198,8 @@ public record EnvironmentConfig(
             int damagePerTick,
             double strainMutationChance,
             double gossipProbability,
-            int zoneDecayTicks
+            int zoneDecayTicks,
+            int outbreakLifetimeTicks
     ) {
         public Mutagen {
             if (peakSeason == null)
@@ -234,12 +235,15 @@ public record EnvironmentConfig(
             if (zoneDecayTicks <= 0)
                 throw new IllegalArgumentException(
                         "mutagen.zoneDecayTicks must be > 0: " + zoneDecayTicks);
+            if (outbreakLifetimeTicks <= 0)
+                throw new IllegalArgumentException(
+                        "mutagen.outbreakLifetimeTicks must be > 0: " + outbreakLifetimeTicks);
         }
 
         public static Mutagen defaults() {
             return new Mutagen(Season.SPRING, 0.02, 0.0025,
                     20, 30, 10, 5, 3, 2,
-                    0.1, 0.3, 50);
+                    0.1, 0.3, 50, 300);
         }
     }
 
