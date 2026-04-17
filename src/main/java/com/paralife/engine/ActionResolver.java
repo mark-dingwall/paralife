@@ -83,6 +83,15 @@ public class ActionResolver {
     private final ConcurrentHashMap<String, Long> lastReproducedTick = new ConcurrentHashMap<>();
 
     /**
+     * Plan 14-02: toxin splash damage on composite-member ATTACKER role going
+     * through this resolver's direct-write attack path. Setter-injected via
+     * {@link #setEnvironmentEngine} so existing unit-test constructors (pre-Phase-14)
+     * continue to compile without bumping every test fixture. Guarded on null
+     * so tests that don't set it see the pure combat behavior.
+     */
+    private EnvironmentEngine environmentEngine;
+
+    /**
      * Pending action: sessionId → action. Only the last action per session per tick is kept.
      * Uses AtomicReference swap for atomic drain — see {@link #onTick}.
      */
@@ -125,6 +134,16 @@ public class ActionResolver {
                            MetabolicProfile metabolicProfile) {
         this(worldGrid, botRegistry, sessionRegistry, config, objectMapper,
                 compositeRegistry, compositeConfig, metabolicProfile, StarvationConfig.defaults());
+    }
+
+    /**
+     * Setter-inject {@link EnvironmentEngine} after construction (Plan 14-02).
+     * Spring wires this automatically via {@link Autowired}; {@code required=false}
+     * keeps pre-Phase-14 unit tests that never set this field working as-is.
+     */
+    @Autowired(required = false)
+    public void setEnvironmentEngine(@org.springframework.context.annotation.Lazy EnvironmentEngine environmentEngine) {
+        this.environmentEngine = environmentEngine;
     }
 
     /**
@@ -614,6 +633,28 @@ public class ActionResolver {
         } else {
             sendResult(rca.sessionId, tickNumber, false, "attack", "Invalid target");
             return;
+        }
+
+        // Plan 14-02 (cycle-4 action item #2, cycle-5 LOW): if the target was on
+        // a toxic cell, splash damage fires back on the composite-member ATTACKER
+        // sitting at `pos`. Direct-write path (not deferred) — must explicitly
+        // Math.max(0, ...) clamp so a missing clamp can't slip through. After the
+        // write we call markEnvDamageApplied so EnvPostActionReconciler @Order(25)
+        // re-invokes processEnvDeaths and sweeps any lethal splash SAME TICK.
+        if (environmentEngine != null) {
+            int splash = environmentEngine.computeSplashDamage(targetPos);
+            if (splash > 0) {
+                Cell ac = worldGrid.getCell(pos.x(), pos.y());
+                if (ac.occupant() instanceof Entity.CompositeMember attackerMember
+                        && attackerMember.id().equals(rca.member.id())) {
+                    // cycle-5 LOW: explicit Math.max(0, ...) clamp — grep-asserted.
+                    int clampedEnergy = Math.max(0, attackerMember.energy() - splash);
+                    worldGrid.setEntity(pos.x(), pos.y(),
+                            attackerMember.withEnergy(clampedEnergy));
+                    // cycle-4 action item #2: EnvPostActionReconciler finalises lethal splash.
+                    environmentEngine.markEnvDamageApplied();
+                }
+            }
         }
 
         // Charge active drain from shared pool (graceful degradation: partial drain logged)

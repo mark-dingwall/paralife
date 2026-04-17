@@ -54,6 +54,14 @@ public class SimulationEngine {
     private final BuffRegistry buffRegistry;
     private final DeathCleanupHooks hooks;
     private final DeathFinalizer deathFinalizer;
+    /**
+     * Plan 14-02: toxin splash damage pipeline. Injected {@code @Lazy} so the
+     * EnvironmentEngine bean (which depends on DeathFinalizer) can be built
+     * after SimulationEngine is itself constructed — same cycle-break pattern
+     * as {@link #deathFinalizer}. Null in the 9-arg back-compat ctor used by
+     * pre-Phase-14 unit tests — every splash emission site guards on null.
+     */
+    private final EnvironmentEngine environmentEngine;
     private final AtomicLong nutrientIdCounter = new AtomicLong(0);
     private final AtomicInteger lastTickBondCount = new AtomicInteger(0);
     /** Tracks previous tick's pool energy per composite for panic zone decrease detection (D-31). */
@@ -66,7 +74,8 @@ public class SimulationEngine {
                             MetabolicProfile metabolicProfile, StarvationConfig starvationConfig,
                             SeasonTracker seasonTracker, BuffRegistry buffRegistry,
                             DeathCleanupHooks hooks,
-                            @org.springframework.context.annotation.Lazy DeathFinalizer deathFinalizer) {
+                            @org.springframework.context.annotation.Lazy DeathFinalizer deathFinalizer,
+                            @org.springframework.context.annotation.Lazy EnvironmentEngine environmentEngine) {
         this.worldGrid = worldGrid;
         this.config = config;
         this.botRegistry = botRegistry;
@@ -79,6 +88,7 @@ public class SimulationEngine {
         this.buffRegistry = buffRegistry;
         this.hooks = hooks;
         this.deathFinalizer = deathFinalizer;
+        this.environmentEngine = environmentEngine;
     }
 
     /**
@@ -117,6 +127,9 @@ public class SimulationEngine {
         };
         this.deathFinalizer = new DeathFinalizer(worldGrid, botRegistry, this.buffRegistry,
                 compositeRegistry, this.hooks, this);
+        // Phase 14 Plan 02: back-compat tests have no env pipeline. Splash emission
+        // sites guard on null so the existing behavior (pure combat) is preserved.
+        this.environmentEngine = null;
     }
 
     public int getLastTickBondCount() {
@@ -168,6 +181,14 @@ public class SimulationEngine {
 
     private sealed interface InteractionResult {}
     private record CombatDelta(Position pos, int energyDelta) implements InteractionResult {}
+    /**
+     * Plan 14-02: toxin splash damage to the attacker when the defender stood
+     * on a toxic cell (D-10). Routed through the same deferred-delta pipeline
+     * as {@link CombatDelta} — same withEnergy write pattern per entity kind.
+     * Emitted at each of the 5 in-sim attack sites (3 solo-Particle branches +
+     * 2 composite-member branches).
+     */
+    private record SplashDelta(Position pos, int energyDelta) implements InteractionResult {}
     private record BondFormation(Position primaryPos, Position secondaryPos,
                                   Particle predator, Particle prey) implements InteractionResult {}
     private record CompositeFormation(Position pos1, Position pos2,
@@ -237,6 +258,11 @@ public class SimulationEngine {
                         results.add(new CombatDelta(pos, combat));
                         results.add(new CombatDelta(nPos, -damage));
                         particleCombats++;
+                        // Plan 14-02: toxin splash on the attacker when defender sits on a toxic cell.
+                        if (environmentEngine != null) {
+                            int splash = environmentEngine.computeSplashDamage(nPos);
+                            if (splash > 0) results.add(new SplashDelta(pos, -splash));
+                        }
                     }
                 }
 
@@ -253,6 +279,11 @@ public class SimulationEngine {
                         results.add(new CombatDelta(pos, combat));
                         results.add(new CombatDelta(nPos, -damage));
                         particleCombats++;
+                        // Plan 14-02: toxin splash on the attacker when defender sits on a toxic cell.
+                        if (environmentEngine != null) {
+                            int splash = environmentEngine.computeSplashDamage(nPos);
+                            if (splash > 0) results.add(new SplashDelta(pos, -splash));
+                        }
                     }
                     // If deflected (roll < bondDefenseChance), no deltas added
                 }
@@ -277,6 +308,11 @@ public class SimulationEngine {
                         results.add(new CombatDelta(pos, combat));
                         results.add(new CombatDelta(nPos, -damage));
                         particleCombats++;
+                        // Plan 14-02: toxin splash on the attacker when defender sits on a toxic cell.
+                        if (environmentEngine != null) {
+                            int splash = environmentEngine.computeSplashDamage(nPos);
+                            if (splash > 0) results.add(new SplashDelta(pos, -splash));
+                        }
                     }
                 }
             }
@@ -313,20 +349,34 @@ public class SimulationEngine {
                             || defender instanceof Entity.CompositeMember) {
                         results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
                         compositeMemberCombats++;
+                        // Plan 14-02: toxin splash on composite-member ATTACKER role (in-sim).
+                        if (environmentEngine != null) {
+                            int splash = environmentEngine.computeSplashDamage(nPos);
+                            if (splash > 0) results.add(new SplashDelta(pos, -splash));
+                        }
                     }
                 } else {
                     // Position-based combat: RPS rules based on member's type (D-11)
+                    boolean hit = false;
                     if (defender instanceof Particle prey && attacker.type().prey() == prey.type()) {
                         results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
                         compositeMemberCombats++;
+                        hit = true;
                     } else if (defender instanceof Entity.BondedPair bp
                             && attacker.type().prey() == bp.primaryType()) {
                         results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
                         compositeMemberCombats++;
+                        hit = true;
                     } else if (defender instanceof Entity.CompositeMember cm
                             && attacker.type().prey() == cm.type()) {
                         results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
                         compositeMemberCombats++;
+                        hit = true;
+                    }
+                    // Plan 14-02: toxin splash on composite-member position-based attacker.
+                    if (hit && environmentEngine != null) {
+                        int splash = environmentEngine.computeSplashDamage(nPos);
+                        if (splash > 0) results.add(new SplashDelta(pos, -splash));
                     }
                 }
                 break; // Each member attacks at most one neighbor per tick
@@ -368,21 +418,22 @@ public class SimulationEngine {
         Set<Position> claimedForBonding = new HashSet<>();
 
         // Apply combat deltas (FN-3: combat count tracked at emission, not here,
-        // so composite-member attacks emitting a single delta are counted correctly)
+        // so composite-member attacks emitting a single delta are counted correctly).
+        // Plan 14-02: SplashDelta goes through the SAME applyDeltaToOccupant helper
+        // so the two delta kinds share a write path. If any SplashDelta lands, mark
+        // env damage so EnvironmentEngine.processEnvDeaths (and the
+        // EnvPostActionReconciler @Order(25)) sweeps lethal splash same tick.
+        boolean splashApplied = false;
         for (InteractionResult result : results) {
             if (result instanceof CombatDelta delta) {
-                Cell c = worldGrid.getCell(delta.pos.x(), delta.pos.y());
-                if (c.occupant() instanceof Particle p) {
-                    worldGrid.setEntity(delta.pos.x(), delta.pos.y(),
-                            p.withEnergy(p.energy() + delta.energyDelta));
-                } else if (c.occupant() instanceof Entity.BondedPair bp) {
-                    worldGrid.setEntity(delta.pos.x(), delta.pos.y(),
-                            bp.withEnergy(bp.energy() + delta.energyDelta));
-                } else if (c.occupant() instanceof Entity.CompositeMember cm) {
-                    worldGrid.setEntity(delta.pos.x(), delta.pos.y(),
-                            cm.withEnergy(cm.energy() + delta.energyDelta));
-                }
+                applyDeltaToOccupant(delta.pos(), delta.energyDelta());
+            } else if (result instanceof SplashDelta splash) {
+                applyDeltaToOccupant(splash.pos(), splash.energyDelta());
+                splashApplied = true;
             }
+        }
+        if (splashApplied && environmentEngine != null) {
+            environmentEngine.markEnvDamageApplied();
         }
 
         // Apply bond formations (per D-08 — deferred, with double-bond protection)
@@ -478,6 +529,25 @@ public class SimulationEngine {
         }
 
         return new int[]{particleCombats + compositeMemberCombats, bondEvents, compositeEvents};
+    }
+
+    /**
+     * Shared apply helper for CombatDelta + SplashDelta (Plan 14-02). The write
+     * uses {@code withEnergy} which clamps to [0, maxEnergy] — negative deltas
+     * floor at 0 implicitly.
+     */
+    private void applyDeltaToOccupant(Position pos, int energyDelta) {
+        Cell c = worldGrid.getCell(pos.x(), pos.y());
+        if (c.occupant() instanceof Particle p) {
+            worldGrid.setEntity(pos.x(), pos.y(),
+                    p.withEnergy(p.energy() + energyDelta));
+        } else if (c.occupant() instanceof Entity.BondedPair bp) {
+            worldGrid.setEntity(pos.x(), pos.y(),
+                    bp.withEnergy(bp.energy() + energyDelta));
+        } else if (c.occupant() instanceof Entity.CompositeMember cm) {
+            worldGrid.setEntity(pos.x(), pos.y(),
+                    cm.withEnergy(cm.energy() + energyDelta));
+        }
     }
 
     private int countEmptyNeighbors(Position pos) {
