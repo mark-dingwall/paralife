@@ -108,11 +108,11 @@ Plans:
 ### Phase 14: Environmental Rules
 **Goal:** Four spatially-propagating environmental effects (toxin, mutagen, lightning, compost) stressing the Phase 13 metabolism system, with seasonal Poisson triggering, CA shadow grids, mutagen survivor buffs, and perception-visible status bytes
 **Depends on:** Phase 13 (metabolism must work before environment can stress it)
-**Plans:** 2/6 plans executed
+**Plans:** 3/6 plans executed
 Plans:
 - [x] 14-01-PLAN.md — Foundation: EnvironmentConfig + BuffRegistry + EnvironmentEngine skeleton + Messages.CellView extension + compost death hook + Wave-0 test scaffolding
 - [x] 14-02-PLAN.md — Toxin spread: Catmull-Rom spline path + CA diffusion + per-type resistance damage + splash damage
-- [ ] 14-03-PLAN.md — Mutagen outbreak: strain gossip + infection DoT + survivor buff grant (Particle + composite role-specific) + attack-accelerates-cure
+- [x] 14-03-PLAN.md — Mutagen outbreak: strain gossip + infection DoT + survivor buff grant (Particle + composite role-specific) + attack-accelerates-cure
 - [ ] 14-04-PLAN.md — Lightning strike: single-tick dual-radius damage + fertility boost
 - [ ] 14-05-PLAN.md — Perception integration + buff effect application + HeuristicBrain status-aware decisions
 - [ ] 14-06-PLAN.md — Integration test: 300-tick seeded full-stack validation of all four effects + buff grants + population stability
