@@ -59,6 +59,7 @@ public class SimulationEngine {
     /** Tracks previous tick's pool energy per composite for panic zone decrease detection (D-31). */
     private final ConcurrentHashMap<String, Integer> previousPoolEnergy = new ConcurrentHashMap<>();
 
+    @org.springframework.beans.factory.annotation.Autowired
     public SimulationEngine(WorldGrid worldGrid, SimulationConfig config,
                             BotRegistry botRegistry, BondingConfig bondingConfig,
                             CompositeRegistry compositeRegistry, CompositeConfig compositeConfig,
