@@ -93,6 +93,18 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     private final ToxinPathGenerator toxinPathGenerator;
 
     /**
+     * Monotonic count of lightning strikes FIRED. <b>"Attempted-strike"
+     * semantics:</b> incremented exactly once per successful Poisson roll in
+     * {@link #spawnLightning}, BEFORE {@link #applyLightningAt} runs. An
+     * exception inside {@code applyLightningAt} still leaves the counter
+     * incremented — a strike was attempted; its side-effects may be partial.
+     * The {@link #applyLightningAtForTest} helper preserves this ordering
+     * (increment before apply) so test semantics match production semantics
+     * exactly.
+     */
+    private long lightningStrikeCount = 0L;
+
+    /**
      * Toxin shadow grids — double-buffered (Pitfall 2).
      */
     private final byte[][] toxinGrid;
@@ -156,6 +168,21 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                       EnvironmentConfig config, BuffRegistry buffRegistry,
                       FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
                       EnvCleanupHooksBean envCleanupHooksBean, Random rng) {
+        this(worldGrid, seasonTracker, config, buffRegistry, fertilityConfig, deathFinalizer,
+                envCleanupHooksBean, new ToxinPathGenerator(), rng);
+    }
+
+    /**
+     * Package-private test constructor for deterministic Random + explicit
+     * {@link ToxinPathGenerator} injection. Exposes the pinned no-arg
+     * {@code new ToxinPathGenerator()} construction surface to tests
+     * (cycle-6 MEDIUM — 14-02 Task 1 is authoritative).
+     */
+    EnvironmentEngine(WorldGrid worldGrid, SeasonTracker seasonTracker,
+                      EnvironmentConfig config, BuffRegistry buffRegistry,
+                      FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
+                      EnvCleanupHooksBean envCleanupHooksBean,
+                      ToxinPathGenerator toxinPathGenerator, Random rng) {
         this.worldGrid = worldGrid;
         this.seasonTracker = seasonTracker;
         this.config = config;
@@ -164,7 +191,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         this.deathFinalizer = deathFinalizer;
         this.envCleanupHooksBean = envCleanupHooksBean;
         this.rng = rng;
-        this.toxinPathGenerator = new ToxinPathGenerator();
+        this.toxinPathGenerator = toxinPathGenerator;
         int w = worldGrid.getWidth();
         int h = worldGrid.getHeight();
         this.toxinGrid = new byte[w][h];
@@ -210,6 +237,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             advanceMutagen(event.tickNumber());
             resolveMutagenCollisions(event.tickNumber());
             tickBuffsAndInfections(event.tickNumber());
+
+            // Plan 14-04 lightning pipeline (seasonal Poisson, single-tick dual-radius):
+            spawnLightning(event.tickNumber());
 
             buildStatusCaches();
 
@@ -782,6 +812,144 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         return (int) Math.round(tx.baseDamage() * fraction * tx.splashDamageFraction());
     }
 
+    // ── Lightning pipeline (Plan 14-04) ──────────────────────────
+
+    /**
+     * Roll seasonal Poisson for a new lightning strike (D-21, D-22). Single
+     * tick effect — inner-radius damage + outer-ring fertility boost. Uses
+     * sine-scaled lambda during peak season ({@link EnvironmentConfig.Lightning#peakSeason()}
+     * SUMMER by default) and flat {@code offSeasonLambda} elsewhere (same
+     * formula as toxin/mutagen, reused for consistency).
+     *
+     * <p><b>"Attempted-strike" semantics (cycle-6 truth #8).</b> The
+     * {@link #lightningStrikeCount} counter increments EXACTLY once per
+     * successful Poisson roll, BEFORE {@link #applyLightningAt} runs. If
+     * {@code applyLightningAt} throws the counter still reflects the attempt.
+     * This matches {@link #applyLightningAtForTest} so unit-test observations
+     * agree with production behaviour.
+     */
+    void spawnLightning(long tickNumber) {
+        double lambda = seasonalLightningLambda(tickNumber);
+        if (rng.nextDouble() >= lambda) return;
+
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+        int cx = rng.nextInt(w);
+        int cy = rng.nextInt(h);
+
+        // Increment BEFORE apply (attempted-strike semantics).
+        lightningStrikeCount++;
+        applyLightningAt(cx, cy, config.lightning());
+        log.info("Lightning strike: tick={} center=({},{}) inner={} outer={} damage={} fertility={}",
+                tickNumber, cx, cy,
+                config.lightning().innerRadius(), config.lightning().outerRadius(),
+                config.lightning().damage(), config.lightning().fertilityBoost());
+    }
+
+    /**
+     * Peak-season sine-scaled Poisson lambda for lightning (D-27). Off-season
+     * uses the flat {@code offSeasonLambda}. Mirrors {@link #seasonalToxinLambda}
+     * + {@link #seasonalMutagenLambda} — shared sine formula.
+     */
+    double seasonalLightningLambda(long tickNumber) {
+        EnvironmentConfig.Lightning cfg = config.lightning();
+        Season current = seasonTracker.getSeason(tickNumber);
+        if (current != cfg.peakSeason()) {
+            return cfg.offSeasonLambda();
+        }
+        double mult = seasonTracker.getSeasonalMultiplier(tickNumber);
+        double amp = seasonTracker.getConfig().amplitude();
+        double frac = amp > 0.0 ? Math.clamp((mult - (1.0 - amp)) / (2.0 * amp), 0.0, 1.0) : 1.0;
+        return cfg.offSeasonLambda() + (cfg.peakLambda() - cfg.offSeasonLambda()) * frac;
+    }
+
+    /**
+     * Apply a single lightning strike centred at {@code (cx, cy)}.
+     *
+     * <ul>
+     *   <li>{@code dist <= innerRadius}: damage occupant via
+     *       {@link #damageEntityAt} (Particle / BondedPair / CompositeMember
+     *       each via their own {@code withEnergy(max(0, energy - damage))}).</li>
+     *   <li>{@code innerRadius < dist <= outerRadius}: fertility boost —
+     *       {@code cell.withNutrientLevel(min(existing + fertilityBoost, maxLevel))}.</li>
+     * </ul>
+     *
+     * <p>If ANY damage was applied, {@link #markEnvDamageApplied()} is invoked
+     * once at the end so {@link #processEnvDeaths()} sweeps lethal hits same
+     * tick (Plan 14-01 contract). The write path uses {@link WorldGrid#setEntity}
+     * — no {@code clearEntity} — zero-energy occupants are reaped by
+     * {@link DeathFinalizer} via the env-death sweep.
+     *
+     * <p>Toroidal-wrap: both x and y offsets pass through {@link Math#floorMod}
+     * before addressing the grid.
+     */
+    void applyLightningAt(int cx, int cy, EnvironmentConfig.Lightning cfg) {
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+        int inner = cfg.innerRadius();
+        int outer = cfg.outerRadius();
+        int damage = cfg.damage();
+        int boost = cfg.fertilityBoost();
+        int maxNutrient = fertilityConfig.maxLevel();
+        boolean anyDamage = false;
+
+        for (int dx = -outer; dx <= outer; dx++) {
+            for (int dy = -outer; dy <= outer; dy++) {
+                double dist = Math.sqrt((double) (dx * dx + dy * dy));
+                if (dist > outer) continue;
+                int x = Math.floorMod(cx + dx, w);
+                int y = Math.floorMod(cy + dy, h);
+                Cell cell = worldGrid.getCell(x, y);
+
+                if (dist <= inner) {
+                    if (damageEntityAt(x, y, cell, damage)) {
+                        anyDamage = true;
+                    }
+                } else {
+                    // Outer ring (inner < dist <= outer): fertility boost.
+                    int bumped = Math.min(cell.nutrientLevel() + boost, maxNutrient);
+                    worldGrid.setCell(x, y, cell.withNutrientLevel(bumped));
+                }
+            }
+        }
+
+        if (anyDamage) {
+            markEnvDamageApplied();
+        }
+    }
+
+    /**
+     * Damage the occupant at {@code (x, y)} via its typed
+     * {@code withEnergy(max(0, energy - damage))} — no {@code clearEntity}.
+     * Zero-energy writes are reaped by {@link #processEnvDeaths()}.
+     *
+     * @return {@code true} if damage was applied (Particle / BondedPair /
+     *         CompositeMember), {@code false} for Rock / Nutrient / empty.
+     */
+    boolean damageEntityAt(int x, int y, Cell cell, int damage) {
+        Entity occ = cell.occupant();
+        if (occ == null) return false;
+        if (occ instanceof Entity.Particle p) {
+            worldGrid.setEntity(x, y, p.withEnergy(Math.max(0, p.energy() - damage)));
+            return true;
+        }
+        if (occ instanceof Entity.BondedPair bp) {
+            worldGrid.setEntity(x, y, bp.withEnergy(Math.max(0, bp.energy() - damage)));
+            return true;
+        }
+        if (occ instanceof Entity.CompositeMember cm) {
+            worldGrid.setEntity(x, y, cm.withEnergy(Math.max(0, cm.energy() - damage)));
+            return true;
+        }
+        // Rock / Nutrient: no lightning damage.
+        return false;
+    }
+
+    /** Monotonic count of lightning strikes attempted (fired). */
+    public long lightningStrikeCount() {
+        return lightningStrikeCount;
+    }
+
     // ── Corpse compost (D-24, D-25) ───────────────────────────────
 
     @Override
@@ -874,6 +1042,18 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             worldGrid.setEntity(x, y, cm.withEnergy(0));
             markEnvDamageApplied();
         }
+    }
+
+    /**
+     * Test helper — fire a single lightning strike at {@code (cx, cy)} while
+     * bypassing the seasonal Poisson roll. Preserves the production
+     * "attempted-strike" counter ordering — {@link #lightningStrikeCount} is
+     * incremented BEFORE {@link #applyLightningAt} runs, matching
+     * {@link #spawnLightning} exactly.
+     */
+    void applyLightningAtForTest(int cx, int cy) {
+        lightningStrikeCount++;
+        applyLightningAt(cx, cy, config.lightning());
     }
 
     Map<Position, Byte> cellStatusCacheView() {
