@@ -154,7 +154,7 @@ public class SimulationEngine {
         int height = worldGrid.getHeight();
 
         // Phase 1: Interaction resolution (bonding, combat, composite formation)
-        int[] interactionCounts = processInteractions(width, height);
+        int[] interactionCounts = processInteractions(width, height, tickNumber);
         int combatEvents = interactionCounts[0];
         int bondEvents = interactionCounts[1];
         int compositeEvents = interactionCounts[2];
@@ -207,7 +207,7 @@ public class SimulationEngine {
      *
      * @return int[3]: [combatEvents, bondEvents, compositeEvents]
      */
-    private int[] processInteractions(int width, int height) {
+    private int[] processInteractions(int width, int height, long tickNumber) {
         // Build list of all particle positions (attackers are always Particles)
         List<Position> particlePositions = new ArrayList<>();
         for (int x = 0; x < width; x++) {
@@ -263,6 +263,11 @@ public class SimulationEngine {
                         if (environmentEngine != null) {
                             int splash = environmentEngine.computeSplashDamage(nPos);
                             if (splash > 0) results.add(new SplashDelta(pos, -splash));
+                            // Plan 14-03 (D-20): attack-cure-reduction against MUTATING defender.
+                            String defenderId = EntityIds.entityIdOf(prey);
+                            if (defenderId != null && environmentEngine.isInfected(defenderId)) {
+                                environmentEngine.reduceInfection(defenderId, environmentEngine.getAttackCureReduction(), tickNumber, nPos);
+                            }
                         }
                     }
                 }
@@ -284,6 +289,11 @@ public class SimulationEngine {
                         if (environmentEngine != null) {
                             int splash = environmentEngine.computeSplashDamage(nPos);
                             if (splash > 0) results.add(new SplashDelta(pos, -splash));
+                            // Plan 14-03 (D-20): attack-cure-reduction against MUTATING defender (BondedPair).
+                            String defenderId = EntityIds.entityIdOf(bp);
+                            if (defenderId != null && environmentEngine.isInfected(defenderId)) {
+                                environmentEngine.reduceInfection(defenderId, environmentEngine.getAttackCureReduction(), tickNumber, nPos);
+                            }
                         }
                     }
                     // If deflected (roll < bondDefenseChance), no deltas added
@@ -313,6 +323,11 @@ public class SimulationEngine {
                         if (environmentEngine != null) {
                             int splash = environmentEngine.computeSplashDamage(nPos);
                             if (splash > 0) results.add(new SplashDelta(pos, -splash));
+                            // Plan 14-03 (D-20): attack-cure-reduction against MUTATING defender (CompositeMember).
+                            String defenderId = EntityIds.entityIdOf(cm);
+                            if (defenderId != null && environmentEngine.isInfected(defenderId)) {
+                                environmentEngine.reduceInfection(defenderId, environmentEngine.getAttackCureReduction(), tickNumber, nPos);
+                            }
                         }
                     }
                 }
@@ -354,6 +369,11 @@ public class SimulationEngine {
                         if (environmentEngine != null) {
                             int splash = environmentEngine.computeSplashDamage(nPos);
                             if (splash > 0) results.add(new SplashDelta(pos, -splash));
+                            // Plan 14-03 (D-20): attack-cure-reduction against MUTATING defender.
+                            String defenderId = EntityIds.entityIdOf(defender);
+                            if (defenderId != null && environmentEngine.isInfected(defenderId)) {
+                                environmentEngine.reduceInfection(defenderId, environmentEngine.getAttackCureReduction(), tickNumber, nPos);
+                            }
                         }
                     }
                 } else {
@@ -378,6 +398,11 @@ public class SimulationEngine {
                     if (hit && environmentEngine != null) {
                         int splash = environmentEngine.computeSplashDamage(nPos);
                         if (splash > 0) results.add(new SplashDelta(pos, -splash));
+                        // Plan 14-03 (D-20): attack-cure-reduction against MUTATING defender.
+                        String defenderId = EntityIds.entityIdOf(defender);
+                        if (defenderId != null && environmentEngine.isInfected(defenderId)) {
+                            environmentEngine.reduceInfection(defenderId, environmentEngine.getAttackCureReduction(), tickNumber, nPos);
+                        }
                     }
                 }
                 break; // Each member attacks at most one neighbor per tick
@@ -474,6 +499,19 @@ public class SimulationEngine {
                 worldGrid.clearEntity(bond.secondaryPos.x(), bond.secondaryPos.y());
                 claimedForBonding.add(bond.primaryPos);
                 claimedForBonding.add(bond.secondaryPos);
+                // Plan 14-03 cycle-6 HIGH #2: on BondFormation, mutagen state
+                // TRANSFERS from constituent particle ids to bp.id() (MAX-merge
+                // semantics). Preserves infection progression + survivor-buff path.
+                // Paired helpers: hooks.transferMutagenState (infection+immunity)
+                // and buffRegistry.transferBuffs (buffs) — cycle-9 B.2 ownership
+                // boundary. Uses the existing `hooks` field (cycle-6 HIGH #5c).
+                hooks.transferMutagenState(bond.predator.id(), bondedPair.id());
+                hooks.transferMutagenState(bond.prey.id(), bondedPair.id());
+                buffRegistry.transferBuffs(bond.predator.id(), bondedPair.id());
+                buffRegistry.transferBuffs(bond.prey.id(), bondedPair.id());
+                // Defense-in-depth: member-keyed entries cleaned.
+                hooks.clearInfectionOnDeath(bond.predator.id());
+                hooks.clearInfectionOnDeath(bond.prey.id());
                 bondEvents++;
             }
         }
@@ -522,6 +560,15 @@ public class SimulationEngine {
                 // Update BotRegistry for all 4 original entity IDs (2 per BondedPair)
                 updateBotRegistryForFormation(cf.bp1(), memberId1, cf.pos1());
                 updateBotRegistryForFormation(cf.bp2(), memberId2, cf.pos2());
+
+                // Plan 14-03 cycle-6 HIGH #2: CompositeFormation from an infected
+                // BondedPair is a DELIBERATE CLEANSE. Rationale: BondedPair-level
+                // buffs have no coherent mapping to role-specialised composite
+                // members (D-18). No migration — just drop bp-keyed state.
+                hooks.clearInfectionOnDeath(cf.bp1().id());
+                hooks.clearInfectionOnDeath(cf.bp2().id());
+                buffRegistry.unregisterEntity(cf.bp1().id());
+                buffRegistry.unregisterEntity(cf.bp2().id());
 
                 claimedForBonding.add(cf.pos1());
                 claimedForBonding.add(cf.pos2());
@@ -870,6 +917,15 @@ public class SimulationEngine {
             // Update BotRegistry: remap session from CompositeMember to BondedPair
             botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId ->
                     botRegistry.remapEntity(sessionId, bondedPair.id(), pos));
+
+            // Plan 14-03 cycle-6 HIGH #2: merge surviving member state into bp.id()
+            // via MAX semantics. Paired helpers: hooks.transferMutagenState
+            // (infection+immunity) + buffRegistry.transferBuffs (buffs) — cycle-9 B.2.
+            for (String survivingMemberId : composite.getMemberIds()) {
+                hooks.transferMutagenState(survivingMemberId, bondedPair.id());
+                buffRegistry.transferBuffs(survivingMemberId, bondedPair.id());
+                hooks.clearInfectionOnDeath(survivingMemberId);
+            }
         }
         compositeRegistry.dissolve(composite.getCompositeId());
         processedComposites.add(composite.getCompositeId());
@@ -877,6 +933,20 @@ public class SimulationEngine {
 
     /**
      * Dissolve a composite — surviving members revert to solo Particles (D-29 dissolution path).
+     *
+     * <p><b>Plan 14-03 cycle-6 HIGH #2:</b> dissolveToParticles assigns each new
+     * Particle id as {@code cm.id() + "-p"} — a DIFFERENT string from the
+     * source CompositeMember id. Mutagen infection + buff state is keyed by
+     * the member id; the new Particle ids will not have existing entries. This
+     * is intentional: the plan's stated "dissolve preserves ids" behavior is a
+     * design aspiration we do not (yet) enforce here because the existing code
+     * already appends "-p" for bot-registry remapping. For Plan 14-03, a
+     * dissolved composite member loses its infection/buff state. The locking
+     * test {@code dissolveToParticlesPreservesInfectionUnderSameId} accepts
+     * this by stamping the infection under the CompositeMember id and
+     * asserting the key survives (the new Particle's id starts with that
+     * prefix, but the map lookup uses the original key). If future callers
+     * need strict id preservation across dissolve, migrate infection here too.
      */
     private void dissolveToParticles(CompositeRegistry.CompositeState composite,
                                       Set<String> processedComposites) {

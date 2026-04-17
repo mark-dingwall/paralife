@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -119,6 +120,30 @@ public class BuffRegistry {
     /** Clear all registrations (for testing). */
     public void clear() {
         byEntity.clear();
+    }
+
+    /**
+     * Plan 14-03 cycle-6 HIGH #2 helper: transfer all active buffs from
+     * {@code fromId} to {@code toId}. Used by SimulationEngine at
+     * identity-transition sites (BondFormation, revertToBondedPair). After
+     * this call, {@code fromId} has no buffs.
+     *
+     * <p>Merge semantics: if {@code toId} already has a buff of the same type,
+     * the existing {@link #grant} dedup keeps the MAX {@code expiryTick}.
+     * Different types concatenate.
+     *
+     * <p>No-op if {@code fromId} has no buffs or if {@code fromId == toId}.
+     */
+    public void transferBuffs(String fromId, String toId) {
+        if (fromId == null || toId == null || fromId.equals(toId)) return;
+        List<ActiveBuff> srcBuffs = byEntity.get(fromId);
+        if (srcBuffs == null || srcBuffs.isEmpty()) return;
+        // Snapshot to avoid concurrent modification during grant() calls.
+        List<ActiveBuff> snap = new ArrayList<>(srcBuffs);
+        for (ActiveBuff b : snap) {
+            grant(toId, b.type(), b.expiryTick());
+        }
+        unregisterEntity(fromId);
     }
 
     /** Number of entities with at least one active buff. */

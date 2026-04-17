@@ -655,6 +655,15 @@ public class ActionResolver {
                     environmentEngine.markEnvDamageApplied();
                 }
             }
+            // Plan 14-03 (D-20): attack-cure-reduction against MUTATING defender.
+            // The enqueue happens during ActionResolver's @Order(20) phase;
+            // EnvPostActionReconciler @Order(25) drains pending grants SAME TICK
+            // via drainPostActionGrants(event.tickNumber()) (cycle-4 action item #2 +
+            // cycle-6 HIGH #5a — LIVE method name resolveAttackerAttack, cycle-4 action item #3).
+            String defenderId = EntityIds.entityIdOf(target);
+            if (defenderId != null && environmentEngine.isInfected(defenderId)) {
+                environmentEngine.reduceInfection(defenderId, environmentEngine.getAttackCureReduction(), tickNumber, targetPos);
+            }
         }
 
         // Charge active drain from shared pool (graceful degradation: partial drain logged)
