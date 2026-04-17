@@ -92,6 +92,14 @@ public class ActionResolver {
     private EnvironmentEngine environmentEngine;
 
     /**
+     * Plan 14-05: BuffRegistry read surface for buff effect application.
+     * Setter-injected so pre-Phase-14 unit-test constructors continue to
+     * compile without bumping every test fixture. An empty registry is wired
+     * in the setter when Spring doesn't provide one (null-safe default).
+     */
+    private BuffRegistry buffRegistry = new BuffRegistry();
+
+    /**
      * Pending action: sessionId → action. Only the last action per session per tick is kept.
      * Uses AtomicReference swap for atomic drain — see {@link #onTick}.
      */
@@ -144,6 +152,72 @@ public class ActionResolver {
     @Autowired(required = false)
     public void setEnvironmentEngine(@org.springframework.context.annotation.Lazy EnvironmentEngine environmentEngine) {
         this.environmentEngine = environmentEngine;
+    }
+
+    /**
+     * Plan 14-05: setter-inject {@link BuffRegistry} after construction.
+     * Spring wires this automatically via {@link Autowired}; {@code required=false}
+     * keeps pre-Phase-14 unit tests that never set this field working as-is
+     * (they see an empty registry instead of null — no buff effects fire).
+     */
+    @Autowired(required = false)
+    public void setBuffRegistry(BuffRegistry buffRegistry) {
+        if (buffRegistry != null) this.buffRegistry = buffRegistry;
+    }
+
+    /** Package-private read accessor for tests. */
+    BuffRegistry getBuffRegistry() {
+        return buffRegistry;
+    }
+
+    /**
+     * Plan 14-05: walk {@code range} steps in {@code dir} from {@code from},
+     * falling back one step at a time if the far cell is blocked. Returns
+     * the first empty, unclaimed cell at range ≤ {@code range}, or null if
+     * every candidate is blocked. FN-9 fallback: preserves the SPORE
+     * reproduce-range=2 semantic that a range-2 target being blocked falls
+     * back to range-1 (the same fallback is used for MOVEMENT_PLUS_1 moves).
+     *
+     * <p>Package-private so tests can drive the helper directly.
+     */
+    Position findTargetAtRange(Position from, Direction dir, int range,
+                                Set<Position> claimedCells, int w, int h) {
+        if (range < 1) return null;
+        int minCandidate = range > 1 ? range - 1 : 1;
+        for (int candidate = range; candidate >= minCandidate; candidate--) {
+            Position t = from;
+            for (int step = 0; step < candidate; step++) {
+                t = dir.apply(t, w, h);
+            }
+            if (claimedCells.contains(t)) continue;
+            if (worldGrid.getCell(t.x(), t.y()).hasOccupant()) continue;
+            return t;
+        }
+        return null;
+    }
+
+    /**
+     * Plan 14-05 cycle-6 MEDIUM #10 — iterate ONLY LOCOMOTOR members when
+     * checking for MOVEMENT_PLUS_1. A buff on a non-LOCOMOTOR member MUST
+     * NOT trigger the reduced moveInterval — the buff only affects cadence
+     * when it lives on a role that actually moves.
+     *
+     * <p>Package-private so
+     * {@code hasAnyLocomotorMovementBuffSkipsNonLocomotorMembers} can drive
+     * the helper directly.
+     */
+    boolean hasAnyLocomotorMovementBuff(CompositeRegistry.CompositeState composite) {
+        return composite.getMemberIds().stream()
+                .filter(id -> isLocomotor(id, composite))
+                .anyMatch(id -> buffRegistry.hasBuff(id, BuffRegistry.BuffType.MOVEMENT_PLUS_1));
+    }
+
+    private boolean isLocomotor(String memberId, CompositeRegistry.CompositeState composite) {
+        Position pos = composite.getPositionForMember(memberId);
+        if (pos == null) return false;
+        Cell cell = worldGrid.getCell(pos.x(), pos.y());
+        return cell.occupant() instanceof Entity.CompositeMember cm
+                && cm.role() == Entity.Role.LOCOMOTOR;
     }
 
     /**
@@ -302,15 +376,33 @@ public class ActionResolver {
             return false;
         }
 
-        Position target = dir.apply(ra.bot.position(), worldGrid.getWidth(), worldGrid.getHeight());
+        // Plan 14-05: MOVEMENT_PLUS_1 enables a 2-cell hop for SOLO Particle
+        // AND BondedPair (cycle-6 HIGH #3). cycle-9 action C.1: use
+        // bot.entityId() directly — returns Particle.id() for Particle-bound
+        // bots and bp.id() for BondedPair-bound bots. FN-9 fallback preserved
+        // via findTargetAtRange so a range-2 target being blocked falls back
+        // to range-1.
+        String entityId = ra.bot.entityId();
+        boolean hasMoveBuff = entityId != null
+                && buffRegistry.hasBuff(entityId, BuffRegistry.BuffType.MOVEMENT_PLUS_1);
 
-        // Check if cell is already claimed this tick
-        if (claimedCells.contains(target)) {
-            sendResult(ra.sessionId, tickNumber, false, "move", "Cell claimed by another entity");
-            return false;
+        Position target;
+        if (hasMoveBuff) {
+            target = findTargetAtRange(ra.bot.position(), dir, /*range*/ 2, claimedCells,
+                    worldGrid.getWidth(), worldGrid.getHeight());
+            if (target == null) {
+                sendResult(ra.sessionId, tickNumber, false, "move", "Cell claimed or blocked at all ranges");
+                return false;
+            }
+        } else {
+            // Legacy single-step move — preserves pre-Phase-14 failure-reason texts.
+            target = dir.apply(ra.bot.position(), worldGrid.getWidth(), worldGrid.getHeight());
+            if (claimedCells.contains(target)) {
+                sendResult(ra.sessionId, tickNumber, false, "move", "Cell claimed by another entity");
+                return false;
+            }
         }
 
-        // Check target cell
         Cell targetCell = worldGrid.getCell(target.x(), target.y());
         if (targetCell.occupant() instanceof Rock) {
             sendResult(ra.sessionId, tickNumber, false, "move", "Cannot move into rock");
@@ -448,19 +540,11 @@ public class ActionResolver {
         // D-18: walk `reproduceRange` steps in the given direction (SPORE=2, others=1).
         // FN-9: for range > 1 fall back one step closer if the far cell is blocked, so
         // SPORE does not become sterile in dense neighborhoods.
+        // Plan 14-05: extracted into shared {@link #findTargetAtRange} helper so
+        // resolveMove's MOVEMENT_PLUS_1 path reuses the same range-walking logic.
         int range = profile.reproduceRange();
-        int minCandidate = range > 1 ? range - 1 : 1;
-        Position target = null;
-        for (int candidate = range; candidate >= minCandidate; candidate--) {
-            Position t = ra.bot.position();
-            for (int step = 0; step < candidate; step++) {
-                t = dir.apply(t, worldGrid.getWidth(), worldGrid.getHeight());
-            }
-            if (claimedCells.contains(t)) continue;
-            if (worldGrid.getCell(t.x(), t.y()).hasOccupant()) continue;
-            target = t;
-            break;
-        }
+        Position target = findTargetAtRange(ra.bot.position(), dir, range, claimedCells,
+                worldGrid.getWidth(), worldGrid.getHeight());
 
         if (target == null) {
             sendResult(ra.sessionId, tickNumber, false, "reproduce", "Target cell is occupied");
@@ -617,7 +701,14 @@ public class ActionResolver {
             return;
         }
 
-        int damage = config.combatEnergyTransfer();
+        // Plan 14-05 (cycle-4 action item #3): ATTACK_PLUS_1 on the composite
+        // ATTACKER member adds +1 to the base damage. LIVE method name
+        // resolveAttackerAttack (NOT resolveCompositeAttack — dead name gone).
+        int baseDamage = config.combatEnergyTransfer();
+        if (buffRegistry.hasBuff(rca.member.id(), BuffRegistry.BuffType.ATTACK_PLUS_1)) {
+            baseDamage += 1;
+        }
+        int damage = baseDamage;
 
         // Apply true damage (type-agnostic, D-10) to target's individual energy
         if (target instanceof Particle p) {
@@ -815,8 +906,16 @@ public class ActionResolver {
             int colonySize = composite.getMemberCount();
             double speed = (double) locomotorCount / colonySize * compositeConfig.speedConstant();
             int moveInterval = speed >= 1.0 ? 1 : (int) Math.ceil(1.0 / speed);
-            int ticksSince = compositeTicksSinceMove.getOrDefault(compositeId, moveInterval);
-            if (ticksSince < moveInterval) {
+            // Plan 14-05 cycle-6 MEDIUM #10: MOVEMENT_PLUS_1 on ANY LOCOMOTOR
+            // member reduces the effective move interval by 1 (floored at 1).
+            // Non-LOCOMOTOR buffed members do NOT trigger reduced cadence —
+            // the buff only affects cadence when it lives on a role that moves.
+            // Baseline behavior for unbuffed composites is UNCHANGED.
+            int effectiveInterval = hasAnyLocomotorMovementBuff(composite)
+                    ? Math.max(1, moveInterval - 1)
+                    : moveInterval;
+            int ticksSince = compositeTicksSinceMove.getOrDefault(compositeId, effectiveInterval);
+            if (ticksSince < effectiveInterval) {
                 continue; // Skip movement this tick
             }
 

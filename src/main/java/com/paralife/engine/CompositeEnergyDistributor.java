@@ -40,6 +40,11 @@ public class CompositeEnergyDistributor {
     private final WorldGrid worldGrid;
     private final CompositeRegistry compositeRegistry;
     private final CompositeConfig config;
+    /**
+     * Plan 14-05: BuffRegistry injected so UPKEEP_MINUS_1 on a composite
+     * member reduces that member's per-tick passiveDrain by 1 (floored at 0).
+     */
+    private BuffRegistry buffRegistry = new BuffRegistry();
 
     public CompositeEnergyDistributor(WorldGrid worldGrid,
                                        CompositeRegistry compositeRegistry,
@@ -47,6 +52,16 @@ public class CompositeEnergyDistributor {
         this.worldGrid = worldGrid;
         this.compositeRegistry = compositeRegistry;
         this.config = config;
+    }
+
+    /**
+     * Plan 14-05: setter-inject {@link BuffRegistry}. {@code required=false}
+     * preserves pre-Phase-14 tests that construct this bean directly via the
+     * 3-arg ctor (they see the empty-registry default — no buff effects fire).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setBuffRegistry(BuffRegistry buffRegistry) {
+        if (buffRegistry != null) this.buffRegistry = buffRegistry;
     }
 
     @EventListener
@@ -76,6 +91,13 @@ public class CompositeEnergyDistributor {
             }
 
             int passiveDrain = getPassiveDrain(member.role());
+            // Plan 14-05: UPKEEP_MINUS_1 reduces per-member passiveDrain by 1,
+            // floored at 0. Same buff type dedups (BuffRegistry.grant()
+            // replaces existing expiry with max) so multiple grants do NOT
+            // stack numerically — the reduction is always exactly 1.
+            if (buffRegistry.hasBuff(member.id(), BuffRegistry.BuffType.UPKEEP_MINUS_1)) {
+                passiveDrain = Math.max(0, passiveDrain - 1);
+            }
 
             // Phase 1: Decay (drain individual energy, clamp to zero)
             int newEnergy = Math.max(member.energy() - passiveDrain, 0);

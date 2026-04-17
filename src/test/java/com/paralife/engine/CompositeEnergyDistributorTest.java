@@ -208,4 +208,63 @@ class CompositeEnergyDistributorTest {
         assertThat(onTick.isAnnotationPresent(Order.class)).isTrue();
         assertThat(onTick.getAnnotation(Order.class).value()).isEqualTo(15);
     }
+
+    // ════════════════════════════════════════════════════════════════
+    // Plan 14-05: UPKEEP_MINUS_1 reduces per-member passiveDrain
+    // ════════════════════════════════════════════════════════════════
+
+    @Test
+    void compositeUpkeepMinus1ReducesPerMemberPassiveDrain() {
+        // SENSOR passive drain = 1 (defaults). UPKEEP_MINUS_1 on this member
+        // reduces per-member passiveDrain by 1 floored at 0. Pool = 0 so no
+        // healing — isolates drain behavior.
+        BuffRegistry buffRegistry = new BuffRegistry();
+        distributor.setBuffRegistry(buffRegistry);
+
+        String compositeId = "comp-1";
+        String memberId = "m1";
+        placeMember(memberId, compositeId, Role.SENSOR, 50, 100, 3, 3);
+        registerComposite(compositeId, List.of(memberId),
+                Map.of(memberId, new Position(3, 3)), 0, 200);
+
+        buffRegistry.grant(memberId, BuffRegistry.BuffType.UPKEEP_MINUS_1, 1_000L);
+
+        distributor.onTick(new TickEvent(1));
+
+        CompositeMember updated = (CompositeMember) grid.getCell(3, 3).occupant();
+        // Baseline drain = 1, buff reduces to 0 → energy unchanged from 50.
+        assertThat(updated.energy())
+                .as("Plan 14-05: UPKEEP_MINUS_1 reduces SENSOR passive drain from 1 to 0")
+                .isEqualTo(50);
+    }
+
+    @Test
+    void compositeUpkeepStackingWithSameBuffTypeOnOneMemberDoesNotStackNumerically() {
+        // Dedup contract (BuffRegistry truth #2): multiple grant() calls of
+        // the same BuffType on one entity keep ONE active buff with max(expiry).
+        // Therefore passiveDrain is reduced by EXACTLY 1, not 2. A second
+        // grant must NOT drop passiveDrain below 0 or below the first grant's
+        // effect.
+        BuffRegistry buffRegistry = new BuffRegistry();
+        distributor.setBuffRegistry(buffRegistry);
+
+        String compositeId = "comp-1";
+        String memberId = "m1";
+        // LOCOMOTOR baseline passiveDrain = 1 in defaults.
+        placeMember(memberId, compositeId, Role.LOCOMOTOR, 50, 100, 3, 3);
+        registerComposite(compositeId, List.of(memberId),
+                Map.of(memberId, new Position(3, 3)), 0, 200);
+
+        buffRegistry.grant(memberId, BuffRegistry.BuffType.UPKEEP_MINUS_1, 1_000L);
+        buffRegistry.grant(memberId, BuffRegistry.BuffType.UPKEEP_MINUS_1, 2_000L);
+        // Dedup keeps ONE ActiveBuff, expiry = max(1000, 2000) = 2000.
+        assertThat(buffRegistry.getBuffs(memberId)).hasSize(1);
+
+        distributor.onTick(new TickEvent(1));
+        CompositeMember updated = (CompositeMember) grid.getCell(3, 3).occupant();
+        // 50 - max(0, 1-1) = 50. Second grant did NOT drop passiveDrain to -1.
+        assertThat(updated.energy())
+                .as("Buff dedup: two grants of same type = exactly one reduction")
+                .isEqualTo(50);
+    }
 }

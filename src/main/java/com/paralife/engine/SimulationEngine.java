@@ -176,7 +176,7 @@ public class SimulationEngine {
         lastTickBondCount.set(bondEvents);
 
         // Phase 2: Energy decay
-        int decayed = processEnergyDecay(width, height);
+        int decayed = processEnergyDecay(width, height, tickNumber);
 
         // Phase 2.5: Overcrowding penalty
         int overcrowded = processOvercrowding(width, height);
@@ -374,11 +374,19 @@ public class SimulationEngine {
                 if (defender instanceof Entity.CompositeMember cm
                         && cm.compositeId().equals(attacker.compositeId())) continue;
 
+                // Plan 14-05: ATTACK_PLUS_1 on this composite-member attacker
+                // adds +1 to the per-hit damage at EVERY in-sim attack site
+                // below (2 sites here: ATTACKER role + position-based RPS).
+                int cmDamage = config.combatEnergyTransfer();
+                if (buffRegistry.hasBuff(attacker.id(), BuffRegistry.BuffType.ATTACK_PLUS_1)) {
+                    cmDamage += 1;
+                }
+
                 if (attacker.role() == Entity.Role.ATTACKER) {
                     // True damage — type-agnostic (D-10)
                     if (defender instanceof Particle || defender instanceof Entity.BondedPair
                             || defender instanceof Entity.CompositeMember) {
-                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                        results.add(new CombatDelta(nPos, -cmDamage));
                         compositeMemberCombats++;
                         // Plan 14-02: toxin splash on composite-member ATTACKER role (in-sim).
                         if (environmentEngine != null) {
@@ -395,17 +403,17 @@ public class SimulationEngine {
                     // Position-based combat: RPS rules based on member's type (D-11)
                     boolean hit = false;
                     if (defender instanceof Particle prey && attacker.type().prey() == prey.type()) {
-                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                        results.add(new CombatDelta(nPos, -cmDamage));
                         compositeMemberCombats++;
                         hit = true;
                     } else if (defender instanceof Entity.BondedPair bp
                             && attacker.type().prey() == bp.primaryType()) {
-                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                        results.add(new CombatDelta(nPos, -cmDamage));
                         compositeMemberCombats++;
                         hit = true;
                     } else if (defender instanceof Entity.CompositeMember cm
                             && attacker.type().prey() == cm.type()) {
-                        results.add(new CombatDelta(nPos, -config.combatEnergyTransfer()));
+                        results.add(new CombatDelta(nPos, -cmDamage));
                         compositeMemberCombats++;
                         hit = true;
                     }
@@ -640,7 +648,7 @@ public class SimulationEngine {
     // CompositeMember energy decay: passive role drain in CompositeEnergyDistributor @Order(15)
     // replaces base energyDecayPerTick. Drain rates are per-role (see CompositeConfig).
 
-    private int processEnergyDecay(int width, int height) {
+    private int processEnergyDecay(int width, int height, long tickNumber) {
         int decayed = 0;
         for (int x = 0; x < width; x++) {
             for (int y = 0; y < height; y++) {
@@ -649,6 +657,17 @@ public class SimulationEngine {
                     // Per-type decay rate (Phase 13 D-02)
                     var profile = metabolicProfile.forType(p.type());
                     int decay = profile.decayPerTick();
+                    // Plan 14-05: UPKEEP_MINUS_1 reduces base decay by 1 with
+                    // modulus-skip at base=1 (D-15: "if already at 1, modulus
+                    // skip — decay fires every other tick").
+                    if (buffRegistry.hasBuff(p.id(), BuffRegistry.BuffType.UPKEEP_MINUS_1)) {
+                        if (decay == 1) {
+                            // Modulus-skip: decay every other tick.
+                            if (tickNumber % 2L != 0L) decay = 0;
+                        } else if (decay > 1) {
+                            decay -= 1;
+                        }
+                    }
                     Particle updated = p;
                     if (decay > 0) {
                         updated = p.withEnergy(p.energy() - decay);
@@ -665,6 +684,17 @@ public class SimulationEngine {
                     // computed at formation via Entity.BondedPair.formBond. This is strictly
                     // <= sum of constituent type decays, making bonding metabolically beneficial.
                     int bondedDecay = bp.effectiveDecayRate();
+                    // Plan 14-05 cycle-6 HIGH #3: UPKEEP_MINUS_1 on a
+                    // BondedPair reduces the effective decay by 1 with the
+                    // same modulus-skip-at-base-1 rule as the solo Particle
+                    // branch above. Keyed by bp.id() (D-15).
+                    if (buffRegistry.hasBuff(bp.id(), BuffRegistry.BuffType.UPKEEP_MINUS_1)) {
+                        if (bondedDecay == 1) {
+                            if (tickNumber % 2L != 0L) bondedDecay = 0;
+                        } else if (bondedDecay > 1) {
+                            bondedDecay -= 1;
+                        }
+                    }
                     Entity.BondedPair updated = bp;
                     if (bondedDecay > 0) {
                         updated = bp.withEnergy(bp.energy() - bondedDecay);
@@ -696,13 +726,22 @@ public class SimulationEngine {
      * Apply starvation attack boost (D-10, D-11) to a base combat value, using
      * the attacker's CURRENT energy to compute intensity. Never reads
      * {@link Cell#FLAG_STARVING} — that flag is observability-only.
+     *
+     * <p>Plan 14-05: ATTACK_PLUS_1 adds a flat +1 to the base BEFORE the
+     * starvation-intensity multiplier (D-15). Buff check lives here so every
+     * solo Particle attack path (combat, bonded-pair defender damage) inherits
+     * the buff uniformly.
      */
     private int applyAttackBoost(int base, Particle attacker, MetabolicProfile.TypeProfile profile) {
+        int boosted = base;
+        if (buffRegistry.hasBuff(attacker.id(), BuffRegistry.BuffType.ATTACK_PLUS_1)) {
+            boosted += 1;
+        }
         double intensity = StarvationConfig.computeIntensity(
                 attacker.energy(), attacker.maxEnergy(),
                 profile.starvationThreshold(), profile.starvationFloor());
-        if (intensity <= 0.0) return base;
-        return (int) (base * (1 + starvationConfig.maxAttackBoost() * intensity));
+        if (intensity <= 0.0) return boosted;
+        return (int) (boosted * (1 + starvationConfig.maxAttackBoost() * intensity));
     }
 
     /** Damage vulnerability boost (D-10, D-11) for Particle defenders. */

@@ -1056,4 +1056,140 @@ class SimulationEngineTest {
             assertThat(updatedSpo.energy()).isEqualTo(50);
         }
     }
+
+    // ════════════════════════════════════════════════════════════════
+    // Plan 14-05: buff effect tests (solo + BondedPair)
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Build a SimulationEngine wired with the 12-arg ctor so a shared
+     * {@link BuffRegistry} is observable to the test. Composite-member death
+     * scenarios are out of scope here — DeathFinalizer is wired with a null
+     * SimulationEngine back-edge which is fine as long as the test doesn't
+     * exercise composite-member deaths.
+     */
+    private SimulationEngine engineWithBuffs(SimulationConfig cfg, BuffRegistry buffs) {
+        var hooks = new DeathCleanupHooks() {
+            @Override public void clearInfectionOnDeath(String entityId) {}
+            @Override public void applyCompost(com.paralife.world.Position deathPos) {}
+            @Override public void transferMutagenState(String fromId, String toId) {}
+        };
+        var compReg = new CompositeRegistry();
+        DeathFinalizer df = new DeathFinalizer(grid, botRegistry, buffs, compReg, hooks,
+                null /* no composite-death path tested here */);
+        return new SimulationEngine(grid, cfg, botRegistry, noBonding(),
+                compReg, CompositeConfig.defaults(),
+                uniformProfile(cfg), StarvationConfig.defaults(), defaultSeasonTracker(),
+                buffs, hooks, df, null /* envEngine null */);
+    }
+
+    @Test
+    void attackPlus1BuffAddsOneToAttackPower() {
+        BuffRegistry buffs = new BuffRegistry();
+        // CATALYST beats SPORE. Attacker has ATTACK_PLUS_1 → combat transfer = base + 1.
+        Particle cat = new Particle("cat", ParticleType.CATALYST, 50);
+        Particle spo = new Particle("spo", ParticleType.SPORE, 50);
+        grid.setEntity(5, 5, cat);
+        grid.setEntity(5, 6, spo);
+
+        buffs.grant("cat", BuffRegistry.BuffType.ATTACK_PLUS_1, 1_000L);
+        engineWithBuffs(combatOnly(), buffs).processTick(1);
+
+        Particle updatedCat = (Particle) grid.getCell(5, 5).occupant();
+        Particle updatedSpo = (Particle) grid.getCell(5, 6).occupant();
+        // Baseline combat (attacker gains, defender loses) = 10. With buff = 11.
+        assertThat(updatedCat.energy() - 50)
+                .as("Plan 14-05: ATTACK_PLUS_1 adds +1 to combat transfer gain")
+                .isEqualTo(11);
+        assertThat(50 - updatedSpo.energy())
+                .as("Plan 14-05: ATTACK_PLUS_1 adds +1 to damage dealt")
+                .isEqualTo(11);
+    }
+
+    @Test
+    void upkeepMinus1BuffReducesDecayByOne() {
+        BuffRegistry buffs = new BuffRegistry();
+        Particle p = new Particle("e1", ParticleType.CATALYST, 50);
+        grid.setEntity(5, 5, p);
+        buffs.grant("e1", BuffRegistry.BuffType.UPKEEP_MINUS_1, 1_000L);
+
+        // Use decayOnly(3) — base decay 3 → with buff 2.
+        engineWithBuffs(decayOnly(3), buffs).processTick(1);
+
+        Particle updated = (Particle) grid.getCell(5, 5).occupant();
+        assertThat(50 - updated.energy())
+                .as("UPKEEP_MINUS_1: base decay 3 → 2 with buff")
+                .isEqualTo(2);
+    }
+
+    @Test
+    void upkeepMinus1BuffSkipsDecayEveryOtherTickWhenBaseDecayIsOne() {
+        BuffRegistry buffs = new BuffRegistry();
+        Particle p = new Particle("e1", ParticleType.CATALYST, 50);
+        grid.setEntity(5, 5, p);
+        buffs.grant("e1", BuffRegistry.BuffType.UPKEEP_MINUS_1, 1_000L);
+
+        SimulationEngine engine = engineWithBuffs(decayOnly(1), buffs);
+        // Modulus-skip convention: decay applies on even ticks, skipped on odd.
+        // Tick 2 (even): decay = 1, energy drops 50 → 49.
+        // Tick 3 (odd): decay skipped, energy stays at 49.
+        engine.processTick(2L);
+        int evenAfter = ((Particle) grid.getCell(5, 5).occupant()).energy();
+        engine.processTick(3L);
+        int oddAfter = ((Particle) grid.getCell(5, 5).occupant()).energy();
+        assertThat(evenAfter).as("even-tick decay applies (base 1 → 1)").isEqualTo(49);
+        assertThat(oddAfter).as("odd-tick decay skipped by modulus-skip rule").isEqualTo(49);
+    }
+
+    @Test
+    void bondedPairWithAttackPlusOneBuffIsNoOp() {
+        // cycle-9 action C.2: SimulationEngine.processInteractions has NO
+        // BondedPair-aggressor emission sites — BondedPair appears only as
+        // DEFENDER. Granting ATTACK_PLUS_1 to bp.id() must produce NO damage
+        // sourced from the BondedPair. The target remains unscathed (beyond
+        // its legitimate role as DEFENDER in Case 2).
+        //
+        // This test stages a scenario where, if a BondedPair-aggressor path
+        // existed, the bp's ATTACK_PLUS_1 would land a +1 on the target. We
+        // verify the target's energy is UNCHANGED (no aggressor delta fired
+        // from bp).
+        BuffRegistry buffs = new BuffRegistry();
+        Entity.BondedPair bp = new Entity.BondedPair("bp1", ParticleType.CATALYST,
+                ParticleType.MEMBRANE, 100, 200);
+        // Place a non-predator type adjacent so no Particle-as-attacker path fires
+        // against the bp (need a type that DOESN'T predate primaryType=CATALYST).
+        // Particle-vs-BondedPair Case 2 fires when attacker.type() == bp.primaryType().predator().
+        // predator(CATALYST) = MEMBRANE. So a SPORE target will NOT trigger Case 2.
+        Particle tgt = new Particle("tgt", ParticleType.SPORE, 100);
+        grid.setEntity(5, 5, bp);
+        grid.setEntity(5, 6, tgt);
+        buffs.grant(bp.id(), BuffRegistry.BuffType.ATTACK_PLUS_1, 1_000L);
+
+        engineWithBuffs(combatOnly(), buffs).processTick(1);
+
+        Particle tgtAfter = (Particle) grid.getCell(5, 6).occupant();
+        assertThat(tgtAfter.energy())
+                .as("cycle-9 C.2: ATTACK_PLUS_1 on BondedPair is a no-op — no BondedPair-aggressor path in current model")
+                .isEqualTo(100);
+    }
+
+    @Test
+    void bondedPairWithUpkeepBuffReducesDecayByOne() {
+        // cycle-6 HIGH #3: UPKEEP_MINUS_1 on a BondedPair reduces its
+        // effective decay rate by 1 (with modulus-skip at base=1).
+        BuffRegistry buffs = new BuffRegistry();
+        // BondedPair with effectiveDecayRate = 2 (hybrid vigor of two decay-1 types).
+        Entity.BondedPair bp = new Entity.BondedPair("bp1", ParticleType.CATALYST,
+                ParticleType.MEMBRANE, 100, 200, "a", "b", 2, 10, 10);
+        grid.setEntity(5, 5, bp);
+        buffs.grant(bp.id(), BuffRegistry.BuffType.UPKEEP_MINUS_1, 1_000L);
+
+        engineWithBuffs(decayOnly(1), buffs).processTick(1L);
+
+        Entity.BondedPair after = (Entity.BondedPair) grid.getCell(5, 5).occupant();
+        // Base effective decay = 2, with buff = 1 → energy dropped by 1.
+        assertThat(100 - after.energy())
+                .as("cycle-6 HIGH #3: BondedPair UPKEEP_MINUS_1 reduces decay by 1")
+                .isEqualTo(1);
+    }
 }
