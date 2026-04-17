@@ -85,6 +85,52 @@ paralife:
     seasons:
       year-length-ticks: 200
       amplitude: 0.5
+    # Phase 14: environmental-rules (D-30, D-48). Four effects: lightning,
+    # toxin, mutagen, corpse compost. `seed` key deliberately OMITTED — production
+    # runs with unseeded Random (cycle-6 HIGH #1); tests bind via @TestPropertySource.
+    events:
+      enabled: true
+      lightning:
+        peak-season: SUMMER
+        peak-lambda: 0.04
+        off-season-lambda: 0.005
+        inner-radius: 2
+        outer-radius: 4
+        damage: 40
+        fertility-boost: 25
+      toxin:
+        peak-season: AUTUMN
+        peak-lambda: 0.03
+        off-season-lambda: 0.005
+        path-points-min: 4
+        path-points-max: 8
+        path-offset-min: 5
+        path-offset-max: 25
+        speed: 3
+        lifetime-ticks: 80
+        diffusion-radius: 3
+        decay-rate: 0.1
+        splash-damage-fraction: 0.2
+        resistance:
+          catalyst: 1.0
+          membrane: 0.7
+          spore: 1.3
+      mutagen:
+        peak-season: SPRING
+        peak-lambda: 0.02
+        off-season-lambda: 0.0025
+        infection-duration-min: 20
+        infection-duration-max: 30
+        buff-duration-multiplier: 10
+        cure-ticks: 5
+        attack-cure-reduction: 3
+        damage-per-tick: 2
+        strain-mutation-chance: 0.1
+        gossip-probability: 0.3
+        zone-decay-ticks: 50
+      compost:
+        full-strength: 30
+        half-strength: 15
   bonding:
     bond-energy-threshold: 50
     bonding-probability: 0.10

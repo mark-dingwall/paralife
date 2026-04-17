@@ -185,20 +185,37 @@ public sealed interface Messages {
      * environmental flags (e.g. {@code FLAG_OVERCROWDED=1}, {@code FLAG_STARVING=2}).
      * Bots can inspect these to target weakened entities (cornered-animal D-10).
      *
+     * <p>Phase 14 Plan 01 adds {@code cellStatus} and {@code entityStatus} byte
+     * bitfields (D-36 through D-39). Projected from EnvironmentEngine's status
+     * caches — not stored on {@link com.paralife.world.Cell} directly
+     * (authoritative design decision per 14-01-PLAN.md <deviations>).
+     *
+     * <p>Back-compat: 3-arg and 4-arg constructors preserved so Phase 13 tests
+     * and callers continue to compile.
+     *
      * @param occupantType   entity type name or {@code null} for empty
      * @param occupantId     entity id or {@code null} for empty
      * @param nutrientLevel  soil fertility level
      * @param flags          bitfield of Cell flags (0 = none)
+     * @param cellStatus     6-bit projected cell-status bitfield (D-38)
+     * @param entityStatus   6-bit projected entity-status bitfield (D-39)
      */
     record CellView(
             String occupantType,
             String occupantId,
             int nutrientLevel,
-            int flags
+            int flags,
+            byte cellStatus,
+            byte entityStatus
     ) {
-        /** Back-compat 3-arg constructor — defaults {@code flags} to 0. */
+        /** Back-compat 3-arg constructor — defaults {@code flags} and statuses to 0. */
         public CellView(String occupantType, String occupantId, int nutrientLevel) {
-            this(occupantType, occupantId, nutrientLevel, 0);
+            this(occupantType, occupantId, nutrientLevel, 0, (byte) 0, (byte) 0);
+        }
+
+        /** Back-compat 4-arg constructor — defaults statuses to 0. */
+        public CellView(String occupantType, String occupantId, int nutrientLevel, int flags) {
+            this(occupantType, occupantId, nutrientLevel, flags, (byte) 0, (byte) 0);
         }
     }
 }
