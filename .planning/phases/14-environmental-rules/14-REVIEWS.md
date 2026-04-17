@@ -1,7 +1,8 @@
 ---
 phase: 14
-reviewers: [gemini, codex]
-reviewed_at: 2026-04-17T07:36:29Z
+cycle: 5
+reviewers: [gemini, claude, codex]
+reviewed_at: 2026-04-17T09:45:25Z
 plans_reviewed:
   - 14-01-PLAN.md
   - 14-02-PLAN.md
@@ -9,376 +10,405 @@ plans_reviewed:
   - 14-04-PLAN.md
   - 14-05-PLAN.md
   - 14-06-PLAN.md
-cycle: 4
 ---
 
-# Cross-AI Plan Review — Phase 14: Environmental Rules (cycle 4)
+# Cross-AI Plan Review — Phase 14 — Cycle 5
 
 ## Gemini Review
 
-This review evaluates implementation plans 14-01 through 14-06 for introductory environmental rules. These plans represent the **cycle 4** revision, incorporating exhaustive feedback from cycle 3 regarding bean cycles, same-tick death semantics, and execution model alignment.
+This review evaluates implementation plans 14-01 through 14-06 for Phase 14: Environmental Rules. These plans represent the **cycle 5** revision, having incorporated exhaustive feedback from cycle 4 regarding structural bean cycles, same-tick action-path semantics, and API misalignments.
 
-### Overall Verdict: READY FOR EXECUTION (with minor fixes)
+### Summary
+The cycle 5 plans are comprehensive, technically rigorous, and perfectly aligned with the existing architecture. The most significant achievement of this revision is the resolution of the **same-tick action-path paradox**: by introducing the `EnvPostActionReconciler` at `@Order(25)`, the engine now correctly finalizes environmental side-effects of bot actions (like lethal toxic splash or attack-triggered cures) before perception is broadcast. The structural bean-cycle resolution using a third state-owning bean (`EnvCleanupHooksBean`) is a textbook Spring solution that maintains clean construction graphs. All prior API naming and test-visibility issues have been corrected.
 
-The cycle 4 plans are of exceptional quality. The "Death Model" conflict that dominated cycle 3 has been elegantly resolved through a narrow interface and canonical Spring patterns. Performance regressions and determinism leaks have been aggressively hunted and closed. The project is ready for execution, provided two small BondedPair cleanup details are addressed.
+### Strengths
+*   **Decoupled State Management**: Moving canonical infection and grant state to `EnvCleanupHooksBean` cleanly breaks the `EnvironmentEngine <-> DeathFinalizer` cycle while providing a single source of truth for cleanup.
+*   **Honest Same-Tick Semantics**: The reconciler pattern acknowledges the tick pipeline sequence and ensures that action-driven env effects (14-02, 14-03) are not deferred, fulfilling the "immediate" contract.
+*   **Exhaustive Combat Coverage**: Buffs and splash damage are meticulously wired across all three attack families (Solo, Composite-in-Sim, Composite-via-Action), ensuring no mechanical gaps.
+*   **Performance Awareness**: optimizations like `nonZeroToxinCellCount` and O(Occupied) scans instead of full-grid scans preserve the "Scale Engineering" focus of the project.
+*   **Composite Consistency**: The fix for composite `SENSOR_PLUS_1` in `stitchSensorCoverage` ensures that multi-cell organisms receive the same utility from buffs as solo entities.
+*   **Validation Rigor**: The split between a deterministic engine harness and a real-WebSocket smoke test provides high confidence without polluting the `BotClient` with test-only seams.
+
+### Concerns
+*   **LOW [Config Complexity]**: The `application.yml` is becoming quite dense with environmental knobs. While necessary for R14, the defaults in `EnvironmentConfig.defaults()` must be strictly maintained to ensure the "out-of-the-box" simulation remains stable.
+*   **LOW [Re-entrancy]**: `processEnvDeaths()` is now re-entrant (called at `@Order(14)` and `@Order(25)`). The `envDamageAppliedThisTick` flag management is correct (resets after sweep), but this adds a small layer of complexity for future developers to track.
+
+### Suggestions
+*   **Documentation**: Ensure the Javadoc for `EnvPostActionReconciler` explicitly calls out that it exists *specifically* to handle side-effects of `ActionResolver`. This is a unique "reconciliation" phase that might confuse future maintainers if not well-documented.
+*   **Metrics**: In Phase 15 (next), consider adding Actuator metrics for the `nonZeroToxinCellCount` and `deathEventCount` to provide live observability into environmental volatility.
+
+### Risk Assessment: LOW
+The plans have successfully navigated two major architectural hurdles (bean cycles and action-phase timing) that typically plague complex simulations. The reliance on established Paralife patterns (shadow registries, immutable records, event orders) makes the implementation predictable. The integration tests specifically target the most delicate areas (composite death rolls and deterministic reproducibility).
+
+**Verdict: READY FOR EXECUTION.** All prior blockers (Codex HIGH/MEDIUM) and cleanup items (Gemini MEDIUM) are resolved.
 
 ---
 
-### Plan 14-01: Foundation
+## Claude Review
+
+# Cycle 5 Review — Phase 14 Plans
+
+## 14-01: Foundation
+
 **Summary**
-Establishes the cross-cutting state and cleanup infrastructure. The centerpiece is the `DeathFinalizer`, which centralizes solo-death cleanup while delegating composite-death decisions back to the `SimulationEngine` to preserve existing 97/3 roll semantics.
+Third-bean DI (`EnvCleanupHooksBean`) genuinely breaks cycle-3's bogus interface-narrowing claim. `SimulationEngine.handleMemberDeath` stays inline + same-tick via @Lazy back-edge. `EnvPostActionReconciler` @Order(25) seam anticipates 14-02/14-03 composite-path needs. Test split into sibling classes matches project convention.
 
 **Strengths**
-- **Cycle Break:** Effectively uses the `DeathCleanupHooks` narrow interface to break the `DeathFinalizer <-> EnvironmentEngine` construction cycle.
-- **Semantic Integrity:** Preserves the same-tick graceful-degradation vs. shatter behavior for composite members, addressing the "silent behavior change" risk from cycle 3.
-- **Short-circuiting:** Incorporates the `envDamageAppliedThisTick` flag to avoid wasteful grid scans on idle ticks.
+- Construction order traces cleanly: `EnvCleanupHooksBean` → `DeathFinalizer(@Lazy SE)` → `SimulationEngine(DF)` → `EnvironmentEngine(DF, bean)`. No real cycle.
+- CompostSink setter via @PostConstruct defers coupling to post-construction.
+- `deathEventCount` as explicit observable beats disappeared-position heuristic.
+- Sibling test classes for dissolution-chance pin (0.0 / 1.0) correctly use class-level `@TestPropertySource`.
 
 **Concerns**
-- **MEDIUM [Infection Key Drift]:** `finalizeBondedPairDeath` (Task 2) calls `clearInfectionOnDeath` for the primary and secondary particle IDs. However, Plan 14-03 (Task 2) keys BondedPair infections in the engine map by `bp.id()`. The cleanup must also remove the `bp.id()` key to prevent map leaks.
+- `HIGH` **`EnvironmentConfig.seed()` referenced but field not declared in Task 1 body.** Task 3 `EnvironmentEngine` constructor calls `config.seed() == null ? new Random() : new Random(config.seed())`. Task 1 describes Lightning/Toxin/Mutagen/Compost nested records + `zoneDecayTicks` but no `Long seed` field. Test property sources set `paralife.simulation.events.seed=42`. If field missing, Task 3 will not compile AND seed test properties are silently no-op across all phases. Need to either: (a) add `Long seed` to `EnvironmentConfig` canonical constructor + defaults + yaml, OR (b) document cycle-3 carryover explicitly. This blocks every downstream plan.
+- `MEDIUM` **Plan 01 Task 1 `EnvCleanupHooksBean` uses `Map<String, Object>` / `List<Object>` typed state, later replaced by Plan 03 with `Map<String, Infection>` / `List<PendingGrant>`.** This is breaking within the phase. Works if execution is strictly sequential, but any parallel wave execution of 02+03 would race. Acceptable since `depends_on` is linear, but should note as single-order constraint.
+- `LOW` `DeathFinalizerTest` body shows all 4 cases but frontmatter `must_haves.artifacts` description under-describes that it's Mockito-based (unit-scope only, not @SpringBootTest). Minor.
 
 **Suggestions**
-- In `DeathFinalizer.finalizeBondedPairDeath`, add a call to `hooks.clearInfectionOnDeath(bp.id())`.
+- Add `Long seed` field to `EnvironmentConfig` canonical constructor (nullable so prod yaml can omit) + update `defaults()` + add `seed:` key to yaml (commented-out) OR remove `seed` references from test `@TestPropertySource` and use deterministic harness via `new Random(42L)` in package-private test constructor only.
+- Verify `@TestPropertySource` `paralife.simulation.events.seed=42` actually binds — run one test and inspect `EnvironmentConfig.seed()` return.
 
-**Risk Assessment: LOW**
-The architecture is now safe and well-ordered.
-
----
-
-### Plan 14-02: Toxin Spread
-**Summary**
-Introduces the first weather event with smooth spline paths and double-buffered CA diffusion.
-
-**Strengths**
-- **Non-Zero Counter:** Implements the `nonZeroToxinCellCount` O(1) idle-tick optimization.
-- **Consolidated Helpers:** Creates `EntityIds.entityIdOf` to prevent logic duplication across the engine and broadcaster.
-- **Normalised Damage:** Correctly scales intensity (0..255) to a fraction before applying base damage.
-
-**Concerns**
-- None. The plan is technically complete and well-optimized.
-
-**Risk Assessment: LOW**
+**Risk Assessment: MEDIUM-HIGH** — bean cycle fix and same-tick semantics are right. `seed` field ambiguity is a real HIGH compile-blocker. Fix before execution.
 
 ---
 
-### Plan 14-03: Mutagen Outbreak
+## 14-02: Toxin Spread
+
 **Summary**
-Adds a stochastic strain-gossip effect that rewards survivors with buffs.
+BondedPair MAX-resistance explicit. `nonZeroToxinCellCount` fast-path via CA return value is elegant. SplashDelta routes through existing deferred-delta pipeline. ActionResolver composite-attack splash uses `markEnvDamageApplied` + reconciler seam — cycle-4 action item #2 resolved honestly.
 
 **Strengths**
-- **Cure-Path Fix:** Solves the mid-tick eviction bug by carrying `Position` in the `PendingGrant`. Grants now survive if the target is cured by combat earlier in the tick.
-- **O(Attacks) Attack-Cure:** signature for `reduceInfection` now accepts `Position`, eliminating the O(Area) grid scan during the interaction phase.
-- **Alive Gate:** Properly gates buff grants on a post-damage check, preventing post-mortem rewards.
+- 5 SimulationEngine emission sites + 1 ActionResolver site exhaustively enumerated. Grep-verifiable.
+- `EntityIds` helper consolidation prevents drift.
+- `diffuseStep` return-value trick saves O(W*H) idle scan.
+- TOXIN_PRESENT vs TOXIC threshold split documented.
 
 **Concerns**
-- **MEDIUM [Bonding Cleanup]:** Bonding formation replaces two Particles with a `BondedPair`. The plan misses a hook in `SimulationEngine.processInteractions` to clear the infection map for the constituent particles when a bond forms.
+- `MEDIUM` **`ToxinPathGenerator` constructor shape ambiguity.** Plan 04 Task 1 Step 2 creates `new ToxinPathGenerator()` (no-arg). Cycle-3 Pattern 2 in research shows `ToxinPathGenerator(Random rng)`. Plan 02 Task 1 doesn't pin shape explicitly. If constructor requires Random, Plan 04 test won't compile.
+- `LOW` `diffusionRate` added to Toxin record — existing yaml `toxin:` block needs the new key or Spring binding fails (plan says add). Verify yaml `diffusion-rate: 0.5` actually appears.
+- `LOW` Splash writes `Math.max(0, ...)` + `markEnvDamageApplied()` in ActionResolver, but the acceptance criteria only greps for `markEnvDamageApplied` — doesn't assert the splash write itself clamps. Could pass grep while still negative-energy-crashing.
 
 **Suggestions**
-- In `SimulationEngine.processInteractions`, after a `BondFormation` result is applied, call `environmentEngine.clearInfectionOnDeath()` for both the predator and prey IDs.
+- Pin `ToxinPathGenerator` constructor shape in Plan 02 Task 1: either `public ToxinPathGenerator()` with static math, or document Random injection. Update Plan 04 test accordingly.
+- Add acceptance criterion: `grep -n "Math.max(0," src/main/java/com/paralife/engine/ActionResolver.java` returns match inside the splash block.
 
-**Risk Assessment: LOW-MEDIUM** (pending the bonding hook).
+**Risk Assessment: LOW-MEDIUM** — technical design sound; minor ambiguity on ToxinPathGenerator API shape.
 
 ---
 
-### Plan 14-04: Lightning Strike
+## 14-03: Mutagen Outbreak
+
 **Summary**
-Implements a high-impact, single-tick event for damage and fertility.
+Moves shared state into `EnvCleanupHooksBean` (cycle-4 action item #1 propagation). `drainPostActionGrants(long)` body + reconciler drain fires same-tick for composite attack-cures. BondFormation hook clears constituent infections. PendingGrant.position + post-damage-alive gate preserved.
 
 **Strengths**
-- **Deterministic Counter:** Counter semantics are explicitly "attempted-strike" and tested.
-- **Inherited Semantic Test:** Includes a test proving lightning-killed composite members update the registry same-tick via the 14-01 finalizer.
+- Typed-container replacement on the bean is well-scoped.
+- 6 attack-cure sites enumerated with in-scope Position.
+- `composite_attackCureBuffGrantedSameTickViaReconciler` test locks cycle-4 HIGH fix.
+- `bondFormationClearsMemberInfectionsFromCleanupHooks` locks Gemini MEDIUM fix.
 
 **Concerns**
-- None.
+- `HIGH` **Plan 03 Task 2 changes `EnvPostActionReconciler.onTick` to call `drainPostActionGrants(event.tickNumber())`, modifying a file from Plan 01 that IS NOT in Plan 03's `files_modified` frontmatter.** Cross-plan modification without declaration. Autonomous executor may miss it. Also breaks Plan 01's `EnvPostActionReconcilerTest.onTickCallsProcessEnvDeathsThenDrainPostActionGrants` — that test verifies `inOrder.verify(env).drainPostActionGrants()` no-arg; after signature change the verify won't match. Test is not listed as modified in Plan 03.
+- `MEDIUM` Plan 03 says "Ensure `EnvCleanupHooksBean` is injected into SimulationEngine (add to constructor if not already present from Plan 01)." Plan 01 adds `DeathCleanupHooks hooks` (interface) not `EnvCleanupHooksBean` (bean). Plan 03 BondFormation cleanup calls `envCleanupHooksBean.clearInfectionOnDeath(...)` — but `hooks.clearInfectionOnDeath(...)` would work via the interface. Two paths possible; plan should pick one. Injecting the concrete bean when interface already exists is redundant.
+- `LOW` `currentTickForDrain()` helper mentioned then rejected in favor of signature change. Good. But signature change cascades into Plan 01's test stubs without acknowledgment.
 
-**Risk Assessment: LOW**
+**Suggestions**
+- Add `src/main/java/com/paralife/engine/EnvPostActionReconciler.java` AND `src/test/java/com/paralife/engine/EnvPostActionReconcilerTest.java` to Plan 03 `files_modified` frontmatter.
+- Update `EnvPostActionReconcilerTest.onTickCallsProcessEnvDeathsThenDrainPostActionGrants` to verify `drainPostActionGrants(42L)` or `drainPostActionGrants(anyLong())`.
+- Use `hooks` field (DeathCleanupHooks) in BondFormation cleanup instead of injecting `EnvCleanupHooksBean` separately. One field, one source of truth.
+
+**Risk Assessment: MEDIUM-HIGH** — semantics right, but file/test tracking gap on the reconciler signature change is a real HIGH execution-blocker.
 
 ---
 
-### Plan 14-05: Perception & Buffs
+## 14-04: Lightning Strike
+
 **Summary**
-Wires environmental state into bot perception and applies active buffs to simulation logic.
+Dual-radius + fertility clean. 'Attempted-strike' counter documented + tested. Nested `@SpringBootTest` inner class uses REAL `SimulationEngine` (cycle-4 MEDIUM fix for 14-04) — correctly replaces cycle-3's mocked-sim vacuous assertion.
 
 **Strengths**
-- **Composite Movement Redesign:** Correctly modulates the *existing* `moveInterval` speed gate rather than layering a second cooldown system. Baseline behavior for unbuffed composites is strictly preserved.
-- **Live Config Read:** Vision-scoped overcrowding uses the live `simulationConfig` instance rather than a static constant.
-- **Exhaustive Attack Wiring:** Applies `ATTACK_PLUS_1` to all 6 attack sites identified in cycle 3.
+- `lightningStrikeCount++` in BOTH prod spawn AND test helper before apply — ordering invariant locked.
+- Inner class `CompositeCleanupIntegration` `@Nested @SpringBootTest` is valid JUnit 5; `@TestPropertySource` pins dissolution-chance=0.0.
+- Uses real `CompositeRegistry.register(String, List, Map, int, int)` signature.
 
 **Concerns**
-- None.
+- `MEDIUM` Same `ToxinPathGenerator` constructor ambiguity as 14-02 — `new ToxinPathGenerator()` no-arg in test setup will fail if constructor requires Random.
+- `LOW` LightningTest mocked unit-test setup manually constructs the full dep graph (`BotRegistry`, `BuffRegistry`, `mock(CompositeRegistry)`, `mock(SimulationEngine)`, `DeathFinalizer`, `EnvCleanupHooksBean`, `EnvironmentEngine`, `SeasonTracker`, `SeasonsConfig`, `FertilityConfig`, `ToxinPathGenerator`, `Random`). That's 11+ constructor dependencies — brittle. Any future constructor change breaks all 10+ unit tests.
 
-**Risk Assessment: LOW**
+**Suggestions**
+- Test-builder helper (e.g. package-private `EnvironmentEngineFixtures.newEngineWithMocks(Random rng)`) would absorb constructor churn. Not blocking but improves resilience.
+- Confirm `ToxinPathGenerator` no-arg constructor exists.
+
+**Risk Assessment: LOW** — design and test integrity sound once ToxinPathGenerator shape is pinned.
 
 ---
 
-### Plan 14-06: Integration Test
+## 14-05: Perception & Buffs
+
 **Summary**
-Splits validation into a deterministic engine-only harness and a full-stack smoke test.
+`SENSOR_PLUS_1` propagates to composite `stitchSensorCoverage` per-member (cycle-4 action item #8). `MOVEMENT_PLUS_1` composite reuses existing `moveInterval` via `effectiveInterval = max(1, moveInterval - 1)` — no parallel cooldown. All 6 `ATTACK_PLUS_1` sites enumerated. `OVERCROWDED_THRESHOLD_DEFAULT = 6` matches shipped config.
 
 **Strengths**
-- **Honest Determinism:** Scopes the determinism test to `onTickEnvOnlyForTest`, acknowledging that `SimulationEngine`'s use of `ThreadLocalRandom` is unreseedable.
-- **Full Wipe:** Uses `WorldGrid.clear()` in resets to prevent nutrient/compost leakage across runs.
-- **Capture Pattern:** Reuses existing WebSocket capture patterns instead of invasive `BotClient` modifications.
+- Per-SENSOR-member radius in stitched coverage is the right shape — not a global composite radius flag.
+- `flags` vs `cellStatus` Javadoc clarifies long-term confusion.
+- `unbuffedCompositeMovementRespectsExistingMoveInterval` baseline test guards against regression.
+- Live-config read for overcrowding threshold (not a public static) matches convention.
 
 **Concerns**
-- None.
+- `LOW` Plan 05 Task 1 extends `PerceptionBroadcaster` constructor to take `EnvironmentEngine + BuffRegistry + SimulationConfig`. Existing autowired tests (`CompositeIntegrationTest`, `PerceptionActionIntegrationTest`) rely on Spring DI and should work, but any direct-construction tests will break. Plan lists `PerceptionBroadcasterTest` as modified — good.
+- `LOW` `hasAnyLocomotorMovementBuff(composite)` grep target specified but loop body not described. If the helper scans all members (not just LOCOMOTORs), buff check may return true when a non-LOCOMOTOR has `MOVEMENT_PLUS_1`. Implementation spec needs "iterate members where role == LOCOMOTOR and check buff."
+- `LOW` Task 3 Plan 05: `BotClient.java` added to `files_modified` for cycle-4 action item #11 but only comment-only change. Satisfies #11 but is misleading in a "what files does this phase touch" scan.
 
-**Risk Assessment: LOW**
+**Suggestions**
+- Spec `hasAnyLocomotorMovementBuff` body explicitly: `return composite.getMemberIds().stream().anyMatch(id -> isLocomotor(id) && buffRegistry.hasBuff(id, MOVEMENT_PLUS_1));`
+- Confirm `PerceptionBroadcaster` constructor DI order is consistent with Spring's auto-resolution (order within @Autowired constructor doesn't matter; positional matters only for test direct-construction).
 
----
-
-### Cycle-3 Follow-up
-
-| Prior Concern | Status | Evidence |
-| :--- | :--- | :--- |
-| **14-01**: DeathFinalizer Cycle | **RESOLVED** | Uses `DeathCleanupHooks` interface break. |
-| **14-01**: Composite Death Semantics | **RESOLVED** | Delegates to `handleMemberDeath` inline same-tick. |
-| **14-02**: BondedPair Resistance Rule | **RESOLVED** | Explicit MAX rule in `resolveToxinCollisions`. |
-| **14-02**: Toxin Idle Scan | **RESOLVED** | `nonZeroToxinCellCount` field + CA step capture. |
-| **14-03**: Cure-path Bug (Eviction) | **RESOLVED** | `PendingGrant` carries `Position` for lookup. |
-| **14-03**: `reduceInfection` Scan | **RESOLVED** | Signature updated to include `Position`. |
-| **14-05**: Composite Move Gate | **RESOLVED** | Modulates existing `moveInterval`. No fields added. |
-| **14-05**: Overcrowded Constant | **RESOLVED** | Constant set to 6; live config read prioritized. |
-| **14-06**: Determinism Leak | **RESOLVED** | Scoped to env-only phases; `WorldGrid.clear()`. |
-| **14-06**: BotClient Scope Creep | **RESOLVED** | Uses `StandardWebSocketClient` capture pattern. |
-| **Cross-Plan**: consolidated entityIdOf | **RESOLVED** | `EntityIds` static utility created. |
-| **Cross-Plan**: flags vs status Javadoc | **RESOLVED** | Added to `Messages.CellView`. |
+**Risk Assessment: LOW** — ships clean once LOCOMOTOR-filter semantic is spec'd explicitly.
 
 ---
 
-### Final Instructions for Execution
+## 14-06: Integration Test
 
-1.  **Modify 14-01 Task 2:** In `DeathFinalizer.finalizeBondedPairDeath`, ensure `hooks.clearInfectionOnDeath(bp.id())` is called.
-2.  **Modify 14-03 Task 3:** In `SimulationEngine`, when the `BondFormation` result is applied, call `environmentEngine.clearInfectionOnDeath` for the predator and prey IDs.
-3.  Proceed with execution wave 1. The architecture is sound.
+**Summary**
+`totalNutrients` observable closes cycle-4 action item #9 fertility-drift gap. `resetForTest` clears EnvCleanupHooksBean maps — cycle-4 action item #1 reset propagation correctly extends to where state moved in 14-03. `onTickEnvOnlyForTest` honest determinism scope. Raw-WebSocket smoke test reuses PerceptionActionIntegrationTest pattern.
+
+**Strengths**
+- `totalNutrients` samples end-of-run — guards the exact compost/lightning invariant the harness exists for.
+- Pre-check asserts `totalNutrients > 0` — fails loudly if compost/lightning path silently stops mutating nutrients. Avoids false-positive equality.
+- RNG reseeding tied to `config.seed()` (pending #14-01 HIGH).
+- Full-wipe `WorldGrid.clear()` in reset avoids fertility leak.
+
+**Concerns**
+- `HIGH` Same `config.seed()` dependency as 14-01. `resetForTest` body: `long seed = config.seed() == null ? 0L : config.seed();` — requires `Long seed` (boxed/nullable) on `EnvironmentConfig`. Blocks compile if 14-01 HIGH not fixed.
+- `MEDIUM` `totalNutrients()` iterates full grid via `worldGrid.getCell(x, y)` (takes read lock per cell). At 256×256 = 65k lock acquisitions. Only called once per run — acceptable — but note that `WorldGrid.getCell` in live source (WorldGrid.java:46-54) takes read lock per call. Could be expensive under contention. At test time, single-threaded, no issue. Document it.
+- `LOW` `EnvironmentDeterminismTest` driver iterates 300 ticks calling `environmentEngine.onTickEnvOnlyForTest(tick)` — but SimulationEngine's `processInteractions` uses `ThreadLocalRandom` and is NOT driven in env-only mode. That's the whole point of "honest env-only scope" — correctly called out. Works only if no Plan-14 code path implicitly triggers SimulationEngine behavior via event publishing. Confirm none of the env methods publish a `TickEvent` or similar.
+
+**Suggestions**
+- After 14-01 HIGH fix on `seed` field, this Plan's `resetForTest` stays as written.
+- Consider caching `worldGrid.snapshot()` for `totalNutrients()` to avoid per-cell lock churn — one snapshot + one iteration. Minor perf polish.
+
+**Risk Assessment: MEDIUM** — blocked on 14-01 `seed` ambiguity; otherwise clean.
+
+---
+
+## Cross-Plan Consensus
+
+### Blocking HIGH issues (must fix before execution)
+
+1. **`EnvironmentConfig.seed` field declaration** — referenced in 14-01, 14-06, and every `@TestPropertySource`. Never shown in Task 1 body. Either add to the record or remove all references. Blocks compile.
+2. **14-03 file tracking gap** — `EnvPostActionReconciler.java` modification + `EnvPostActionReconcilerTest.java` update required but not in `files_modified`. Autonomous executor will leave Plan 01 test broken.
+
+### MEDIUM issues (fix before wave 5/6)
+
+3. **`ToxinPathGenerator` constructor shape** — pin no-arg vs `(Random)` explicitly. Affects 14-02 and 14-04 tests.
+4. **14-03 `hooks` vs `envCleanupHooksBean` field naming** — collapse to one.
+5. **14-05 `hasAnyLocomotorMovementBuff` spec** — explicit role filter.
+
+### What cycle-4 genuinely fixed (both reviewers corroborated)
+
+- True third-bean DI break (14-01) vs cycle-3's interface-narrowing fiction.
+- Composite attack-path same-tick semantics via reconciler @Order(25) (14-02, 14-03).
+- `resolveCompositeAttack` → `resolveAttackerAttack` rename throughout.
+- Real `CompositeRegistry.register` signature in tests.
+- Class-level `@TestPropertySource` sibling classes, no per-method overrides.
+- `totalNutrients` observable closes fertility-drift gap.
+- Composite `SENSOR_PLUS_1` in stitched coverage.
+
+### Overall phase risk
+
+**MEDIUM** — architecture is now sound; the surviving HIGH issues are mechanical (missing field, missing file tracking) not design-class. One more targeted replan cycle addressing items 1 and 2 + three MEDIUMs should clear execution. Cycle-4 did the heavy lifting; cycle-5 is final polish.
 
 ---
 
 ## Codex Review
 
-## 14-01
-**Summary**  
-The replan fixes the semantic part of the prior review well: it keeps composite-member death resolution same-tick by delegating back to `SimulationEngine.handleMemberDeath`, and it places `EnvironmentEngine` at `@Order(14)` ahead of `CompositeEnergyDistributor`’s existing `@Order(15)` (`src/main/java/com/paralife/engine/CompositeEnergyDistributor.java:53`). The remaining problem is structural: the claimed bean-cycle fix is not actually a fix in the plan as written, and parts of the test plan no longer match the real registry/test API.
+**Top Findings**
+- `HIGH`: [14-03-PLAN.md](</home/mark/kramtime/paralife/.planning/phases/14-environmental-rules/14-03-PLAN.md:31>) still does not define how mutagen state survives identity-changing transitions. Current bond/composite transitions create new ids in [SimulationEngine.java](/home/mark/kramtime/paralife/src/main/java/com/paralife/engine/SimulationEngine.java:341) and [SimulationEngine.java](/home/mark/kramtime/paralife/src/main/java/com/paralife/engine/SimulationEngine.java:382), but the plan only clears old keys.
+- `HIGH`: `bp.id()` survivor buffs are granted in 14-03, but 14-05 only wires buff effects for solo Particles and CompositeMembers (`14-03-PLAN.md:31`, `14-05-PLAN.md:33-38`). BondedPair buffs are currently dead state.
+- `HIGH`: [14-06-PLAN.md](</home/mark/kramtime/paralife/.planning/phases/14-environmental-rules/14-06-PLAN.md:21>) overclaims determinism. `onTickEnvOnlyForTest()` still reaches composite death handling, and [SimulationEngine.java](/home/mark/kramtime/paralife/src/main/java/com/paralife/engine/SimulationEngine.java:695) uses `ThreadLocalRandom`.
+- `MEDIUM`: `EnvironmentFullStackSmokeTest` is likely flaky as written: 60 ticks plus one local-perception bot on a 256x256 world does not guarantee any visible status even if events fire (`14-06-PLAN.md:497-501`, `src/main/resources/application.yml:22-33`).
 
-**Strengths**
-- Preserves the existing same-tick 97/3 composite-death semantics by routing env-killed members back through `SimulationEngine.handleMemberDeath` (`14-01-PLAN.md:34-39`; current behavior at `src/main/java/com/paralife/engine/SimulationEngine.java:665-703`).
-- Correctly moves env work to `@Order(14)`, which fits the live pipeline between `SimulationEngine` and `CompositeEnergyDistributor` (`14-01-PLAN.md:30`; `src/main/java/com/paralife/engine/CompositeEnergyDistributor.java:53`).
-- Centralizes shared death cleanup, which should reduce orphaned `BotRegistry`/buff state.
+**14-01**
+Summary: Strong foundation plan. The cycle-breaking bean split, same-tick death model, and reconciler are all well reasoned and line up with the live code’s actual ordering constraints.
 
-**Concerns**
-- `HIGH` The bean cycle is still present. The plan says `DeathFinalizer` depends on `DeathCleanupHooks` implemented by `EnvironmentEngine` (`14-01-PLAN.md:33,54-60`), while `EnvironmentEngine` still injects `DeathFinalizer` (`14-01-PLAN.md:59-60,899-929`). That is still `EnvironmentEngine -> DeathFinalizer -> EnvironmentEngine`, just via an interface.
-- `MEDIUM` The test plan relies on per-method `@TestPropertySource` toggles for dissolution chance (`14-01-PLAN.md:1191-1194,1229-1232`), but the current codebase uses class-level `@TestPropertySource` only (`src/test/java/com/paralife/engine/PerceptionActionIntegrationTest.java:32-39`, `src/test/java/com/paralife/engine/CompositeIntegrationTest.java:46-76`).
-- `MEDIUM` `EnvDeathSweepTest` uses a nonexistent composite registration shape (`14-01-PLAN.md:1212-1213,1252-1253`). The live API is `CompositeRegistry.register(String, List<String>, Map<String, Position>, int, int)`, not `register(CompositeState)` (`src/main/java/com/paralife/engine/CompositeRegistry.java:134-145`).
-- `LOW` The new env tests live under `src/test/java/com/paralife/engine/environment/...` (`14-01-PLAN.md:16-18`) while the plan also leans on package-private test hooks in `com.paralife.engine`; that package split will block access unless those hooks are made public or the tests move into `com.paralife.engine`.
+Strengths:
+- Preserves existing composite death semantics instead of reimplementing them.
+- Fixes the real DI cycle rather than papering over it with interface narrowing.
+- Test design is much tighter than earlier cycles, especially for same-tick composite cleanup.
 
-**Suggestions**
-- Replace the `DeathCleanupHooks` implementation on `EnvironmentEngine` with a separate bean, or invert the dependency so `DeathFinalizer` publishes cleanup events instead of calling back into the engine.
-- Split the dissolution-branch tests into separate classes or use direct unit construction instead of method-level property overrides.
-- Rewrite `EnvDeathSweepTest` against the real `CompositeRegistry.register(...)` signature.
-- Keep env test classes in `com.paralife.engine` if they need package-private helpers.
+Concerns:
+- `MEDIUM`: The plan still explicitly deviates from R13 by using shadow grids plus projected status bits instead of actual `Cell` flags (`14-01-PLAN.md:160-164`). That can turn into a phase-acceptance dispute later.
+- `LOW`: `EnvCleanupHooksBean.applyCompost()` no-oping before sink registration is convenient for isolated tests, but it can also mask a broken runtime wiring path.
 
-**Risk Assessment**  
-`HIGH` — same-tick semantics are fixed, but the construction graph is still unsafe and parts of the test plan will not execute as written.
+Suggestions:
+- Either amend the requirement text up front or add a minimal “authoritative flag projection” explanation in validation docs so R13 is not debated at verify time.
+- Make missing `CompostSink` fail fast after context startup in non-test profiles.
 
----
+Risk Assessment: `MEDIUM` because the design is coherent now, but it is still a large foundational refactor and the R13 deviation remains governance risk.
 
-## 14-02
-**Summary**  
-The toxin plan is materially better than cycle 3: BondedPair resistance is now explicit, the idle-grid scan concern is addressed with `nonZeroToxinCellCount`, and `EntityIds` is consolidated. The remaining gap is on the composite-attack path: toxic splash added inside `ActionResolver` occurs after the env death sweep, so lethal splash damage is not finalized same tick.
+**14-02**
+Summary: Good, focused toxin plan. It covers the right engine seams and correctly handles the special composite action path with the post-action reconciler.
 
-**Strengths**
-- Explicit BondedPair toxin-resistance rule is now defined (`14-02-PLAN.md:449,566-569`).
-- Replaces the O(area) idle-grid scan with `nonZeroToxinCellCount` tracking (`14-02-PLAN.md:42,114-115,505-529`).
-- Consolidates `entityIdOf` into a shared `EntityIds` helper (`14-02-PLAN.md:45,298-325`).
+Strengths:
+- Explicitly covers all attack families, including `resolveAttackerAttack`.
+- Uses a reusable CA helper and an O(1) idle fast path.
+- Normalizes toxin damage by `intensity / 255.0`, avoiding the byte-scaling footgun.
 
-**Concerns**
-- `HIGH` Same-tick death finalization is broken for toxic splash on composite attacks. The plan adds splash inside the composite attack path (`14-02-PLAN.md:756-767`), but `processEnvDeaths()` only runs in `EnvironmentEngine`’s earlier tick phase (`14-01-PLAN.md:42-44`), while `ActionResolver` runs later (`src/main/java/com/paralife/engine/ActionResolver.java:156,573-627`). A lethal splash kill will linger until next tick.
-- `MEDIUM` The plan repeatedly references `ActionResolver.resolveCompositeAttack` (`14-02-PLAN.md:38,66,184,730,738,756`), but the live method is `resolveAttackerAttack` (`src/main/java/com/paralife/engine/ActionResolver.java:573-627`).
-- `MEDIUM` The new tests are in `com.paralife.engine.environment` (`14-02-PLAN.md:262-283`) but the plan also relies on package-private helpers like `ToxinPathGenerator.catmullRom` and env test hooks (`14-02-PLAN.md:268,636-643`).
+Concerns:
+- `LOW`: Current `SimulationEngine.processInteractions()` lets a particle affect multiple neighbors in one tick (`SimulationEngine.java:165-235`), so toxic splash can stack on one attacker multiple times. That may be fine, but the balance implication is not called out.
+- `LOW`: The plan has correctness tests, but no explicit max-grid regression check for radius-N diffusion cost.
 
-**Suggestions**
-- Either move composite toxic splash into a same-tick death path, or explicitly add a post-`ActionResolver` death-finalization phase if splash can kill.
-- Rename all `resolveCompositeAttack` references to `resolveAttackerAttack` in the plan and acceptance criteria.
-- Align test packages with helper visibility.
+Suggestions:
+- Add one test that documents whether multi-hit splash stacking in a single tick is intended.
+- Add a simple “256x256, active toxin, N ticks” bounded smoke/perf assertion.
 
-**Risk Assessment**  
-`MEDIUM` — the toxin model itself is sound, but the composite attack/splash timing bug is real and changes death semantics.
+Risk Assessment: `LOW-MEDIUM`. The architecture is solid; remaining risk is mostly balance and perf tuning.
 
----
+**14-03**
+Summary: This is the most sophisticated plan and the one with the biggest remaining correctness gaps. The cure/grant ordering is much better now, but identity transitions are still under-specified.
 
-## 14-03
-**Summary**  
-The replan does fix the original pending-grant bug and removes the `findOccupantById` hot-path scan. The new issue is timing: the “immediate buff on early cure” contract now works for pre-env combat, but not for the later `ActionResolver` composite-attack path, because the grant queue is only drained during `EnvironmentEngine`’s tick.
+Strengths:
+- `PendingGrant.position` and post-damage alive-gating are the right fixes.
+- Same-tick composite attack-cure handling via the reconciler is well thought through.
+- Structural perf checks are better than wall-clock assertions.
 
-**Strengths**
-- Fixes the original cure-path loss by carrying `Position` in `PendingGrant` (`14-03-PLAN.md:32-38,97-99,287,315-325`).
-- Removes the `findOccupantById` full-grid scan from the hot path (`14-03-PLAN.md:32,99,295,529`).
-- Makes mutagen lifecycle and survivor-buff timing more explicit.
+Concerns:
+- `HIGH`: Bond formation currently clears particle-keyed infections but does not transfer them to the new `bp.id()` infection record (`14-03-PLAN.md:31-32, 418-423`; `SimulationEngine.java:341-375`). That makes bonding an implicit mutagen cleanse.
+- `HIGH`: There is no stated migration/cleanup policy for infected BondedPairs entering composite formation, or for buffed/infected members reverting/dissolving into new ids (`SimulationEngine.java:382-430`, `708-757`). ID-keyed infection/buff state can orphan or silently disappear.
+- `LOW`: The plan modifies `EnvPostActionReconciler` but does not list it in `files_modified`, and Task 1 still says “see prior plan versions” (`14-03-PLAN.md:7-16, 215, 339-349`).
 
-**Concerns**
-- `HIGH` “Receives buff immediately” is still false for composite attacks. The grant queue is applied in `tickBuffsAndInfections` (`14-03-PLAN.md:291-295,386-451`), but the composite cure trigger is wired in the later action phase (`14-03-PLAN.md:711-721`; live attack path at `src/main/java/com/paralife/engine/ActionResolver.java:573-627`). That means composite attack-cures will not update buffs/status/perception until next tick.
-- `MEDIUM` The plan again targets nonexistent `resolveCompositeAttack` sites (`14-03-PLAN.md:58,81,99,630,639,711,721`) instead of `resolveAttackerAttack` (`src/main/java/com/paralife/engine/ActionResolver.java:573-627`).
-- `MEDIUM` The test package/helper mismatch persists: tests are under `src/test/java/com/paralife/engine/environment/MutagenTest.java` (`14-03-PLAN.md:15`) but rely on package-private env hooks and even a package-private field write (`14-03-PLAN.md:567-590,829`).
+Suggestions:
+- Add an explicit state-transition matrix for infection, immunity, and buffs across BondFormation, CompositeFormation, `revertToBondedPair`, and `dissolveToParticles`.
+- If bonding is meant to cure mutagen, make that a locked decision and test it as such; otherwise transfer state into the new id.
+- Make the plan self-contained and sync `files_modified`.
 
-**Suggestions**
-- For the `ActionResolver` composite attack path, either grant the buff inline on cure or add a same-tick post-action infection/buff reconciliation step before perception.
-- Fix all `resolveCompositeAttack` references.
-- Move mutagen tests into `com.paralife.engine` or widen helper visibility intentionally.
+Risk Assessment: `HIGH` because the mutagen feature is materially incorrect until identity-transition behavior is defined.
 
-**Risk Assessment**  
-`MEDIUM` — the original cycle-3 bug is fixed, but the composite early-cure semantics are still wrong.
+**14-04**
+Summary: Clean and low-risk. The plan is narrow, the semantics are clear, and the test strategy now uses the real `SimulationEngine` where it matters.
 
----
+Strengths:
+- Correctly avoids the earlier fake composite cleanup proof.
+- “Attempted-strike” counter semantics are explicit and testable.
+- Same-tick lethal cleanup follows the already-established env-death model.
 
-## 14-04
-**Summary**  
-The lightning design is clean and bounded, and the attempted-strike counter semantics are clearer than before. The weak point is the test harness: the new same-tick composite-death regression test cannot validate what it claims, because it wires `DeathFinalizer` to a mocked `SimulationEngine` while expecting real composite-registry side effects.
+Concerns:
+- `LOW`: The composite cleanup integration test pins `dissolution-chance=0.0`, so it only proves the graceful-degradation branch here.
 
-**Strengths**
-- Dual-radius damage/fertility behavior is well specified.
-- Attempted-strike counter semantics are now explicit (`14-04-PLAN.md:23-25,52-54`).
-- Adds direct same-tick death coverage for lightning, which is the right inheritance from 14-01.
+Suggestions:
+- Explicitly say that shatter-path coverage remains owned by 14-01’s env-death tests, so 14-04 doesn’t look incomplete.
 
-**Concerns**
-- `MEDIUM` `LightningTest` cannot prove same-tick composite cleanup as written. It constructs `DeathFinalizer` with `SimulationEngine sim = mock(SimulationEngine.class)` (`14-04-PLAN.md:286-289`), but then expects `compositeRegistry.removeMember(...)` to have happened (`14-04-PLAN.md:339-353`). That side effect lives behind the real `SimulationEngine.handleMemberDeath` path (`src/main/java/com/paralife/engine/SimulationEngine.java:665-703`), not a mock.
-- `MEDIUM` The test file is again in `com.paralife.engine.environment` (`14-04-PLAN.md:271`) while calling package-private env test hooks like `applyLightningAtForTest` / `processEnvDeathsForTest` (`14-04-PLAN.md:299,333-350`).
+Risk Assessment: `LOW`. No major architectural gaps left here.
 
-**Suggestions**
-- Use a real `SimulationEngine` in the same-tick composite-death lightning test, or reduce the test to verifying delegation only.
-- Align test package and helper visibility before execution.
+**14-05**
+Summary: Strong perception/buff integration plan, but one cross-plan hole remains: BondedPair buffs still do not have a consumer.
 
-**Risk Assessment**  
-`MEDIUM` — the feature plan is fine, but the main regression proof is currently invalid.
+Strengths:
+- Fixes the real composite SENSOR dead-letter issue.
+- Keeps overcrowding runtime-config-driven.
+- Avoids leaking hidden server math into `HeuristicBrain`.
 
----
+Concerns:
+- `HIGH`: 14-03 grants survivor buffs to `bp.id()`, but 14-05 only applies buffs on solo Particles and CompositeMembers (`14-03-PLAN.md:31`; `14-05-PLAN.md:33-38, 47-55`). BondedPair survivors can carry buff records with no gameplay effect.
+- `MEDIUM`: The plan says PerceptionBroadcaster reads cached `cellStatus` and also recomputes vision-scoped overcrowding (`14-05-PLAN.md:28-30, 233-240`), but it never explicitly says bit 0 must be recomposed per bot rather than forwarded from the cache.
+- `LOW-MEDIUM`: Composite `MOVEMENT_PLUS_1` is reinterpreted as faster cadence, not D-15’s range-2 hop. That may be okay, but it is a semantic deviation.
 
-## 14-05
-**Summary**  
-This plan incorporates most of the important cycle-3 feedback: the overcrowding default is corrected to 6, `CellView.flags` vs `cellStatus` is documented, and composite movement now reuses the live `moveInterval` gate instead of inventing a second cooldown model. The remaining miss is composite sensor buffs: solo perception expands to 7x7, but stitched composite sensor coverage is still fixed at 5x5 in the live broadcaster and is not updated in the plan.
+Suggestions:
+- Either define BondedPair buff semantics or explicitly exclude BondedPairs from survivor buffs.
+- Spell out `cellStatus = (envStatus without overcrowded bit) | per-bot overcrowded bit`.
+- Record the composite movement interpretation as an explicit deviation.
 
-**Strengths**
-- Corrects `OVERCROWDED_THRESHOLD_DEFAULT` to match shipped config (`14-05-PLAN.md:27,121,247-248`; `src/main/java/com/paralife/engine/SimulationConfig.java:35-37`; `src/main/resources/application.yml:33`).
-- Fixes the prior composite movement model by reusing `compositeTicksSinceMove` / `moveInterval` (`14-05-PLAN.md:33,96-119,490,561-573`; live gate at `src/main/java/com/paralife/engine/ActionResolver.java:743-771`).
-- Adds the missing `flags` vs `cellStatus` documentation (`14-05-PLAN.md:28,271-295`).
+Risk Assessment: `MEDIUM-HIGH` because the perception work is good, but the BondedPair buff gap is still real.
 
-**Concerns**
-- `MEDIUM` Composite `SENSOR_PLUS_1` is still missing. The plan only expands solo-bot radius in `buildPerception` (`14-05-PLAN.md:248-252,317-340`), but composite vision today comes from `stitchSensorCoverage`, which uses fixed `PERCEPTION_RADIUS` around SENSOR members (`src/main/java/com/paralife/engine/PerceptionBroadcaster.java:205-227`).
-- `MEDIUM` The plan still refers to nonexistent `resolveCompositeAttack` sites (`14-05-PLAN.md:32,44,66,80,209,473,489,613`); the live method is `resolveAttackerAttack` (`src/main/java/com/paralife/engine/ActionResolver.java:573-627`).
-- `LOW` Task 3 modifies `BotClient.java`, but `files_modified` does not list it (`14-05-PLAN.md` task/file metadata drift).
+**14-06**
+Summary: Good split between deterministic and full-stack validation, but this is still the riskiest test plan because the determinism boundary is weaker than claimed and the smoke test is spatially flaky.
 
-**Suggestions**
-- Update `stitchSensorCoverage` so each SENSOR member uses radius 3 when that member has `SENSOR_PLUS_1`.
-- Rename the composite attack hook points to `resolveAttackerAttack` everywhere, including acceptance criteria.
-- Keep the `files_modified` list synchronized with the task body.
+Strengths:
+- `totalNutrients` is the right added invariant.
+- Reuses the existing raw WebSocket capture pattern instead of inventing test-only client code.
+- Reset coverage is much better than earlier cycles.
 
-**Risk Assessment**  
-`MEDIUM` — most cycle-3 issues are fixed, but the composite sensor-buff path is still incomplete.
+Concerns:
+- `HIGH`: `onTickEnvOnlyForTest()` still calls `processEnvDeaths()`, and composite env deaths flow into `SimulationEngine.handleMemberDeath()` randomness (`14-06-PLAN.md:21-27, 169-170`; `SimulationEngine.java:665-703`). The harness is only deterministic if it guarantees no composites ever hit that path.
+- `MEDIUM`: One bot on a 256x256 map is not enough to reliably observe non-zero `cellStatus`/`entityStatus` within ~60 ticks (`14-06-PLAN.md:497-501`).
+- `LOW-MEDIUM`: Key helpers are still omitted as “unchanged from cycle 3”, and `.planning/STATE.md` is modified by Task 4 but missing from `files_modified`.
 
----
+Suggestions:
+- Make the determinism harness explicitly particle-only, or inject deterministic randomness into the composite death branch for test mode.
+- Shrink the world and/or register several bots spread across the map for the smoke test.
+- Inline the omitted helper bodies and sync `files_modified`.
 
-## 14-06
-**Summary**  
-This is a strong correction of the cycle-3 determinism problems. The plan now scopes determinism honestly to env-owned phases, resets with `WorldGrid.clear()`, and uses the existing raw-WebSocket capture pattern instead of inventing BotClient seams. The remaining issue is narrower: the determinism test no longer checks all of the observables the plan claims it will, especially nutrient totals.
+Risk Assessment: `HIGH` because false-determinism and smoke-test flakiness both undercut the value of the final verification layer.
 
-**Strengths**
-- Correctly limits determinism to env-only execution via `onTickEnvOnlyForTest` (`14-06-PLAN.md:23,27,69-92,384-398,517-518`).
-- Fixes the reset leak by using `WorldGrid.clear()` instead of `clearEntity()` (`14-06-PLAN.md:26,96,386,497-506`; current world behavior at `src/main/java/com/paralife/world/WorldGrid.java:103-132`).
-- Reuses the shipped raw-WebSocket capture pattern from `PerceptionActionIntegrationTest` (`14-06-PLAN.md:24,98,630-639,676-687`; current pattern at `src/test/java/com/paralife/engine/PerceptionActionIntegrationTest.java:74-121`).
-
-**Concerns**
-- `MEDIUM` The plan says deterministic double-run assertions include grid-scale nutrient totals (`14-06-PLAN.md:29`), but the proposed `RunObservables` and equality assertions omit them (`14-06-PLAN.md:459-466,488-493`). That weakens coverage for compost/lightning fertility leakage, which is exactly what this harness is meant to guard.
-- `LOW` The same test only snapshots infection count at tick 150, not any nutrient/compost aggregate; if you keep the env-only scope, nutrient totals are the more valuable cross-run invariant.
-
-**Suggestions**
-- Add `totalNutrients` (or center + ring fertility totals) to `RunObservables` and compare it across both runs.
-- Keep the current env-only boundary and raw-WebSocket smoke design; those parts are correct.
-
-**Risk Assessment**  
-`LOW-MEDIUM` — the structure is now right; it just needs one more observability assertion to match its own stated scope.
-
----
-
-## Cycle-3 Follow-Up
-- `14-01 bean cycle` — `UNRESOLVED`. The plan still has `EnvironmentEngine -> DeathFinalizer -> DeathCleanupHooks(EnvironmentEngine)` (`14-01-PLAN.md:33,54-60,899-929`).
-- `14-01 same-tick composite death semantics` — `RESOLVED`. Env-killed composite members are delegated back to `SimulationEngine.handleMemberDeath` same tick (`14-01-PLAN.md:34-39`; `src/main/java/com/paralife/engine/SimulationEngine.java:665-703`).
-- `14-02 BondedPair toxin resistance semantics` — `RESOLVED`. Explicit rule now present (`14-02-PLAN.md:449,566-569`).
-- `14-02 idle toxin-grid scan / non-zero tracking` — `RESOLVED`. `nonZeroToxinCellCount` added (`14-02-PLAN.md:42,114-115,505-529`).
-- `14-03 pending grant lost when cure removes infection entry` — `RESOLVED`. `PendingGrant` now carries `Position` (`14-03-PLAN.md:32-38,97-99,287,315-325`).
-- `14-03 findOccupantById perf regression` — `RESOLVED`. Hot-path grid scan removed (`14-03-PLAN.md:32,99,295,529`).
-- `14-05 composite movement double-gate / fixed cooldown regression` — `RESOLVED`. Buff now modulates existing `moveInterval` (`14-05-PLAN.md:33,96-119,490,561-573`; `src/main/java/com/paralife/engine/ActionResolver.java:743-771`).
-- `14-05 overcrowding default 5 vs shipped 6` — `RESOLVED`. Plan now uses 6 (`14-05-PLAN.md:27,121,247-248`; live defaults at `SimulationConfig.java:35-37` and `application.yml:33`).
-- `14-05 flags vs cellStatus documentation` — `RESOLVED`. Added in `Messages.CellView` plan text (`14-05-PLAN.md:28,271-295`).
-- `14-06 determinism overclaim` — `RESOLVED`. Harness is now env-only, not full-pipeline (`14-06-PLAN.md:23,27,69-92,384-398,517-518`).
-- `14-06 clearEntity reset leak` — `RESOLVED`. Reset now uses `WorldGrid.clear()` (`14-06-PLAN.md:26,96,386,497-506`; live semantics at `WorldGrid.java:103-132`).
-- `14-06 BotClient instrumentation scope creep` — `RESOLVED`. Replaced with raw `StandardWebSocketClient` capture (`14-06-PLAN.md:24,98,630-639,676-687`).
-- `cross-cutting entityIdOf consolidation` — `RESOLVED`. Shared `EntityIds` helper added in toxin plan (`14-02-PLAN.md:45,298-325`).
-- `Gemini grid-scan-density perf debt` — `PARTIAL`. Toxin idle scans are fixed, but the overall phase still intentionally adds several area passes; that is acceptable for Phase 14 but remains perf debt for later scale work.
-
-## Overall Verdict
-**Targeted fixes required before execution.**
-
-The plan set is much closer than cycle 3, and 14-05/14-06 in particular improved substantially. But I would not start execution yet because there are still two correctness-class blockers and several execution mismatches:
-
-- `14-01` still has an unresolved Spring construction cycle.
-- `14-02` and `14-03` still mishandle same-tick semantics on the later `ActionResolver` composite-attack paths.
-- `14-01` through `14-04` contain plan/test mismatches against the real codebase: wrong registry API, wrong method names, and package/test visibility problems.
-
-I would do one more correction pass, not a full phase rewrite. The minimum fix set is:
-1. Rework the `DeathFinalizer`/`EnvironmentEngine` dependency graph so it is actually acyclic.
-2. Rename all `resolveCompositeAttack` references to `resolveAttackerAttack`.
-3. Decide whether composite toxic splash / attack-cure must finalize same tick; if yes, add a post-action finalization step or inline handling.
-4. Fix the env test package/API mismatches.
-5. Extend 14-05 to apply `SENSOR_PLUS_1` to composite stitched vision.
-6. Add nutrient-total assertions to 14-06 determinism coverage.
-
-With those changes, the plans would be ready and would satisfy R12-R14 cleanly.
+**Overall Risk**
+`HIGH`. Plans 14-01, 14-02, and 14-04 are in good shape. The remaining blocking issues are cross-plan: mutagen/buff state does not yet survive identity changes correctly, BondedPair buffs have no defined effect, and the final validation harness still overstates what it can prove.
 
 ---
 
 ## Consensus Summary
 
-Two reviewers; wide verdict gap. **Gemini**: READY FOR EXECUTION (LOW) with two small BondedPair cleanup fixes. **Codex**: TARGETED FIXES REQUIRED before execution — flags a `HIGH` structural bean-cycle blocker on 14-01, `HIGH` same-tick attack-path blockers on 14-02 and 14-03, plus several plan/test mismatches against the real API across 14-01…14-05. Codex's objections are backed by file-and-line evidence against the current codebase; Gemini's approval is architectural but does not cross-check the composite attack path or the Spring construction graph. The planner should treat Codex's verdict as operative and Gemini's as cycle-3-delta-validation (which is useful and mostly corroborates RESOLVED status).
+Cycle 5 replan resolved cycle-4 structural feedback cleanly (true third-bean DI break, reconciler `@Order(25)` same-tick seam, real `CompositeRegistry` signatures, class-level `@TestPropertySource` sibling tests, `totalNutrients` observable). Architecture now sound. Remaining HIGHs are **mechanical / cross-plan tracking gaps** (not design-class) plus **one material correctness hole** in mutagen identity transitions. Gemini approves at LOW risk; Claude flags MEDIUM-HIGH (seed field + 14-03 file tracking); Codex flags HIGH on identity-transition state survival + BondedPair buff dead-letter + false determinism in 14-06 harness.
 
-### Agreed RESOLVED from cycle 3
-- **14-01 same-tick composite-death semantics** — both agree the delegation to `SimulationEngine.handleMemberDeath` preserves the 97/3 graceful-degradation / shatter behavior same tick.
-- **14-02 BondedPair toxin resistance + idle-scan perf** — both confirm explicit rule + `nonZeroToxinCellCount` tracking.
-- **14-03 pending-grant eviction bug + `findOccupantById` hot path** — both confirm `Position` now carried in `PendingGrant` and scan removed.
-- **14-05 composite movement gating + overcrowding default** — both confirm reuse of `moveInterval` and constant correction to 6.
-- **14-05 flags vs cellStatus** — both confirm documentation added.
-- **14-06 determinism scope + reset leak + BotClient scope** — both confirm env-only harness, `WorldGrid.clear()`, raw-WebSocket capture.
-- **Cross-cutting `entityIdOf` consolidation** — both confirm `EntityIds` helper.
+### Agreed Strengths
 
-### Agreed NEW concerns introduced by cycle 4
-- **BondedPair infection-map cleanup gaps** — both flag cleanup hooks missing, but target different call sites:
-  - Gemini (`14-01 MEDIUM`): `finalizeBondedPairDeath` should also clear by `bp.id()` (death path).
-  - Gemini (`14-03 MEDIUM`): `processInteractions` should clear by constituent particle IDs when a `BondFormation` lands (formation path).
-  - Codex does not flag these specifically, but they are structurally consistent with its "map-leak risk" patterns. Fix both sides.
+- Third-bean `EnvCleanupHooksBean` DI cycle break is correct and textbook (gemini, claude).
+- `EnvPostActionReconciler @Order(25)` delivers honest same-tick semantics for action-driven env effects (gemini, claude, codex).
+- `totalNutrients` sampling in 14-06 closes the fertility-drift gap (claude, codex).
+- `resolveAttackerAttack` rename + 6-site enumeration for `ATTACK_PLUS_1` prevent mechanical gaps (gemini, claude).
+- Composite `SENSOR_PLUS_1` in `stitchSensorCoverage` is the right per-member shape (claude, codex).
+- 14-04 real-`SimulationEngine` `@Nested @SpringBootTest` replaces cycle-3's vacuous mocked assertion (claude, codex).
 
-### Divergent Views (Codex-only, load-bearing)
-- **14-01 Spring bean cycle — `UNRESOLVED` (Codex HIGH) vs `RESOLVED` (Gemini)**. Gemini argues the `DeathCleanupHooks` interface breaks the cycle. Codex counters: `DeathFinalizer` still needs a `DeathCleanupHooks` impl (Spring wires `EnvironmentEngine`) while `EnvironmentEngine` still injects `DeathFinalizer` — the cycle persists at bean construction. Interface narrowing is semantic, not topological. Codex is correct on Spring's dependency graph; the named `@Lazy SimulationEngine` is not the right mitigation because the cycle is pre-`SimulationEngine`. Fix: either move the `DeathCleanupHooks` impl onto a distinct bean, invert via `ApplicationEventPublisher`, or use `@Lazy` on one of the two legs. The interface-break claim should be dropped from the plan.
-- **14-02 toxic splash same-tick death on composite attacks — Codex HIGH, Gemini silent**. Codex: splash added inside `ActionResolver` composite attack path can be lethal, but `EnvironmentEngine.processEnvDeaths()` already ran at `@Order(14)`, so splash-kills linger until next tick. Gemini does not analyze the action-resolver timing. Either inline the finalization, add a post-action env-death sweep, or document the one-tick lag as acceptable.
-- **14-03 composite early-cure buff timing — Codex HIGH, Gemini silent**. Same shape as 14-02: composite attack-cures fire in `ActionResolver`, but the pending-grant queue drains in `EnvironmentEngine`'s earlier phase. "Receives buff immediately" is true for solo/env-triggered cures, false for composite attacks. Gemini endorses the race-condition fix without checking the two drain sites. Either grant inline on composite cure, or add a post-action reconciliation step before perception.
-- **Plan/test API mismatches (14-01, 14-02, 14-03, 14-04, 14-05) — Codex MEDIUM, Gemini silent**:
-  - `resolveCompositeAttack` references throughout — the live method is `resolveAttackerAttack` at `ActionResolver.java:573-627`. Blanket rename needed.
-  - `CompositeRegistry.register(CompositeState)` — live API is `register(String, List<String>, Map<String, Position>, int, int)` at `CompositeRegistry.java:134-145`.
-  - Per-method `@TestPropertySource` — codebase only uses class-level.
-  - `com.paralife.engine.environment` test package — tests rely on package-private helpers in `com.paralife.engine`; either move tests up or widen visibility intentionally.
-- **14-05 composite `SENSOR_PLUS_1` gap — Codex MEDIUM, Gemini silent**. `buildPerception` expands solo radius, but `stitchSensorCoverage` (`PerceptionBroadcaster.java:205-227`) still uses fixed `PERCEPTION_RADIUS` around SENSOR members. Composite sensor buffs are dead-letter.
-- **14-06 determinism observability gap — Codex MEDIUM, Gemini silent**. Plan (`14-06:29`) claims double-run assertions include grid-scale nutrient totals; `RunObservables` / equality assertions at `14-06:459-466,488-493` omit them. This is the exact dimension the harness is meant to guard for compost/lightning fertility leakage.
-- **Overall readiness**: Gemini says proceed with wave 1 + two fixes. Codex enumerates six minimum corrections before execution. Recommend Codex's verdict — the bean-cycle and same-tick-attack-path issues are correctness-class, not polish.
+### Agreed Concerns — HIGH (must fix before execution)
 
-### Action Items for Planner (priority order)
-1. **14-01 HIGH — Rework `DeathFinalizer`/`EnvironmentEngine` dependency graph so it is actually acyclic.** `DeathCleanupHooks` interface narrowing does not break the Spring construction cycle. Options: (a) extract hooks into a third bean, (b) use `ApplicationEventPublisher` events for cleanup, (c) add `@Lazy` on the leg that permits it. Drop the "interface-break solves it" claim from plan text.
-2. **14-02 HIGH + 14-03 HIGH — Resolve composite attack-path same-tick semantics.** Toxic splash (14-02) and attack-cure buff grants (14-03) both fire in `ActionResolver.resolveAttackerAttack` *after* `EnvironmentEngine`'s env-death and buff-grant passes. Either: (a) inline death finalization + buff grant in the attack path, (b) add a post-action reconciliation phase at `@Order(~25)`, or (c) document and accept a one-tick lag explicitly (but note this contradicts plan claims).
-3. **14-01..14-05 MEDIUM — Rename all `resolveCompositeAttack` → `resolveAttackerAttack`** in plan bodies, acceptance criteria, and test stubs. The live method name is authoritative.
-4. **14-01 MEDIUM — Fix `EnvDeathSweepTest` to use the real `CompositeRegistry.register(String, List<String>, Map<String, Position>, int, int)` signature.** No `register(CompositeState)` method exists.
-5. **14-01 MEDIUM — Replace per-method `@TestPropertySource` with class-level** (or use constructor-injected config overrides). Match the `PerceptionActionIntegrationTest` / `CompositeIntegrationTest` patterns.
-6. **14-01..14-05 LOW — Resolve env-test package placement vs package-private helper access.** Move tests into `com.paralife.engine` or widen helper visibility intentionally.
-7. **14-01 MEDIUM — Add `hooks.clearInfectionOnDeath(bp.id())`** in `DeathFinalizer.finalizeBondedPairDeath` (Gemini).
-8. **14-03 MEDIUM — Clear infection map by constituent particle IDs on `BondFormation`** in `SimulationEngine.processInteractions` (Gemini).
-9. **14-05 MEDIUM — Propagate `SENSOR_PLUS_1` into `stitchSensorCoverage`** so composite SENSOR members actually expand their stitched radius.
-10. **14-06 MEDIUM — Add `totalNutrients` (or center/ring fertility totals) to `RunObservables`** and include in double-run equality assertion, so compost/lightning fertility drift is actually guarded.
-11. **14-05 LOW — Sync `files_modified` list** with Task 3 body (currently omits `BotClient.java`).
+1. **HIGH — 14-03 mutagen state does NOT survive identity transitions** (codex). Bond formation clears particle-keyed infections but does not transfer to new `bp.id()`; composite formation from infected BondedPair / revert / dissolve paths are unspecified. ID-keyed infection + buff state orphans silently. Locked decision needed: either (a) treat bonding/compositing as implicit mutagen cleanse (and test it), or (b) add explicit state-transition matrix migrating infection + buffs + immunity across BondFormation / CompositeFormation / revertToBondedPair / dissolveToParticles. References: `14-03-PLAN.md:31-32, 418-423`; `SimulationEngine.java:341-375, 382-430, 708-757`.
 
-### Overall Verdict
+2. **HIGH — BondedPair survivor buffs are dead letters** (codex). 14-03 grants buffs to `bp.id()`; 14-05 only wires buff effects for solo `Particle` and `CompositeMember`. Fix: either define BondedPair buff-application semantics in 14-05 (attack/sensor/movement/upkeep for the pair as a unit), or explicitly exclude BondedPairs from survivor grants in 14-03 (cite D-18 composite-role precedent).
 
-**Replan cycle 4 with the 6 Codex-identified correctness fixes + 5 execution-mismatch corrections above.** After that pass, the plans should be genuinely executable and satisfy R12–R14 cleanly. Expected effort: one targeted replan cycle, not a rewrite.
+3. **HIGH — 14-06 `onTickEnvOnlyForTest` determinism claim false** (codex). Harness calls `processEnvDeaths()`, which can reach `SimulationEngine.handleMemberDeath()` which uses `ThreadLocalRandom` (`SimulationEngine.java:665-703`). Fix: either make harness strictly particle-only (skip composite env deaths entirely, or no composites in harness setup), or inject deterministic `Random` into composite death branch under a test flag. Document which path.
+
+4. **HIGH — 14-01 `EnvironmentConfig.seed()` field missing** (claude). Task 1 body lists Lightning/Toxin/Mutagen/Compost nested records + `zoneDecayTicks` but no `Long seed` field. Task 3 calls `config.seed() == null ? new Random() : new Random(config.seed())`; 14-06 `resetForTest` does the same; `@TestPropertySource paralife.simulation.events.seed=42` binds to nothing. Fix: add `Long seed` (nullable) to canonical constructor + `defaults()` + yaml, OR remove all `config.seed()` references.
+
+5. **HIGH — 14-03 cross-plan file-modification tracking gap** (claude, codex). Task 2 changes `EnvPostActionReconciler.drainPostActionGrants` to `(long tickNumber)` signature, modifying a file Plan 01 owns. Breaks Plan 01's `EnvPostActionReconcilerTest.onTickCallsProcessEnvDeathsThenDrainPostActionGrants` (verifies no-arg). Neither file in 14-03 `files_modified` frontmatter. Autonomous executor will leave test broken. Fix: add `EnvPostActionReconciler.java` + `EnvPostActionReconcilerTest.java` to 14-03 `files_modified`; update test to verify `drainPostActionGrants(anyLong())`.
+
+### Agreed Concerns — MEDIUM
+
+6. **MEDIUM — `ToxinPathGenerator` constructor shape unpinned** (claude). 14-02 Task 1 doesn't specify; 14-04 tests use `new ToxinPathGenerator()` (no-arg); cycle-3 research showed `(Random)`. Pin explicitly in 14-02.
+
+7. **MEDIUM — 14-06 full-stack smoke test spatially flaky** (codex). 1 bot on 256×256 grid, 60 ticks — no reliable guarantee of visible non-zero `cellStatus`/`entityStatus`. Fix: shrink world for the smoke test or register several bots spread across the map.
+
+8. **MEDIUM — R13 `Cell flags` requirement deviation** (codex). Phase uses shadow grids + projected status bits instead of actual `Cell` flags per R13 (`14-01-PLAN.md:160-164`). Pre-emptively either amend requirement text or add authoritative flag-projection note in validation docs to avoid verify-time dispute.
+
+9. **MEDIUM — 14-05 composite overcrowded-bit recomposition path unspecified** (codex). `cellStatus` cache already contains a globally-computed OVERCROWDED bit; per-bot vision-scoped recomputation must mask bit 0 from cache and OR per-bot bit. Spell out: `cellStatus = (cached & ~OVERCROWDED) | perBotOvercrowdedBit`.
+
+10. **MEDIUM — 14-05 `hasAnyLocomotorMovementBuff` role-filter unspec** (claude). Current grep spec matches on helper name but doesn't require LOCOMOTOR filter in body. Explicit: `composite.members().stream().filter(m -> role==LOCOMOTOR).anyMatch(m -> buffRegistry.hasBuff(m.id(), MOVEMENT_PLUS_1))`.
+
+### Agreed Concerns — LOW
+
+- 14-01 `DeathFinalizerTest` Mockito scope under-described in frontmatter (claude).
+- 14-02 multi-neighbor splash stacking per tick undocumented (codex).
+- 14-02 missing perf smoke test for max-grid diffusion cost (codex).
+- 14-03 `hooks` (DeathCleanupHooks interface) vs `envCleanupHooksBean` (concrete) dual-path injection — pick one (claude).
+- 14-05 composite `MOVEMENT_PLUS_1` semantic deviation from D-15 (cadence vs range-2 hop) — record explicitly (codex).
+- 14-06 `STATE.md` modified by Task 4 missing from `files_modified` (codex).
+- 14-06 `WorldGrid.getCell` read-lock churn across 65k cells for `totalNutrients` — snapshot + iterate (claude).
+- 14-04 Lightning unit-test builds 11+ dep mocks manually — extract fixtures helper (claude).
+
+### Divergent Views
+
+- **Gemini: LOW risk / phase ready** vs **Claude: MEDIUM-HIGH** vs **Codex: HIGH**. Divergence driven by what each reviewer checked against: gemini reviewed architectural story within the plans themselves; claude cross-referenced plan task bodies against their own frontmatter / test stubs (found file-tracking + field-missing bugs); codex cross-referenced plans against live `SimulationEngine.java` (found identity-transition and determinism reaches into real randomness code). Codex's HIGH findings are material correctness holes that neither other reviewer surfaced — treat codex as authoritative on cross-code correctness.
+
+- **14-06 harness determinism**: claude calls it "MEDIUM — honest scope called out" because the harness intentionally skips `processInteractions`; codex checked the actual `processEnvDeaths → handleMemberDeath` path and found `ThreadLocalRandom` still reachable via composite env deaths. Codex correct; harness scope is narrower than claimed.
+
+- **Mutagen state transitions**: neither gemini nor claude surfaced the identity-transition gap. Codex traced through live `SimulationEngine` transitions and found it. Material feature-correctness bug.
+
+### Recommendation
+
+**Do NOT execute yet.** Run one more focused replan cycle (cycle 6) addressing items 1–5 (HIGH). Suggested scope:
+
+- **14-01 patch**: add `Long seed` field + `defaults()` + yaml line, OR strip all `config.seed()` references from 14-01/14-06.
+- **14-03 patch**: (a) state-transition matrix for infection + buff + immunity across BondFormation / CompositeFormation / revertToBondedPair / dissolveToParticles; (b) add `EnvPostActionReconciler.java` + test to `files_modified`, update test to `anyLong()`; (c) single-field decision (`hooks` vs `envCleanupHooksBean`).
+- **14-05 patch**: BondedPair buff semantics (define or exclude) + overcrowded-bit recomposition spec + LOCOMOTOR filter body.
+- **14-06 patch**: either particle-only harness constraint (no composites registered in harness setup) or test-mode deterministic `Random` injection into `handleMemberDeath`; shrink smoke-test world or add bots.
+- **14-02 patch**: pin `ToxinPathGenerator` constructor shape.
+
+After cycle-6 replan, re-run `/gsd-review --phase 14 --all` — expect all-LOW and green light to execute.
