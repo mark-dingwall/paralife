@@ -124,6 +124,7 @@ public class SimulationEngine {
         this.hooks = new DeathCleanupHooks() {
             @Override public void clearInfectionOnDeath(String entityId) {}
             @Override public void applyCompost(com.paralife.world.Position deathPos) {}
+            @Override public void transferMutagenState(String fromId, String toId) {}
         };
         this.deathFinalizer = new DeathFinalizer(worldGrid, botRegistry, this.buffRegistry,
                 compositeRegistry, this.hooks, this);

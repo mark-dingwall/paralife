@@ -28,4 +28,19 @@ public interface DeathCleanupHooks {
      * {@code CompostSink} collaborator registered post-construction.
      */
     void applyCompost(Position deathPos);
+
+    /**
+     * Plan 14-03 cycle-6 HIGH #2 + HIGH #5c: transfer mutagen state
+     * (infection + cureImmuneUntil) from {@code fromId} to {@code toId} at
+     * identity-transition sites (BondFormation, revertToBondedPair). Merges
+     * using MAX semantics where conflicts exist. After transfer, removes
+     * {@code fromId} entries from the tracked maps. No-op if {@code fromId}
+     * has no state.
+     *
+     * <p><b>cycle-9 action B.2 — ownership boundary:</b> this method migrates
+     * ONLY Infection + cureImmuneUntil. Buff migration is owned by
+     * {@link BuffRegistry#transferBuffs(String, String)}; callers invoke both
+     * helpers in sequence.
+     */
+    void transferMutagenState(String fromId, String toId);
 }

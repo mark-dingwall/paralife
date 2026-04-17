@@ -42,7 +42,7 @@ public class EnvPostActionReconciler {
     public void onTick(TickEvent event) {
         try {
             environmentEngine.processEnvDeaths();
-            environmentEngine.drainPostActionGrants();
+            environmentEngine.drainPostActionGrants(event.tickNumber());
         } catch (RuntimeException ex) {
             log.error("EnvPostActionReconciler.onTick failed at tick {} — continuing pipeline",
                     event.tickNumber(), ex);

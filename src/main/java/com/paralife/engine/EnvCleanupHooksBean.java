@@ -1,5 +1,6 @@
 package com.paralife.engine;
 
+import com.paralife.world.Entity;
 import com.paralife.world.Position;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,14 +27,14 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>{@code pendingBuffGrants} — post-damage-alive-gated buff-grant queue</li>
  * </ul>
  *
- * <p>Infections/maps are populated by EnvironmentEngine in Plan 03. In Plan 01
- * the fields exist (so {@link #clearInfectionOnDeath} is a real no-op on empty
- * maps) but only the test fixtures write to them directly.
+ * <p>Plan 14-03 Task 2: typed containers replace the Plan 01 {@code Object}-keyed
+ * placeholders — {@code Map<String, Infection>} and {@code List<PendingGrant>}.
+ * Public accessors allow {@link EnvironmentEngine} to operate on shared state
+ * without duplicating storage (cycle-4 action item #1).
  *
  * <p>Compost application is delegated: EnvironmentEngine implements
  * {@link CompostSink} and registers itself on this bean via a
- * {@code @PostConstruct} call. The setter runs AFTER both beans construct, so
- * there is no bean cycle.
+ * {@code @PostConstruct} call.
  *
  * <p>cycle-9 action A: implements {@link ApplicationListener} on
  * {@link ContextRefreshedEvent} so a missing CompostSink registration is
@@ -49,6 +51,23 @@ public class EnvCleanupHooksBean implements DeathCleanupHooks,
     public interface CompostSink {
         void applyCompost(Position deathPos);
     }
+
+    /**
+     * Plan 14-03: post-damage-gated buff-grant queue record. Carries its own
+     * {@link Position} so {@code tickBuffsAndInfections} Phase B can look up
+     * the occupant at the captured position rather than via the
+     * {@code infections} map (T-14-03-11 cure-path bug fix).
+     *
+     * @param entityId       id of the entity to grant a buff to (Particle,
+     *                       BondedPair, or CompositeMember)
+     * @param initialTicks   original infection duration — feeds the buff-duration
+     *                       multiplier at grant time
+     * @param capturedOccupant snapshot of the occupant at enqueue time
+     *                       (useful for composite-member role lookup)
+     * @param position       cell position captured at enqueue time
+     */
+    public record PendingGrant(String entityId, int initialTicks,
+                                Entity capturedOccupant, Position position) {}
 
     /**
      * cycle-9 action A — fail-fast on missing CompostSink.
@@ -76,13 +95,13 @@ public class EnvCleanupHooksBean implements DeathCleanupHooks,
     }
 
     /** Canonical infection map — keyed by Particle id, BondedPair id, or CompositeMember id. */
-    final Map<String, Object> infections = new ConcurrentHashMap<>();
+    final Map<String, Infection> infections = new ConcurrentHashMap<>();
 
     /** Canonical cure-immunity map — entity id → tick-until-expiry. */
     final Map<String, Long> cureImmuneUntil = new ConcurrentHashMap<>();
 
-    /** Canonical post-damage buff-grant queue (type Object to avoid coupling with 14-03 PendingGrant record). */
-    final List<Object> pendingBuffGrants = Collections.synchronizedList(new ArrayList<>());
+    /** Canonical post-damage buff-grant queue. */
+    final List<PendingGrant> pendingBuffGrants = Collections.synchronizedList(new ArrayList<>());
 
     private volatile CompostSink compostSink;
 
@@ -94,7 +113,7 @@ public class EnvCleanupHooksBean implements DeathCleanupHooks,
     public void clearInfectionOnDeath(String entityId) {
         infections.remove(entityId);
         cureImmuneUntil.remove(entityId);
-        // pendingBuffGrants pruned by reference in Plan 03 — Plan 01 has no entries yet.
+        removePendingGrantsForEntity(entityId);
     }
 
     @Override
@@ -105,5 +124,91 @@ public class EnvCleanupHooksBean implements DeathCleanupHooks,
             return;
         }
         sink.applyCompost(deathPos);
+    }
+
+    /**
+     * Plan 14-03 cycle-6 HIGH #2: transfer infection + cureImmuneUntil from
+     * {@code fromId} → {@code toId} using MAX semantics for conflicts.
+     *
+     * <p><b>cycle-9 action B.2 — AUTHORITATIVE OWNERSHIP BOUNDARY:</b>
+     * This method migrates ONLY Infection + cureImmuneUntil. It DOES NOT touch
+     * buffs. Buff migration is owned exclusively by
+     * {@link BuffRegistry#transferBuffs(String, String)}.
+     * SimulationEngine identity-transition sites invoke BOTH in sequence:
+     * <pre>
+     *     hooks.transferMutagenState(fromId, toId);        // THIS method — infection+immunity
+     *     buffRegistry.transferBuffs(fromId, toId);         // BuffRegistry — buffs
+     * </pre>
+     * Cross-check: grep "buff" inside THIS method body returns ZERO matches.
+     * If you're tempted to add buff-migration code here, STOP — that violates
+     * the ownership boundary and duplicates logic across two components.
+     */
+    @Override
+    public void transferMutagenState(String fromId, String toId) {
+        if (fromId == null || toId == null || fromId.equals(toId)) return;
+        Infection src = infections.remove(fromId);
+        if (src != null) {
+            Infection existing = infections.get(toId);
+            if (existing == null) {
+                infections.put(toId, new Infection(
+                        Math.max(src.initialTicks(), src.ticksLeft()),
+                        src.strain(),
+                        src.damagePerTick(),
+                        src.ticksLeft(),
+                        src.position()));
+            } else {
+                int mergedTicksLeft = Math.max(existing.ticksLeft(), src.ticksLeft());
+                int mergedInitialTicks = Math.max(existing.initialTicks(), src.initialTicks());
+                infections.put(toId, new Infection(
+                        mergedInitialTicks,
+                        existing.strain(),
+                        existing.damagePerTick(),
+                        mergedTicksLeft,
+                        existing.position()));
+            }
+        }
+        Long cureSrc = cureImmuneUntil.remove(fromId);
+        if (cureSrc != null) {
+            cureImmuneUntil.merge(toId, cureSrc, Math::max);
+        }
+    }
+
+    // ── Public accessors (Plan 14-03 Task 2) ──────────────────────
+
+    /** Canonical infection map — package-scoped mutable view. */
+    public Map<String, Infection> getInfections() {
+        return infections;
+    }
+
+    /** Canonical cure-immunity map — entity id → tick-until-expiry. */
+    public Map<String, Long> getCureImmuneUntil() {
+        return cureImmuneUntil;
+    }
+
+    /** Canonical pending-grant queue — returned live so callers can clear/iterate. */
+    public List<PendingGrant> getPendingGrants() {
+        return pendingBuffGrants;
+    }
+
+    /** Append a new pending grant to the queue. */
+    public void addPendingGrant(PendingGrant grant) {
+        pendingBuffGrants.add(grant);
+    }
+
+    /**
+     * Remove any pending grants whose {@code entityId} matches. Called from
+     * {@link #clearInfectionOnDeath} so a just-dead entity cannot receive a
+     * post-mortem buff even if its pending grant was enqueued before death
+     * (T-14-03-08 defense-in-depth).
+     */
+    public void removePendingGrantsForEntity(String entityId) {
+        synchronized (pendingBuffGrants) {
+            Iterator<PendingGrant> it = pendingBuffGrants.iterator();
+            while (it.hasNext()) {
+                if (it.next().entityId().equals(entityId)) {
+                    it.remove();
+                }
+            }
+        }
     }
 }

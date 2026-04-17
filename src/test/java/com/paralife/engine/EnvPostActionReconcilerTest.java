@@ -7,6 +7,7 @@ import org.springframework.core.annotation.Order;
 import java.lang.reflect.Method;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 
@@ -47,7 +48,7 @@ class EnvPostActionReconcilerTest {
 
         InOrder inOrder = inOrder(env);
         inOrder.verify(env).processEnvDeaths();
-        inOrder.verify(env).drainPostActionGrants();
+        inOrder.verify(env).drainPostActionGrants(anyLong());
         inOrder.verifyNoMoreInteractions();
     }
 }

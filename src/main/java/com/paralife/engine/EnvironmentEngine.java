@@ -1,5 +1,8 @@
 package com.paralife.engine;
 
+import com.paralife.engine.BuffRegistry.BuffType;
+import com.paralife.engine.EnvCleanupHooksBean.PendingGrant;
+import com.paralife.engine.EnvironmentConfig.Mutagen;
 import com.paralife.engine.EnvironmentConfig.Toxin;
 import com.paralife.engine.SeasonTracker.Season;
 import com.paralife.world.Cell;
@@ -7,6 +10,7 @@ import com.paralife.world.Entity;
 import com.paralife.world.Entity.BondedPair;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
+import com.paralife.world.Entity.Role;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
 import jakarta.annotation.PostConstruct;
@@ -16,6 +20,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -34,13 +39,12 @@ import java.util.Set;
  * {@code @Order(15)} from CONTEXT.md D-45 is stale — that slot is already
  * occupied).
  *
- * <p>Plan 14-02 fills the toxin effect body: Poisson spawn on AUTUMN peak,
- * Catmull-Rom spline advance via pre-sampled path, per-tick CA diffusion with
- * configurable Moore-neighbourhood radius + diffusionRate, per-cell entity
- * damage with normalised {@code intensity/255.0} fraction and per-type
- * resistance. BondedPair uses MAX of member-type multipliers.
- *
- * <p>Plans 03/04/05 will fill mutagen / lightning / perception bodies.
+ * <p>Plan 14-02 filled the toxin effect body. Plan 14-03 fills the mutagen
+ * outbreak body: Poisson spawn on SPRING peak, strain gossip propagation with
+ * ±1 strain mutation, per-entity Infection records with damage-over-time,
+ * post-damage-alive-gated survivor buff grants (D-15, D-18 role-specific for
+ * CompositeMember), attack-cure-reduction hook (D-20), cure immunity grace
+ * period (D-17), and zone-decay phase after the event expires.
  *
  * <p><b>cycle-6 HIGH #1 — seeded RNG.</b> Production constructor branches on
  * {@code config.seed() == null}; production yaml omits the key so production
@@ -49,10 +53,9 @@ import java.util.Set;
  *
  * <p><b>cycle-4 action item #1 — bean-cycle break.</b> This engine delegates
  * the {@link DeathCleanupHooks} surface to an injected
- * {@link EnvCleanupHooksBean} third bean. Registers itself as the
- * {@link EnvCleanupHooksBean.CompostSink} in {@code @PostConstruct} so
- * compost nutrient bumps flow through the engine without introducing a
- * construction cycle with {@link DeathFinalizer}.
+ * {@link EnvCleanupHooksBean} third bean which owns the canonical infection /
+ * cureImmuneUntil / pendingBuffGrants maps. This engine reads/writes through
+ * the bean via its public accessors (no duplicate storage).
  */
 @Component
 public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
@@ -68,10 +71,16 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     public static final int TICK_ORDER = 14;
 
     // ── D-38 / D-39 status bit constants ──────────────────────────────
-    /** Cell-status bit: toxin intensity above {@link Toxin#intensityThreshold()}. */
+    /** Cell-status bit 1: toxin intensity above {@link Toxin#intensityThreshold()}. */
     public static final byte CELL_STATUS_TOXIN_PRESENT = 0x01;
-    /** Entity-status bit: entity currently standing on a toxic cell (intensity > 0). */
+    /** Cell-status bit 2: mutagen strain cell (D-38). */
+    public static final byte CELL_STATUS_MUTAGEN_ZONE = 0x04;
+    /** Entity-status bit 1: entity currently standing on a toxic cell (intensity > 0). */
     public static final byte ENTITY_STATUS_TOXIC = 0x01;
+    /** Entity-status bit 2: entity has an active {@link Infection} (D-39). */
+    public static final byte ENTITY_STATUS_MUTATING = 0x04;
+    /** Entity-status bit 3: entity has any active survivor buff (D-39). */
+    public static final byte ENTITY_STATUS_BUFFED = 0x08;
 
     private final WorldGrid worldGrid;
     private final SeasonTracker seasonTracker;
@@ -84,9 +93,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     private final ToxinPathGenerator toxinPathGenerator;
 
     /**
-     * Toxin shadow grids — double-buffered (Pitfall 2). {@link #toxinGrid} is the
-     * authoritative state read by damage + perception; {@link #toxinGridNext} is
-     * the CA write target that is swapped in after each {@link CellularAutomaton#diffuseStep}.
+     * Toxin shadow grids — double-buffered (Pitfall 2).
      */
     private final byte[][] toxinGrid;
     private final byte[][] toxinGridNext;
@@ -94,13 +101,26 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     /** Single active toxin event (D-03 — max 1). Null when no event active. */
     private ToxinEvent activeToxin;
 
-    /**
-     * Number of non-zero cells in {@link #toxinGrid}. Updated on every diffuse
-     * step via the return value of {@link CellularAutomaton#diffuseStep} AND
-     * on direct writes via {@link #stampToxinIntensityForTest}. Enables an O(1)
-     * idle-tick fast-path in {@link #advanceToxin}.
-     */
+    /** Non-zero cell counter for toxin grid (O(1) idle-tick fast-path). */
     private int nonZeroToxinCellCount = 0;
+
+    /**
+     * Mutagen shadow grids — double-buffered (Pitfall 2). Each cell stores the
+     * strain byte (0 = clean, 1-255 = strain id). See D-13.
+     */
+    private final byte[][] mutagenGrid;
+    private final byte[][] mutagenGridNext;
+
+    /**
+     * Per-cell last-reinforced tick for mutagen zone decay. A cell that has
+     * not been reinforced (or never gossip-infected) for longer than
+     * {@link Mutagen#zoneDecayTicks()} is cleared after the active event
+     * expires.
+     */
+    private final long[][] mutagenLastReinforcedTick;
+
+    /** Single active mutagen event (D-03 — max 1). Null when no event active. */
+    private MutagenEvent activeMutagen;
 
     /** D-41: per-tick status caches — derived read-only projections from shadow grids. */
     private final Map<Position, Byte> cellStatusCache = new HashMap<>();
@@ -113,6 +133,13 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
      * flag is false.
      */
     private volatile boolean envDamageAppliedThisTick = false;
+
+    /**
+     * Plan 14-03 perf counter: number of {@code worldGrid.getCell} calls made
+     * inside {@link #tickBuffsAndInfections}. Structural perf assertion uses
+     * this instead of wall-clock (T-14-03-05).
+     */
+    private int gridReadCountForTest = 0;
 
     @org.springframework.beans.factory.annotation.Autowired
     public EnvironmentEngine(WorldGrid worldGrid, SeasonTracker seasonTracker,
@@ -138,15 +165,19 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         this.envCleanupHooksBean = envCleanupHooksBean;
         this.rng = rng;
         this.toxinPathGenerator = new ToxinPathGenerator();
-        this.toxinGrid = new byte[worldGrid.getWidth()][worldGrid.getHeight()];
-        this.toxinGridNext = new byte[worldGrid.getWidth()][worldGrid.getHeight()];
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+        this.toxinGrid = new byte[w][h];
+        this.toxinGridNext = new byte[w][h];
+        this.mutagenGrid = new byte[w][h];
+        this.mutagenGridNext = new byte[w][h];
+        this.mutagenLastReinforcedTick = new long[w][h];
     }
 
     /**
      * Register ourselves as the compost sink on the shared hooks bean so
      * {@link DeathFinalizer}'s death-cleanup pipeline can flow compost events
-     * back through this engine (D-24/D-25). cycle-4 action item #1 — setter
-     * wired post-construction to avoid a construction cycle.
+     * back through this engine (D-24/D-25).
      */
     @PostConstruct
     void registerAsCompostSink() {
@@ -173,6 +204,13 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             spawnToxin(event.tickNumber());
             advanceToxin(event.tickNumber());
             resolveToxinCollisions(event.tickNumber());
+
+            // Plan 14-03 mutagen pipeline:
+            spawnMutagen(event.tickNumber());
+            advanceMutagen(event.tickNumber());
+            resolveMutagenCollisions(event.tickNumber());
+            tickBuffsAndInfections(event.tickNumber());
+
             buildStatusCaches();
 
             // Final step: env-death sweep — short-circuited when no env damage applied.
@@ -187,11 +225,6 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
 
     // ── Toxin pipeline (Plan 14-02) ──────────────────────────────────
 
-    /**
-     * Roll seasonal Poisson for a new toxin event. Max 1 active (D-03) — skip
-     * if {@link #activeToxin} is non-null. WINTER gate: no events fire during
-     * the off-season when lambda is floored by {@code config.toxin().offSeasonLambda()}.
-     */
     void spawnToxin(long tickNumber) {
         if (activeToxin != null) return;
         double lambda = seasonalToxinLambda(tickNumber);
@@ -207,31 +240,19 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         log.debug("Toxin spawned: tick={} pathLen={} seed={}", tickNumber, path.size(), seed);
     }
 
-    /**
-     * Peak-season sine-scaled Poisson lambda (D-27). Off-season uses the flat
-     * {@code offSeasonLambda}. Peak season is {@link Toxin#peakSeason()}.
-     */
     double seasonalToxinLambda(long tickNumber) {
         Toxin tx = config.toxin();
         Season current = seasonTracker.getSeason(tickNumber);
         if (current != tx.peakSeason()) {
             return tx.offSeasonLambda();
         }
-        // Sine scale 0..1..0 across the peak season window. Use the seasonal
-        // multiplier (1 ± amplitude) renormalised to a 0..1 fraction.
         double mult = seasonTracker.getSeasonalMultiplier(tickNumber);
         double amp = seasonTracker.getConfig().amplitude();
         double frac = amp > 0.0 ? Math.clamp((mult - (1.0 - amp)) / (2.0 * amp), 0.0, 1.0) : 1.0;
         return tx.offSeasonLambda() + (tx.peakLambda() - tx.offSeasonLambda()) * frac;
     }
 
-    /**
-     * Advance the active toxin event along its pre-sampled path and diffuse
-     * the shadow grid. Fast-path: when {@code activeToxin == null &&
-     * nonZeroToxinCellCount == 0} do nothing — no scans.
-     */
     void advanceToxin(long tickNumber) {
-        // O(1) idle-tick fast-path (T-14-02-07).
         if (activeToxin == null && nonZeroToxinCellCount == 0) {
             return;
         }
@@ -240,7 +261,6 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         int w = worldGrid.getWidth();
         int h = worldGrid.getHeight();
 
-        // ── Step 1: advance the head (if event active) ─────────────
         if (activeToxin != null) {
             if (activeToxin.isExpired(tickNumber)) {
                 activeToxin = null;
@@ -248,7 +268,6 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 int newHead = activeToxin.headIdx();
                 for (int s = 0; s < tx.speed() && newHead < activeToxin.prePath().size(); s++) {
                     Position pos = activeToxin.prePath().get(newHead);
-                    // Stamp at full intensity on every cell the head visits.
                     int before = toxinGrid[pos.x()][pos.y()] & 0xFF;
                     toxinGrid[pos.x()][pos.y()] = (byte) 255;
                     if (before == 0) nonZeroToxinCellCount++;
@@ -262,30 +281,14 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             }
         }
 
-        // ── Step 2: CA diffusion (double-buffered) ────────────────
-        // diffusionRate + decayRate + diffusionRadius read from config.toxin()
-        // (cycle-2 addition; no longer hardcoded).
         int nz = CellularAutomaton.diffuseStep(toxinGrid, toxinGridNext, w, h,
                 config.toxin().diffusionRate(), tx.decayRate(), 1, tx.diffusionRadius());
-        // Swap src/next by copying dst back to src. We could flip pointers,
-        // but that would require mutable field references; the shadow grids are
-        // final byte[][] so copy is simpler + safer.
         for (int x = 0; x < w; x++) {
             System.arraycopy(toxinGridNext[x], 0, toxinGrid[x], 0, h);
         }
         nonZeroToxinCellCount = nz;
     }
 
-    /**
-     * Apply toxin damage to occupants of cells with positive intensity. Damage
-     * formula per D-08/D-09: {@code baseDamage * (intensity/255.0) * typeResistance}.
-     * Covers Particle, BondedPair, AND CompositeMember (occupant-type-exhaustive
-     * per must-haves).
-     *
-     * <p><b>BondedPair rule:</b> resistance is the MAX of per-type multipliers
-     * for {@code primaryType} and {@code secondaryType} — worst-case resistance
-     * drives damage. Documented inline.
-     */
     void resolveToxinCollisions(long tickNumber) {
         Toxin tx = config.toxin();
         int baseDamage = tx.baseDamage();
@@ -310,7 +313,6 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                     worldGrid.setEntity(x, y, p.withEnergy(Math.max(0, p.energy() - damage)));
                     markEnvDamageApplied();
                 } else if (occ instanceof BondedPair bp) {
-                    // BondedPair MAX rule: worst-case resistance between primary+secondary.
                     double resistance = Math.max(
                             tx.resistance().forType(bp.primaryType()),
                             tx.resistance().forType(bp.secondaryType()));
@@ -329,57 +331,449 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         }
     }
 
+    // ── Mutagen pipeline (Plan 14-03) ──────────────────────────────
+
     /**
-     * Populate {@link #cellStatusCache} and {@link #entityStatusCache} for
-     * PerceptionBroadcaster (Plan 05). Cell-visibility threshold is
-     * {@link Toxin#intensityThreshold()}; entity-level TOXIC bit fires for
-     * ANY positive intensity — separate rules, separate thresholds (must-haves).
+     * Roll seasonal Poisson for a new mutagen outbreak. Max 1 active (D-03).
+     * WINTER gate: no events fire during off-season.
      */
-    void buildStatusCaches() {
-        if (nonZeroToxinCellCount == 0 && activeToxin == null) return;
-        Toxin tx = config.toxin();
-        int threshold = tx.intensityThreshold();
+    void spawnMutagen(long tickNumber) {
+        if (activeMutagen != null) return;
+        double lambda = seasonalMutagenLambda(tickNumber);
+        if (rng.nextDouble() >= lambda) return;
+
+        Mutagen cfg = config.mutagen();
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+        int ox = rng.nextInt(w);
+        int oy = rng.nextInt(h);
+
+        // Stamp a non-zero strain byte at origin cell — 1..255 uniform.
+        int strain = 1 + rng.nextInt(255);
+        mutagenGrid[ox][oy] = (byte) strain;
+        mutagenLastReinforcedTick[ox][oy] = tickNumber;
+
+        activeMutagen = new MutagenEvent(tickNumber, new Position(ox, oy),
+                cfg.outbreakLifetimeTicks());
+        log.debug("Mutagen spawned: tick={} origin=({},{}) strain={} lifetime={}",
+                tickNumber, ox, oy, strain, cfg.outbreakLifetimeTicks());
+    }
+
+    /**
+     * Peak-season sine-scaled Poisson lambda for mutagen (D-27). Off-season
+     * uses the flat {@code offSeasonLambda}.
+     */
+    double seasonalMutagenLambda(long tickNumber) {
+        Mutagen cfg = config.mutagen();
+        Season current = seasonTracker.getSeason(tickNumber);
+        if (current != cfg.peakSeason()) {
+            return cfg.offSeasonLambda();
+        }
+        double mult = seasonTracker.getSeasonalMultiplier(tickNumber);
+        double amp = seasonTracker.getConfig().amplitude();
+        double frac = amp > 0.0 ? Math.clamp((mult - (1.0 - amp)) / (2.0 * amp), 0.0, 1.0) : 1.0;
+        return cfg.offSeasonLambda() + (cfg.peakLambda() - cfg.offSeasonLambda()) * frac;
+    }
+
+    /**
+     * Advance mutagen: double-buffered gossip while active; zone decay
+     * (cell-level aging) while null.
+     */
+    void advanceMutagen(long tickNumber) {
+        Mutagen cfg = config.mutagen();
         int w = worldGrid.getWidth();
         int h = worldGrid.getHeight();
 
-        for (int x = 0; x < w; x++) {
-            for (int y = 0; y < h; y++) {
-                int intensity = toxinGrid[x][y] & 0xFF;
-                if (intensity <= 0) continue;
+        // Handle expiry first — the active event may have expired this tick.
+        if (activeMutagen != null && activeMutagen.isExpired(tickNumber)) {
+            activeMutagen = null;
+        }
 
-                Position pos = new Position(x, y);
-                if (intensity >= threshold) {
-                    Byte prior = cellStatusCache.get(pos);
-                    byte merged = (byte) ((prior == null ? 0 : prior) | CELL_STATUS_TOXIN_PRESENT);
-                    cellStatusCache.put(pos, merged);
+        if (activeMutagen != null) {
+            // Gossip propagation — double-buffered CA-like step.
+            // Copy current grid into next buffer, then layer gossip additions on top.
+            for (int x = 0; x < w; x++) {
+                System.arraycopy(mutagenGrid[x], 0, mutagenGridNext[x], 0, h);
+            }
+            for (int x = 0; x < w; x++) {
+                for (int y = 0; y < h; y++) {
+                    int strain = mutagenGrid[x][y] & 0xFF;
+                    if (strain == 0) continue;
+                    // Gossip to 8 Moore neighbors per-neighbor with configured probability.
+                    for (int dx = -1; dx <= 1; dx++) {
+                        for (int dy = -1; dy <= 1; dy++) {
+                            if (dx == 0 && dy == 0) continue;
+                            int nx = Math.floorMod(x + dx, w);
+                            int ny = Math.floorMod(y + dy, h);
+                            int existingStrain = mutagenGridNext[nx][ny] & 0xFF;
+                            if (existingStrain != 0) continue; // neighbor already infected
+                            if (rng.nextDouble() >= cfg.gossipProbability()) continue;
+                            int mutated = strain;
+                            if (rng.nextDouble() < cfg.strainMutationChance()) {
+                                // ±1 drift (unsigned byte wrap OK — 0 sentinel preserved by clamp below)
+                                int delta = rng.nextBoolean() ? 1 : -1;
+                                mutated = strain + delta;
+                                if (mutated <= 0) mutated = 1;
+                                if (mutated > 255) mutated = 255;
+                            }
+                            mutagenGridNext[nx][ny] = (byte) mutated;
+                            mutagenLastReinforcedTick[nx][ny] = tickNumber;
+                        }
+                    }
                 }
-                // Entity-level TOXIC: fire on ANY positive intensity.
-                Cell cell = worldGrid.getCell(x, y);
-                String id = EntityIds.entityIdOf(cell.occupant());
-                if (id != null) {
-                    Byte prior = entityStatusCache.get(id);
-                    byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_TOXIC);
-                    entityStatusCache.put(id, merged);
+            }
+            // Swap next → current.
+            for (int x = 0; x < w; x++) {
+                System.arraycopy(mutagenGridNext[x], 0, mutagenGrid[x], 0, h);
+            }
+        } else {
+            // No active event — zone decay phase. Clear any strain cell that has
+            // not been reinforced within zoneDecayTicks.
+            int decayTicks = cfg.zoneDecayTicks();
+            for (int x = 0; x < w; x++) {
+                for (int y = 0; y < h; y++) {
+                    int strain = mutagenGrid[x][y] & 0xFF;
+                    if (strain == 0) continue;
+                    long lastReinforced = mutagenLastReinforcedTick[x][y];
+                    if (tickNumber - lastReinforced >= decayTicks) {
+                        mutagenGrid[x][y] = 0;
+                    }
                 }
             }
         }
     }
 
     /**
-     * Read the current toxin intensity at {@code pos}. Package-visible for
-     * SimulationEngine + ActionResolver splash-damage lookup (Task 4).
+     * Walk every occupant on a non-zero-strain cell. Infect under
+     * cureImmuneUntil gate. BondedPair infected once per bp.id() (shared
+     * infection semantics per must-haves). Infection record captures the
+     * entity's current Position (T-14-03-11 cure-path fix).
      */
+    void resolveMutagenCollisions(long tickNumber) {
+        Mutagen cfg = config.mutagen();
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+        Map<String, Infection> infections = envCleanupHooksBean.getInfections();
+        Map<String, Long> cureImmuneUntil = envCleanupHooksBean.getCureImmuneUntil();
+
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                int strain = mutagenGrid[x][y] & 0xFF;
+                if (strain == 0) continue;
+                Cell cell = worldGrid.getCell(x, y);
+                Entity occ = cell.occupant();
+                if (occ == null) continue;
+                String id = EntityIds.entityIdOf(occ);
+                if (id == null) continue;
+                if (infections.containsKey(id)) continue; // already infected
+
+                // cure-immunity gate
+                Long immuneUntil = cureImmuneUntil.get(id);
+                if (immuneUntil != null && tickNumber < immuneUntil) continue;
+
+                int minDur = cfg.infectionDurationMin();
+                int maxDur = cfg.infectionDurationMax();
+                int dur = maxDur > minDur
+                        ? minDur + rng.nextInt(maxDur - minDur + 1)
+                        : minDur;
+                Infection infection = new Infection(dur, (byte) strain,
+                        cfg.damagePerTick(), dur, new Position(x, y));
+                infections.put(id, infection);
+            }
+        }
+    }
+
+    /**
+     * Apply DoT + advance infection counter. Phase A scans the grid once,
+     * building a per-entity Position index. Phase B iterates pending grants
+     * and grants survivor buffs to entities that are still alive.
+     */
+    void tickBuffsAndInfections(long tickNumber) {
+        Mutagen cfg = config.mutagen();
+        Map<String, Infection> infections = envCleanupHooksBean.getInfections();
+        Map<String, Long> cureImmuneUntil = envCleanupHooksBean.getCureImmuneUntil();
+        gridReadCountForTest = 0;
+
+        if (infections.isEmpty()) {
+            // Still drain any pending grants from prior tick's reduceInfection.
+            processPendingGrants(tickNumber, cfg);
+            return;
+        }
+
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+
+        // Phase A — single grid pass building entityId → (Position, Entity) index.
+        Map<String, Position> entityPositions = new HashMap<>();
+        Map<String, Entity> entitySnapshot = new HashMap<>();
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                gridReadCountForTest++;
+                Cell cell = worldGrid.getCell(x, y);
+                Entity occ = cell.occupant();
+                String id = EntityIds.entityIdOf(occ);
+                if (id != null) {
+                    entityPositions.put(id, new Position(x, y));
+                    entitySnapshot.put(id, occ);
+                }
+            }
+        }
+
+        // Apply DoT + decrement ticksLeft.
+        List<String> toRemove = new ArrayList<>();
+        for (Map.Entry<String, Infection> e : new ArrayList<>(infections.entrySet())) {
+            String id = e.getKey();
+            Infection inf = e.getValue();
+            Position p = entityPositions.get(id);
+            Entity occ = entitySnapshot.get(id);
+            if (p == null || occ == null) {
+                // Occupant gone (already died) — drop the infection.
+                toRemove.add(id);
+                continue;
+            }
+            // Apply DoT damage.
+            if (inf.damagePerTick() > 0) {
+                applyDoTDamage(p, occ, inf.damagePerTick());
+                markEnvDamageApplied();
+            }
+            Infection advanced = inf.decrement();
+            if (advanced.isExpired()) {
+                // Enqueue pending grant — carries the Position captured now
+                // (T-14-03-11 cure-path fix) AND the snapshot occupant for
+                // role lookup at grant time.
+                envCleanupHooksBean.addPendingGrant(
+                        new PendingGrant(id, inf.initialTicks(), occ, p));
+                toRemove.add(id);
+            } else {
+                infections.put(id, advanced);
+            }
+        }
+        for (String id : toRemove) infections.remove(id);
+
+        // Phase B — drain pending grants (post-damage-alive-gated).
+        processPendingGrants(tickNumber, cfg);
+    }
+
+    /**
+     * Phase B buff-grant drainer shared between {@link #tickBuffsAndInfections}
+     * and the post-action drain called by {@link EnvPostActionReconciler}.
+     * Looks up occupants at {@code pg.position()} — NOT via the infections map
+     * (T-14-03-11).
+     */
+    private void processPendingGrants(long tickNumber, Mutagen cfg) {
+        var grants = envCleanupHooksBean.getPendingGrants();
+        if (grants.isEmpty()) return;
+        List<PendingGrant> snapshot;
+        synchronized (grants) {
+            snapshot = new ArrayList<>(grants);
+            grants.clear();
+        }
+        for (var pg : snapshot) {
+            Position p = pg.position();
+            Cell cell = worldGrid.getCell(p.x(), p.y());
+            if (cell.isEmpty()) continue;
+            Entity postOcc = cell.occupant();
+            if (!isAliveEntity(postOcc)) continue;
+            if (!pg.entityId().equals(EntityIds.entityIdOf(postOcc))) continue;
+            grantSurvivorBuffs(pg.entityId(), tickNumber, cfg, pg.initialTicks(), postOcc);
+            envCleanupHooksBean.getCureImmuneUntil().put(pg.entityId(),
+                    tickNumber + cfg.cureTicks());
+        }
+    }
+
+    /**
+     * Apply DoT damage to occupant at position, routed through withEnergy so
+     * energy clamps to [0, maxEnergy].
+     */
+    private void applyDoTDamage(Position p, Entity occ, int damage) {
+        if (occ instanceof Particle part) {
+            worldGrid.setEntity(p.x(), p.y(),
+                    part.withEnergy(Math.max(0, part.energy() - damage)));
+        } else if (occ instanceof BondedPair bp) {
+            worldGrid.setEntity(p.x(), p.y(),
+                    bp.withEnergy(Math.max(0, bp.energy() - damage)));
+        } else if (occ instanceof CompositeMember cm) {
+            worldGrid.setEntity(p.x(), p.y(),
+                    cm.withEnergy(Math.max(0, cm.energy() - damage)));
+        }
+    }
+
+    /**
+     * Grant survivor buffs on cure (D-15, D-18).
+     *
+     * <p>Solo Particle / BondedPair: uniform 4-way pick from {@link BuffType}.
+     * CompositeMember: role-specific buff (D-18 exhaustive mapping — no
+     * fallback) PLUS universal UPKEEP_MINUS_1.
+     */
+    private void grantSurvivorBuffs(String entityId, long tickNumber,
+                                     Mutagen cfg, int initialTicks, Entity postOcc) {
+        long expiry = tickNumber + (long) initialTicks * cfg.buffDurationMultiplier();
+        if (postOcc instanceof CompositeMember cm) {
+            BuffType perk = roleSpecificBuff(cm.role());
+            buffRegistry.grant(entityId, perk, expiry);
+            buffRegistry.grant(entityId, BuffType.UPKEEP_MINUS_1, expiry);
+        } else {
+            BuffType pick = randomBuff();
+            buffRegistry.grant(entityId, pick, expiry);
+        }
+        log.debug("Mutagen buff granted: entity={} tick={} expiry={}", entityId, tickNumber, expiry);
+    }
+
+    /**
+     * D-18 role → buff mapping (LOCKED, exhaustive — NO fallback):
+     * <pre>
+     *   LOCOMOTOR  -> MOVEMENT_PLUS_1
+     *   ATTACKER   -> ATTACK_PLUS_1
+     *   SENSOR     -> SENSOR_PLUS_1
+     *   FEEDER     -> SENSOR_PLUS_1
+     *   DEFENDER   -> UPKEEP_MINUS_1
+     *   REPRODUCER -> ATTACK_PLUS_1
+     * </pre>
+     */
+    BuffType roleSpecificBuff(Role role) {
+        return switch (role) {
+            case LOCOMOTOR -> BuffType.MOVEMENT_PLUS_1;
+            case ATTACKER -> BuffType.ATTACK_PLUS_1;
+            case SENSOR -> BuffType.SENSOR_PLUS_1;
+            case FEEDER -> BuffType.SENSOR_PLUS_1;
+            case DEFENDER -> BuffType.UPKEEP_MINUS_1;
+            case REPRODUCER -> BuffType.ATTACK_PLUS_1;
+        };
+    }
+
+    private BuffType randomBuff() {
+        BuffType[] all = BuffType.values();
+        return all[rng.nextInt(all.length)];
+    }
+
+    /**
+     * True if {@code occ} is a live entity (non-null, non-terrain, energy > 0).
+     */
+    private boolean isAliveEntity(Entity occ) {
+        if (occ == null) return false;
+        return switch (occ) {
+            case Particle p -> p.energy() > 0;
+            case BondedPair bp -> bp.energy() > 0;
+            case CompositeMember cm -> cm.energy() > 0;
+            case Entity.Rock r -> false;
+            case Entity.Nutrient n -> false;
+        };
+    }
+
+    /**
+     * Attack-cure hook (D-20). Reduces infection ticksLeft by {@code ticks}.
+     * If the infection reaches 0 in the same call, enqueues a PendingGrant
+     * (post-damage-alive-gated) carrying the passed-in {@code position} so
+     * the caller's in-scope defender position is used rather than a full-grid
+     * id-scan (T-14-03-12).
+     */
+    public void reduceInfection(String entityId, int ticks, long currentTick, Position position) {
+        if (entityId == null || position == null) return;
+        if (ticks <= 0) return;
+        Map<String, Infection> infections = envCleanupHooksBean.getInfections();
+        Infection inf = infections.get(entityId);
+        if (inf == null) return;
+        Infection reduced = inf.reduceBy(ticks);
+        if (reduced.isExpired()) {
+            // Cure triggered. Enqueue pending grant at caller's Position.
+            Cell cell = worldGrid.getCell(position.x(), position.y());
+            if (!cell.isEmpty()) {
+                Entity occ = cell.occupant();
+                if (entityId.equals(EntityIds.entityIdOf(occ))) {
+                    envCleanupHooksBean.addPendingGrant(
+                            new PendingGrant(entityId, inf.initialTicks(), occ, position));
+                }
+            }
+            infections.remove(entityId);
+        } else {
+            infections.put(entityId, reduced);
+        }
+    }
+
+    /** True if {@code entityId} has an active infection. */
+    public boolean isInfected(String entityId) {
+        return envCleanupHooksBean.getInfections().containsKey(entityId);
+    }
+
+    /** Current attack-cure-reduction tick count (D-20). */
+    public int getAttackCureReduction() {
+        return config.mutagen().attackCureReduction();
+    }
+
+    /**
+     * Populate {@link #cellStatusCache} and {@link #entityStatusCache} for
+     * PerceptionBroadcaster (Plan 05).
+     */
+    void buildStatusCaches() {
+        Toxin tx = config.toxin();
+        int toxinThreshold = tx.intensityThreshold();
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+
+        // Toxin bits (from Plan 02).
+        if (nonZeroToxinCellCount > 0 || activeToxin != null) {
+            for (int x = 0; x < w; x++) {
+                for (int y = 0; y < h; y++) {
+                    int intensity = toxinGrid[x][y] & 0xFF;
+                    if (intensity <= 0) continue;
+
+                    Position pos = new Position(x, y);
+                    if (intensity >= toxinThreshold) {
+                        Byte prior = cellStatusCache.get(pos);
+                        byte merged = (byte) ((prior == null ? 0 : prior) | CELL_STATUS_TOXIN_PRESENT);
+                        cellStatusCache.put(pos, merged);
+                    }
+                    Cell cell = worldGrid.getCell(x, y);
+                    String id = EntityIds.entityIdOf(cell.occupant());
+                    if (id != null) {
+                        Byte prior = entityStatusCache.get(id);
+                        byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_TOXIC);
+                        entityStatusCache.put(id, merged);
+                    }
+                }
+            }
+        }
+
+        // Mutagen MUTAGEN_ZONE cell bits.
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                int strain = mutagenGrid[x][y] & 0xFF;
+                if (strain == 0) continue;
+                Position pos = new Position(x, y);
+                Byte prior = cellStatusCache.get(pos);
+                byte merged = (byte) ((prior == null ? 0 : prior) | CELL_STATUS_MUTAGEN_ZONE);
+                cellStatusCache.put(pos, merged);
+            }
+        }
+
+        // Entity MUTATING bits for infected entities.
+        for (String id : envCleanupHooksBean.getInfections().keySet()) {
+            Byte prior = entityStatusCache.get(id);
+            byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_MUTATING);
+            entityStatusCache.put(id, merged);
+        }
+
+        // Entity BUFFED bits for any entity with active buffs. Build by scanning
+        // a grid pass — BuffRegistry lookups are O(1) per id.
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                Cell cell = worldGrid.getCell(x, y);
+                String id = EntityIds.entityIdOf(cell.occupant());
+                if (id == null) continue;
+                if (buffRegistry.getBuffs(id).isEmpty()) continue;
+                Byte prior = entityStatusCache.get(id);
+                byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_BUFFED);
+                entityStatusCache.put(id, merged);
+            }
+        }
+    }
+
     public int toxinIntensityAt(Position pos) {
         int x = Math.floorMod(pos.x(), worldGrid.getWidth());
         int y = Math.floorMod(pos.y(), worldGrid.getHeight());
         return toxinGrid[x][y] & 0xFF;
     }
 
-    /**
-     * Compute splash damage for an attacker whose defender stands on a toxic
-     * cell. Returns 0 for cells with no toxin. Formula per D-10:
-     * {@code round(baseDamage * (intensity/255.0) * splashDamageFraction)}.
-     */
     public int computeSplashDamage(Position defenderPos) {
         Toxin tx = config.toxin();
         int intensity = toxinIntensityAt(defenderPos);
@@ -390,14 +784,6 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
 
     // ── Corpse compost (D-24, D-25) ───────────────────────────────
 
-    /**
-     * Apply corpse compost per D-24/D-25 — full-strength bump at {@code deathPos}
-     * and half-strength bump at each of the 8 Moore neighbors. Clamped to
-     * {@link FertilityConfig#maxLevel()}.
-     *
-     * <p>Invoked by {@link DeathFinalizer} (via {@link EnvCleanupHooksBean}'s
-     * CompostSink) for every solo/bonded/composite-member death.
-     */
     @Override
     public void applyCompost(Position deathPos) {
         if (!config.enabled()) {
@@ -407,12 +793,10 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         int full = config.compost().fullStrength();
         int half = config.compost().halfStrength();
 
-        // Death cell — full strength.
         Cell deathCell = worldGrid.getCell(deathPos.x(), deathPos.y());
         int bumped = Math.min(deathCell.nutrientLevel() + full, max);
         worldGrid.setCell(deathPos.x(), deathPos.y(), deathCell.withNutrientLevel(bumped));
 
-        // 8 Moore neighbors — half strength.
         for (Position n : worldGrid.getNeighbors(deathPos.x(), deathPos.y())) {
             Cell nc = worldGrid.getCell(n.x(), n.y());
             int nBumped = Math.min(nc.nutrientLevel() + half, max);
@@ -423,26 +807,12 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 deathPos, full, half, max);
     }
 
-    // ── Same-tick env-death sweep (cycle-5 contract) ─────────────
+    // ── Same-tick env-death sweep ─────────────
 
-    /**
-     * Mark that an env damage write may have reached zero energy this tick.
-     * Damage sites in plans 02/03/04 call this when a write is lethal-possible.
-     * Package-private — only called from within this package.
-     */
     void markEnvDamageApplied() {
         envDamageAppliedThisTick = true;
     }
 
-    /**
-     * Sweep the grid for env-damaged zero-energy occupants and route each
-     * through {@link DeathFinalizer}. Short-circuited when no env damage
-     * applied this tick.
-     *
-     * <p>Called as the LAST step of {@link #onTick} (regular env-phase path)
-     * AND re-invoked by {@link EnvPostActionReconciler} @Order(25) (composite
-     * attack-path splash — cycle-4 action item #2, T-14-17).
-     */
     public void processEnvDeaths() {
         if (!envDamageAppliedThisTick) return;
 
@@ -467,30 +837,29 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     }
 
     /**
-     * Drain post-action buff grants enqueued by composite-attack-path cures
-     * (plan 14-03). Plan 01 ships an empty no-op body; plan 14-03 Task 2
-     * extends the signature to {@code drainPostActionGrants(long tickNumber)}.
+     * Plan 14-03 cycle-6 HIGH #5a: drain composite-attack-path post-action
+     * grants from ActionResolver.resolveAttackerAttack — called by
+     * {@link EnvPostActionReconciler} @Order(25) with {@code event.tickNumber()}
+     * so composite attack-cures receive their buffs SAME TICK.
+     *
+     * <p>Alive-gate + cell-occupant match rules are shared with
+     * {@link #processPendingGrants}.
      */
-    public void drainPostActionGrants() {
-        // Plan 14-03 fills this method body.
+    public void drainPostActionGrants(long tickNumber) {
+        Mutagen cfg = config.mutagen();
+        processPendingGrants(tickNumber, cfg);
     }
 
     // ── Test-only helpers (package-private) ──────────────────────
 
-    /** Expose {@link #markEnvDamageApplied()} to tests. */
     void markEnvDamageAppliedForTest() {
         markEnvDamageApplied();
     }
 
-    /** Run {@link #processEnvDeaths()} from tests. */
     void processEnvDeathsForTest() {
         processEnvDeaths();
     }
 
-    /**
-     * Test helper — lethal a {@link Particle} at the given position by writing
-     * energy=0, then mark env damage so {@link #processEnvDeaths()} picks it up.
-     */
     void killParticleAtForTest(int x, int y) {
         Cell cell = worldGrid.getCell(x, y);
         if (cell.occupant() instanceof Particle p) {
@@ -499,11 +868,6 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         }
     }
 
-    /**
-     * Test helper — lethal a {@link CompositeMember} at the given position by
-     * writing energy=0, then mark env damage so {@link #processEnvDeaths()}
-     * picks it up.
-     */
     void killCompositeMemberAtForTest(int x, int y) {
         Cell cell = worldGrid.getCell(x, y);
         if (cell.occupant() instanceof CompositeMember cm) {
@@ -512,22 +876,18 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         }
     }
 
-    /** Test helper — read-only snapshot of the current tick's cell status cache. */
     Map<Position, Byte> cellStatusCacheView() {
         return Collections.unmodifiableMap(cellStatusCache);
     }
 
-    /** Test helper — read-only snapshot of the current tick's entity status cache. */
     Map<String, Byte> entityStatusCacheView() {
         return Collections.unmodifiableMap(entityStatusCache);
     }
 
-    /** Test helper — read the short-circuit flag. */
     boolean envDamageAppliedThisTickForTest() {
         return envDamageAppliedThisTick;
     }
 
-    /** Test helper — stamp an exact intensity on a grid cell, updating the counter. */
     void stampToxinIntensityForTest(Position pos, int intensity) {
         int x = Math.floorMod(pos.x(), worldGrid.getWidth());
         int y = Math.floorMod(pos.y(), worldGrid.getHeight());
@@ -538,14 +898,76 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         else if (before > 0 && clamped == 0) nonZeroToxinCellCount--;
     }
 
+    /** Test helper — stamp mutagen strain at a cell (and reset the reinforcement tick). */
+    void stampMutagenForTest(Position pos, int strain) {
+        int x = Math.floorMod(pos.x(), worldGrid.getWidth());
+        int y = Math.floorMod(pos.y(), worldGrid.getHeight());
+        mutagenGrid[x][y] = (byte) Math.clamp(strain, 0, 255);
+        mutagenLastReinforcedTick[x][y] = 0L;
+    }
+
+    /** Test helper — run resolveMutagenCollisions directly. */
+    void resolveMutagenCollisionsForTest(long tickNumber) {
+        resolveMutagenCollisions(tickNumber);
+    }
+
+    /** Test helper — run tickBuffsAndInfections directly. */
+    void tickBuffsAndInfectionsForTest(long tickNumber) {
+        tickBuffsAndInfections(tickNumber);
+    }
+
+    /** Test helper — force a new mutagen outbreak starting at the given origin. */
+    void forceSpawnMutagenForTest(long tickNumber, Position origin, int strain, int lifetime) {
+        int x = origin.x();
+        int y = origin.y();
+        mutagenGrid[x][y] = (byte) Math.clamp(strain, 1, 255);
+        mutagenLastReinforcedTick[x][y] = tickNumber;
+        activeMutagen = new MutagenEvent(tickNumber, origin, lifetime);
+    }
+
+    /** Test helper — expose active mutagen event. */
+    MutagenEvent activeMutagenEvent() {
+        return activeMutagen;
+    }
+
+    /** Test helper — expose the strain byte at a cell (unsigned). */
+    int mutagenStrainAtForTest(Position pos) {
+        return mutagenGrid[pos.x()][pos.y()] & 0xFF;
+    }
+
+    /** Test helper — expose last-reinforcement tick for zone-decay tests. */
+    long mutagenLastReinforcedTickForTest(Position pos) {
+        return mutagenLastReinforcedTick[pos.x()][pos.y()];
+    }
+
+    /** Test helper — manual set of last-reinforced tick (for zone-decay tests). */
+    void setMutagenLastReinforcedTickForTest(Position pos, long tick) {
+        mutagenLastReinforcedTick[pos.x()][pos.y()] = tick;
+    }
+
+    /** Test helper — perf counter exposed for structural assertion. */
+    int gridReadCountForTest() {
+        return gridReadCountForTest;
+    }
+
+    /** Test helper — run buildStatusCaches directly. */
+    void buildStatusCachesForTest() {
+        buildStatusCaches();
+    }
+
     /** Test helper — synchronous resolveToxinCollisions for a single tick. */
     void resolveToxinCollisionsForTest(long tickNumber) {
         resolveToxinCollisions(tickNumber);
     }
 
-    /** Test helper — run advanceToxin once (diffusion step). */
+    /** Test helper — run advanceToxin once. */
     void advanceToxinForTest(long tickNumber) {
         advanceToxin(tickNumber);
+    }
+
+    /** Test helper — run advanceMutagen once. */
+    void advanceMutagenForTest(long tickNumber) {
+        advanceMutagen(tickNumber);
     }
 
     /** Test helper — force an active toxin event (skips Poisson roll). */
@@ -559,26 +981,17 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         activeToxin = new ToxinEvent(tickNumber, tx.lifetimeTicks(), path, 0, seed);
     }
 
-    /** Test helper — expose active toxin event. */
     ToxinEvent activeToxinEvent() {
         return activeToxin;
     }
 
-    /** Test helper — expose non-zero toxin cell counter. */
     int nonZeroToxinCellCountForTest() {
         return nonZeroToxinCellCount;
     }
 
-    /** Test helper — call buildStatusCaches directly. */
-    void buildStatusCachesForTest() {
-        buildStatusCaches();
-    }
-
     /**
-     * Test helper — wipe toxin grid + event state between tests sharing a
-     * Spring context. Zeroes {@code toxinGrid} + {@code toxinGridNext}, clears
-     * {@code activeToxin}, resets {@code nonZeroToxinCellCount} and the
-     * {@code envDamageAppliedThisTick} flag.
+     * Test helper — wipe toxin + mutagen grid + event state between tests
+     * sharing a Spring context.
      */
     void resetToxinStateForTest() {
         int w = worldGrid.getWidth();
@@ -587,27 +1000,43 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             for (int y = 0; y < h; y++) {
                 toxinGrid[x][y] = 0;
                 toxinGridNext[x][y] = 0;
+                mutagenGrid[x][y] = 0;
+                mutagenGridNext[x][y] = 0;
+                mutagenLastReinforcedTick[x][y] = 0L;
             }
         }
         activeToxin = null;
+        activeMutagen = null;
         nonZeroToxinCellCount = 0;
         envDamageAppliedThisTick = false;
         cellStatusCache.clear();
         entityStatusCache.clear();
     }
 
-    /**
-     * Projected cell-status byte for a position (D-38). Zero by default.
-     * PerceptionBroadcaster will call this in plan 05 via a narrow accessor.
-     */
+    /** Test helper — wipe just mutagen state (use between tests within same context). */
+    void resetMutagenStateForTest() {
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                mutagenGrid[x][y] = 0;
+                mutagenGridNext[x][y] = 0;
+                mutagenLastReinforcedTick[x][y] = 0L;
+            }
+        }
+        activeMutagen = null;
+        envCleanupHooksBean.getInfections().clear();
+        envCleanupHooksBean.getCureImmuneUntil().clear();
+        synchronized (envCleanupHooksBean.getPendingGrants()) {
+            envCleanupHooksBean.getPendingGrants().clear();
+        }
+    }
+
     public byte getCellStatus(Position pos) {
         Byte b = cellStatusCache.get(pos);
         return b == null ? (byte) 0 : b;
     }
 
-    /**
-     * Projected entity-status byte for an entity id (D-39). Zero by default.
-     */
     public byte getEntityStatus(String entityId) {
         Byte b = entityStatusCache.get(entityId);
         return b == null ? (byte) 0 : b;
