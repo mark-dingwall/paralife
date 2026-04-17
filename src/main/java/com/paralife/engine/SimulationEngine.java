@@ -51,11 +51,50 @@ public class SimulationEngine {
     private final MetabolicProfile metabolicProfile;
     private final StarvationConfig starvationConfig;
     private final SeasonTracker seasonTracker;
+    private final BuffRegistry buffRegistry;
+    private final DeathCleanupHooks hooks;
+    private final DeathFinalizer deathFinalizer;
     private final AtomicLong nutrientIdCounter = new AtomicLong(0);
     private final AtomicInteger lastTickBondCount = new AtomicInteger(0);
     /** Tracks previous tick's pool energy per composite for panic zone decrease detection (D-31). */
     private final ConcurrentHashMap<String, Integer> previousPoolEnergy = new ConcurrentHashMap<>();
 
+    public SimulationEngine(WorldGrid worldGrid, SimulationConfig config,
+                            BotRegistry botRegistry, BondingConfig bondingConfig,
+                            CompositeRegistry compositeRegistry, CompositeConfig compositeConfig,
+                            MetabolicProfile metabolicProfile, StarvationConfig starvationConfig,
+                            SeasonTracker seasonTracker, BuffRegistry buffRegistry,
+                            DeathCleanupHooks hooks,
+                            @org.springframework.context.annotation.Lazy DeathFinalizer deathFinalizer) {
+        this.worldGrid = worldGrid;
+        this.config = config;
+        this.botRegistry = botRegistry;
+        this.bondingConfig = bondingConfig;
+        this.compositeRegistry = compositeRegistry;
+        this.compositeConfig = compositeConfig;
+        this.metabolicProfile = metabolicProfile;
+        this.starvationConfig = starvationConfig;
+        this.seasonTracker = seasonTracker;
+        this.buffRegistry = buffRegistry;
+        this.hooks = hooks;
+        this.deathFinalizer = deathFinalizer;
+    }
+
+    /**
+     * Back-compat 9-arg constructor used by pre-Phase-14 unit tests that
+     * construct {@code SimulationEngine} directly (without Spring). Wires
+     * minimal no-op defaults for the Phase 14 collaborators:
+     * <ul>
+     *   <li>fresh {@link BuffRegistry} — empty, no active buffs</li>
+     *   <li>no-op {@link DeathCleanupHooks} — no env state to reap</li>
+     *   <li>a fresh {@link DeathFinalizer} wired back to {@code this} —
+     *       the normal Spring {@code @Lazy} cycle is resolved here by direct
+     *       reference so unit tests can observe the full delegation path</li>
+     * </ul>
+     *
+     * <p>Production code MUST use the 12-arg constructor so the Spring-wired
+     * shared {@link BuffRegistry}/{@link EnvCleanupHooksBean} are injected.
+     */
     public SimulationEngine(WorldGrid worldGrid, SimulationConfig config,
                             BotRegistry botRegistry, BondingConfig bondingConfig,
                             CompositeRegistry compositeRegistry, CompositeConfig compositeConfig,
@@ -70,6 +109,13 @@ public class SimulationEngine {
         this.metabolicProfile = metabolicProfile;
         this.starvationConfig = starvationConfig;
         this.seasonTracker = seasonTracker;
+        this.buffRegistry = new BuffRegistry();
+        this.hooks = new DeathCleanupHooks() {
+            @Override public void clearInfectionOnDeath(String entityId) {}
+            @Override public void applyCompost(com.paralife.world.Position deathPos) {}
+        };
+        this.deathFinalizer = new DeathFinalizer(worldGrid, botRegistry, this.buffRegistry,
+                compositeRegistry, this.hooks, this);
     }
 
     public int getLastTickBondCount() {
@@ -603,18 +649,16 @@ public class SimulationEngine {
     private int processDeaths(int width, int height) {
         int deaths = 0;
 
-        // Phase 3a: Particle and BondedPair death
+        // Phase 3a: Particle and BondedPair death — delegate to DeathFinalizer
+        // for shared cleanup (bot/buff/infection/compost/clearEntity).
         for (int x = 0; x < width; x++) {
             for (int y = 0; y < height; y++) {
                 Cell cell = worldGrid.getCell(x, y);
                 if (cell.occupant() instanceof Particle p && !p.isAlive()) {
-                    botRegistry.unregisterByEntity(p.id());
-                    worldGrid.clearEntity(x, y);
+                    deathFinalizer.finalizeParticleDeath(x, y, p);
                     deaths++;
                 } else if (cell.occupant() instanceof Entity.BondedPair bp && !bp.isAlive()) {
-                    botRegistry.unregisterByEntity(bp.primaryEntityId());
-                    botRegistry.unregisterByEntity(bp.secondaryEntityId());
-                    worldGrid.clearEntity(x, y);
+                    deathFinalizer.finalizeBondedPairDeath(x, y, bp);
                     deaths++;
                 }
             }
@@ -659,23 +703,48 @@ public class SimulationEngine {
     }
 
     /**
+     * Shared per-member cleanup for composite-member deaths. Centralises the
+     * 5-step cleanup (bot/buff/infection/compost/clearEntity) that
+     * {@link DeathFinalizer} uses for solo deaths so composite deaths don't
+     * skip any step (Pitfall 4/5).
+     *
+     * <p>Package-private for {@link DeathFinalizer} access. Does NOT call
+     * {@code compositeRegistry.removeMember} — that is handled separately in
+     * {@link #handleMemberDeath} so the decision tree can read the count
+     * before the member is removed if it ever needs to.
+     */
+    void cleanupCompositeMemberCellViaFinalizer(Entity.CompositeMember cm, Position pos) {
+        String id = cm.id();
+        botRegistry.unregisterByEntity(id);
+        buffRegistry.unregisterEntity(id);
+        hooks.clearInfectionOnDeath(id);
+        hooks.applyCompost(pos);
+        worldGrid.clearEntity(pos.x(), pos.y());
+    }
+
+    /**
      * Handle death of a CompositeMember (D-29).
      * 97% graceful degradation (composite shrinks), 3% full dissolution (shatter).
+     *
+     * <p>Visibility widened to {@code public} (Task 2 step 2c) so
+     * {@link DeathFinalizer#finalizeCompositeMemberDeath} can delegate here —
+     * env-killed composite members run the SAME 97/3 roll, same tick, as
+     * combat-killed ones.
      */
-    private void handleMemberDeath(Entity.CompositeMember deadMember, Position deadPos,
+    public void handleMemberDeath(Entity.CompositeMember deadMember, Position deadPos,
                                     Set<String> processedComposites) {
         String compositeId = deadMember.compositeId();
         var compositeOpt = compositeRegistry.getComposite(compositeId);
         if (compositeOpt.isEmpty() || processedComposites.contains(compositeId)) {
-            worldGrid.clearEntity(deadPos.x(), deadPos.y());
-            botRegistry.unregisterByEntity(deadMember.id());
+            // FIRST STEP (cycle-5 truth): shared per-member cleanup via helper.
+            cleanupCompositeMemberCellViaFinalizer(deadMember, deadPos);
             return;
         }
         var composite = compositeOpt.get();
 
-        // Remove dead member from grid and registries
-        worldGrid.clearEntity(deadPos.x(), deadPos.y());
-        botRegistry.unregisterByEntity(deadMember.id());
+        // FIRST STEP (cycle-5 truth): shared per-member cleanup via helper —
+        // bot/buff/infection/compost/clearEntity.
+        cleanupCompositeMemberCellViaFinalizer(deadMember, deadPos);
         compositeRegistry.removeMember(compositeId, deadMember.id());
 
         int remainingCount = composite.getMemberCount();
@@ -766,14 +835,28 @@ public class SimulationEngine {
         int maxPool = composite.getMaxPoolEnergy();
         if (maxPool == 0) return;
 
-        // Pool=0 → total death (D-31)
+        // Pool=0 → total death (D-31). Per-member shared cleanup via the
+        // same helper that {@link DeathFinalizer} uses for solo deaths —
+        // bot/buff/infection/compost/clearEntity. Compost dissolve call
+        // stays inline after the per-member loop.
         if (pool == 0) {
             for (String memberId : new ArrayList<>(composite.getMemberIds())) {
                 Position pos = composite.getPositionForMember(memberId);
-                if (pos != null) {
+                if (pos == null) {
+                    botRegistry.unregisterByEntity(memberId);
+                    buffRegistry.unregisterEntity(memberId);
+                    hooks.clearInfectionOnDeath(memberId);
+                    continue;
+                }
+                Cell memberCell = worldGrid.getCell(pos.x(), pos.y());
+                if (memberCell.occupant() instanceof Entity.CompositeMember cm) {
+                    cleanupCompositeMemberCellViaFinalizer(cm, pos);
+                } else {
+                    botRegistry.unregisterByEntity(memberId);
+                    buffRegistry.unregisterEntity(memberId);
+                    hooks.clearInfectionOnDeath(memberId);
                     worldGrid.clearEntity(pos.x(), pos.y());
                 }
-                botRegistry.unregisterByEntity(memberId);
             }
             compositeRegistry.dissolve(composite.getCompositeId());
             processedComposites.add(composite.getCompositeId());
