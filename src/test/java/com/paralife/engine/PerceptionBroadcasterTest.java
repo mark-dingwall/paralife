@@ -16,6 +16,7 @@ import org.springframework.web.socket.WebSocketSession;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -292,5 +293,181 @@ class PerceptionBroadcasterTest {
 
         var msg = objectMapper.readValue(captor.getValue().getPayload(), Messages.class);
         assertThat(msg).isInstanceOf(Messages.Perception.class);
+    }
+
+    // ── Phase 14 Plan 05: cellStatus + entityStatus + SENSOR_PLUS_1 + overcrowded recomposition ──
+
+    @Test
+    void perceptionIncludesCellStatusAndEntityStatus() {
+        // Build a Plan-14-05-wired broadcaster with a mock EnvironmentEngine
+        // that reports non-zero cellStatus + entityStatus. Drive buildPerception
+        // and assert the 6-arg CellView contains the projected values.
+        //
+        // Note: cycle-6 MEDIUM #9 strips bit 0 from cellStatus (OVERCROWDED is
+        // per-bot recomputed). We use MUTAGEN_ZONE (bit 2) for the cellStatus
+        // projection test to avoid colliding with the OVERCROWDED bit.
+        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
+        BuffRegistry buffRegistry = new BuffRegistry();
+        SimulationConfig simCfg = SimulationConfig.defaults();
+        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+                worldGrid, objectMapper, compositeRegistry, envMock, buffRegistry, simCfg);
+
+        Particle bot = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(5, 5, bot);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+        // Use different positions so we can see bit propagation separately.
+        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
+        when(envMock.getCellStatus(new Position(6, 5)))
+                .thenReturn(EnvironmentEngine.CELL_STATUS_MUTAGEN_ZONE);
+        when(envMock.getEntityStatus("e1"))
+                .thenReturn(EnvironmentEngine.ENTITY_STATUS_BUFFED);
+
+        var perception = wired.buildPerception(1, botRegistry.getBySession("s1").orElseThrow());
+
+        // centre is at (radius, radius) = (2, 2); east neighbour at [2][3]
+        CellView centerView = perception.neighbourhood().get(2).get(2);
+        assertThat((int) centerView.entityStatus()).isEqualTo((int) EnvironmentEngine.ENTITY_STATUS_BUFFED);
+        CellView eastView = perception.neighbourhood().get(2).get(3);
+        assertThat((int) eastView.cellStatus() & EnvironmentEngine.CELL_STATUS_MUTAGEN_ZONE)
+                .isEqualTo(EnvironmentEngine.CELL_STATUS_MUTAGEN_ZONE);
+    }
+
+    @Test
+    void soloSensorBuffExpandsRadiusToSeven() {
+        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
+        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
+        when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
+        BuffRegistry buffs = new BuffRegistry();
+        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+                worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
+
+        Particle bot = Particle.spawn("e1", ParticleType.SPORE);
+        worldGrid.setEntity(5, 5, bot);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        // No buff → radius 2 → 5x5 grid
+        var baseline = wired.buildPerception(1, botRegistry.getBySession("s1").orElseThrow());
+        assertThat(baseline.neighbourhood()).hasSize(5);
+        assertThat(baseline.neighbourhood().get(0)).hasSize(5);
+
+        // Grant SENSOR_PLUS_1 → radius 3 → 7x7 grid
+        buffs.grant("e1", BuffRegistry.BuffType.SENSOR_PLUS_1, 1_000L);
+        var expanded = wired.buildPerception(2, botRegistry.getBySession("s1").orElseThrow());
+        assertThat(expanded.neighbourhood()).hasSize(7);
+        assertThat(expanded.neighbourhood().get(0)).hasSize(7);
+        assertThat(expanded.radius()).isEqualTo(3);
+    }
+
+    @Test
+    void bondedPairWithSensorBuffExpandsSoloBotRadiusTo7() {
+        // cycle-6 HIGH #3: a bot whose entityId is a BondedPair's bp.id() must
+        // also see 7x7 when SENSOR_PLUS_1 is granted against bp.id(). The wire
+        // site is uniform — bot.entityId() returns Particle.id() OR bp.id() by
+        // construction.
+        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
+        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
+        when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
+        BuffRegistry buffs = new BuffRegistry();
+        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+                worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
+
+        Entity.BondedPair bp = new Entity.BondedPair("bp1", ParticleType.CATALYST,
+                ParticleType.MEMBRANE, 80, 200);
+        worldGrid.setEntity(5, 5, bp);
+        botRegistry.register("s1", bp.id(), new Position(5, 5));
+
+        // No buff → 5x5
+        var baseline = wired.buildPerception(1, botRegistry.getBySession("s1").orElseThrow());
+        assertThat(baseline.neighbourhood()).hasSize(5);
+
+        buffs.grant(bp.id(), BuffRegistry.BuffType.SENSOR_PLUS_1, 1_000L);
+        var expanded = wired.buildPerception(2, botRegistry.getBySession("s1").orElseThrow());
+        assertThat(expanded.neighbourhood())
+                .as("cycle-6 HIGH #3: BondedPair with SENSOR_PLUS_1 sees 7x7 (radius=3)")
+                .hasSize(7);
+    }
+
+    @Test
+    void visionScopedOvercrowdingBitSetWhenVisibleNeighborsDense() {
+        // Without SENSOR_PLUS_1: radius 2. Place 6 neighbours around (10, 10).
+        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
+        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
+        when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
+        BuffRegistry buffs = new BuffRegistry();
+        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+                worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
+
+        Particle self = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(10, 10, self);
+        botRegistry.register("s1", "e1", new Position(10, 10));
+
+        worldGrid.setEntity(10, 9, Particle.spawn("n1", ParticleType.CATALYST));
+        worldGrid.setEntity(10, 11, Particle.spawn("n2", ParticleType.CATALYST));
+        worldGrid.setEntity(9, 10, Particle.spawn("n3", ParticleType.CATALYST));
+        worldGrid.setEntity(11, 10, Particle.spawn("n4", ParticleType.CATALYST));
+        worldGrid.setEntity(9, 9, Particle.spawn("n5", ParticleType.CATALYST));
+        worldGrid.setEntity(11, 11, Particle.spawn("n6", ParticleType.CATALYST));
+
+        var perception = wired.buildPerception(1, botRegistry.getBySession("s1").orElseThrow());
+        // Centre cell at [2][2]
+        CellView centerView = perception.neighbourhood().get(2).get(2);
+        assertThat(centerView.cellStatus() & 0x01).isEqualTo(0x01);
+    }
+
+    @Test
+    void overcrowdedBitIsPerBotNotGlobalFromCache() {
+        // cycle-6 MEDIUM #9: env cache reports OVERCROWDED globally (bit 0 set);
+        // bot vision sees NO dense neighbours. Per-bot bit 0 MUST be 0.
+        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
+        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
+        // Global cache says "overcrowded" for the target cell.
+        Position targetCell = new Position(6, 5);
+        when(envMock.getCellStatus(targetCell)).thenReturn((byte) 0x01);
+        when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
+        BuffRegistry buffs = new BuffRegistry();
+        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+                worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
+
+        Particle self = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(5, 5, self);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+        // No filler particles → no visible neighbours → per-bot bit 0 = 0.
+
+        var perception = wired.buildPerception(1, botRegistry.getBySession("s1").orElseThrow());
+        CellView eastView = perception.neighbourhood().get(2).get(3);
+        assertThat(eastView.cellStatus() & 0x01)
+                .as("cycle-6 MEDIUM #9: bit 0 recomputed per-bot; globally-overcrowded cell presents as 0")
+                .isEqualTo(0);
+    }
+
+    @Test
+    void compositeSensorMemberWithSensorBuffExpandsStitchedCoverageRadius() {
+        // cycle-4 action item #8: each SENSOR member's stitched coverage circle
+        // sized per-member. Baseline: one SENSOR member with no buff → 25 cells
+        // (5x5). With SENSOR_PLUS_1 on that SENSOR → 49 cells (7x7).
+        BuffRegistry buffs = new BuffRegistry();
+        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
+        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
+        when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
+        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+                worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
+
+        var sensor = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.SENSOR, 50, 100);
+        worldGrid.setEntity(8, 8, sensor);
+        compositeRegistry.register("c1", List.of("m1"),
+                Map.of("m1", new Position(8, 8)), 100, 200);
+
+        var composite = compositeRegistry.getComposite("c1").orElseThrow();
+
+        Set<Position> baseline = wired.stitchSensorCoverage(composite);
+        assertThat(baseline)
+                .as("SENSOR member without SENSOR_PLUS_1 → 5x5 = 25 cells")
+                .hasSize(25);
+
+        buffs.grant("m1", BuffRegistry.BuffType.SENSOR_PLUS_1, 1_000L);
+        Set<Position> expanded = wired.stitchSensorCoverage(composite);
+        assertThat(expanded)
+                .as("cycle-4 action item #8: SENSOR_PLUS_1 on SENSOR member → 7x7 = 49 cells")
+                .hasSize(49);
     }
 }

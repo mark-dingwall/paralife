@@ -190,14 +190,36 @@ public sealed interface Messages {
      * caches — not stored on {@link com.paralife.world.Cell} directly
      * (authoritative design decision per 14-01-PLAN.md <deviations>).
      *
+     * <p><b>Phase 14 Plan 05 — {@code flags} vs {@code cellStatus} distinction
+     * (cycle-6 MEDIUM #9):</b>
+     * <ul>
+     *   <li><b>{@code flags}</b> — the server-authoritative GLOBAL cell
+     *       bitfield on {@link com.paralife.world.Cell}. Computed by
+     *       {@link com.paralife.engine.SimulationEngine}'s global passes
+     *       (overcrowding uses 8-neighbour Moore count against
+     *       {@code SimulationConfig.overcrowdingThreshold()}; starvation
+     *       tracks the occupant's energy). Identical for every bot.</li>
+     *   <li><b>{@code cellStatus}</b> — vision-scoped, client-perspective
+     *       bitfield recomposed PER BOT. Bit 0 (OVERCROWDED) in
+     *       {@code cellStatus} is specifically recomputed from the neighbours
+     *       a single bot can see — a cell globally overcrowded may present
+     *       with {@code cellStatus} bit 0 = 0 for a bot whose vision covers
+     *       only a subset of the cell's Moore neighbours. See D-40. Bits 1+
+     *       (TOXIN_PRESENT, MUTAGEN_ZONE, ...) come unchanged from the
+     *       EnvironmentEngine cell-status cache.</li>
+     * </ul>
+     * The {@code cellStatus} OVERCROWDED bit is thus vision-scoped and
+     * per-bot; {@code flags}'s OVERCROWDED bit is server-authoritative and
+     * global. Same underlying world-state, two different projections.
+     *
      * <p>Back-compat: 3-arg and 4-arg constructors preserved so Phase 13 tests
      * and callers continue to compile.
      *
      * @param occupantType   entity type name or {@code null} for empty
      * @param occupantId     entity id or {@code null} for empty
      * @param nutrientLevel  soil fertility level
-     * @param flags          bitfield of Cell flags (0 = none)
-     * @param cellStatus     6-bit projected cell-status bitfield (D-38)
+     * @param flags          bitfield of Cell flags (0 = none) — server-authoritative GLOBAL state
+     * @param cellStatus     6-bit projected cell-status bitfield (D-38) — vision-scoped per-bot
      * @param entityStatus   6-bit projected entity-status bitfield (D-39)
      */
     record CellView(

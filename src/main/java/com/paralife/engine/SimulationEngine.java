@@ -42,6 +42,21 @@ public class SimulationEngine {
 
     private static final Logger log = LoggerFactory.getLogger(SimulationEngine.class);
 
+    /**
+     * Plan 14-05 Task 1 documented-default constant — mirrors
+     * {@link SimulationConfig#defaults()} overcrowdingThreshold value of 6
+     * (also the value bound from {@code application.yml: overcrowding-threshold: 6}).
+     *
+     * <p>Package-private and <b>non-public</b> intentionally: runtime code MUST
+     * read {@link SimulationConfig#overcrowdingThreshold()} at tick time (live
+     * config read) so yaml overrides take effect without recompile. Tests use
+     * {@code SimulationConfig.defaults().overcrowdingThreshold()} instead of
+     * this constant. Its sole purpose is as a documented-default cross-check so
+     * a regression-guard test can confirm the numeric constant and the
+     * defaults-record agree.
+     */
+    static final int OVERCROWDED_THRESHOLD_DEFAULT = 6;
+
     private final WorldGrid worldGrid;
     private final SimulationConfig config;
     private final BotRegistry botRegistry;
