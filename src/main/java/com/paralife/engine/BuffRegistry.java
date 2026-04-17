@@ -150,4 +150,15 @@ public class BuffRegistry {
     public int size() {
         return byEntity.size();
     }
+
+    /**
+     * Plan 14-06 Task 3b (cycle-9 action D): returns a snapshot of the currently
+     * registered entity ids so the phase-gate integration test can sum active
+     * buffs across all entities. Returned set is a live view backed by the
+     * underlying {@link ConcurrentHashMap#keySet()} — safe to iterate, do not
+     * mutate.
+     */
+    public java.util.Set<String> getRegisteredEntityIds() {
+        return byEntity.keySet();
+    }
 }

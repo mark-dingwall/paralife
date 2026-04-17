@@ -117,4 +117,37 @@ class DeathFinalizerTest {
                 setCaptor.capture());
         assertThat(setCaptor.getValue()).as("convenience overload must pass a fresh empty set").isEmpty();
     }
+
+    // ── Plan 14-06 Task 1: deathEventCount counter ────────────────────────
+
+    @Test
+    void deathEventCountIncrementsOnEveryFinalize() {
+        // Plan 14-06 Task 1: DeathFinalizer exposes a monotonic counter so the
+        // EnvironmentPhaseGateIntegrationTest can assert compost events fired.
+        assertThat(finalizer.getDeathEventCount()).isEqualTo(0L);
+
+        Particle p = new Particle("p-count", ParticleType.CATALYST, 0, 100);
+        finalizer.finalizeParticleDeath(0, 0, p);
+        assertThat(finalizer.getDeathEventCount()).isEqualTo(1L);
+
+        BondedPair bp = new BondedPair("bp-count", ParticleType.CATALYST, ParticleType.MEMBRANE,
+                0, 100, "a", "b");
+        finalizer.finalizeBondedPairDeath(1, 1, bp);
+        assertThat(finalizer.getDeathEventCount()).isEqualTo(2L);
+
+        CompositeMember cm = new CompositeMember("cm-count", "composite-Z",
+                ParticleType.SPORE, Role.LOCOMOTOR, 0, 50);
+        finalizer.finalizeCompositeMemberDeath(2, 2, cm);
+        assertThat(finalizer.getDeathEventCount()).isEqualTo(3L);
+    }
+
+    @Test
+    void deathEventCountResetForTestZeroesCounter() {
+        Particle p = new Particle("p-reset", ParticleType.CATALYST, 0, 100);
+        finalizer.finalizeParticleDeath(0, 0, p);
+        assertThat(finalizer.getDeathEventCount()).isEqualTo(1L);
+
+        finalizer.resetCountForTest();
+        assertThat(finalizer.getDeathEventCount()).isEqualTo(0L);
+    }
 }

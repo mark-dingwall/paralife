@@ -50,6 +50,16 @@ public class DeathFinalizer {
     private final DeathCleanupHooks hooks;
     private final SimulationEngine simulationEngine;
 
+    /**
+     * Plan 14-06 Task 1: monotonic counter of death-finalize events. Increments
+     * at the TOP of each finalize* method BEFORE collaborator calls, so the
+     * counter reflects "a death was attempted" even if a downstream exception
+     * aborts the cleanup pipeline. Used by
+     * {@link EnvironmentEngine#getCompostEventCount()} (pass-through) and the
+     * phase-gate integration test to assert compost events fired.
+     */
+    private long deathEventCount = 0L;
+
     public DeathFinalizer(WorldGrid worldGrid,
                           BotRegistry botRegistry,
                           BuffRegistry buffRegistry,
@@ -69,6 +79,7 @@ public class DeathFinalizer {
      * removes the occupant from the grid.
      */
     public void finalizeParticleDeath(int x, int y, Particle p) {
+        deathEventCount++;
         String id = p.id();
         botRegistry.unregisterByEntity(id);
         buffRegistry.unregisterEntity(id);
@@ -84,6 +95,7 @@ public class DeathFinalizer {
      * the occupant is removed.
      */
     public void finalizeBondedPairDeath(int x, int y, BondedPair bp) {
+        deathEventCount++;
         String primaryId = bp.primaryEntityId();
         String secondaryId = bp.secondaryEntityId();
 
@@ -125,7 +137,25 @@ public class DeathFinalizer {
      */
     public void finalizeCompositeMemberDeath(int x, int y, CompositeMember cm,
                                               Set<String> processedComposites) {
+        deathEventCount++;
         simulationEngine.handleMemberDeath(cm, new Position(x, y), processedComposites);
+    }
+
+    /**
+     * Plan 14-06 Task 1: monotonic count of finalize* invocations since bean
+     * creation (or last {@link #resetCountForTest}). Used by
+     * {@link EnvironmentEngine#getCompostEventCount} as a pass-through — every
+     * finalize* call produces exactly one compost event via
+     * {@link DeathCleanupHooks#applyCompost}, so the death count IS the compost
+     * event count.
+     */
+    public long getDeathEventCount() {
+        return deathEventCount;
+    }
+
+    /** Plan 14-06 Task 1: test-only helper to zero the counter between runs. */
+    public void resetCountForTest() {
+        deathEventCount = 0L;
     }
 
     // Package-private accessors used by SimulationEngine's helper so the

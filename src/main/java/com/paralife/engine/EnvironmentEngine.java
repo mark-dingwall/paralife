@@ -89,8 +89,26 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     private final FertilityConfig fertilityConfig;
     private final DeathFinalizer deathFinalizer;
     private final EnvCleanupHooksBean envCleanupHooksBean;
+    // Plan 14-06 Task 1: rng is a MUTABLE field (NOT final) so resetForTest can
+    // reassign it from config.seed to produce deterministic cross-run replay.
     private Random rng;
     private final ToxinPathGenerator toxinPathGenerator;
+
+    /**
+     * Plan 14-06 Task 3b: monotonic rising-edge count of toxin events spawned.
+     * Incremented by {@link #spawnToxin} whenever {@code activeToxin} is newly
+     * installed. The phase-gate integration test asserts this is > 0 after
+     * 300 ticks.
+     */
+    private long toxinEventCount = 0L;
+
+    /**
+     * Plan 14-06 Task 3b: monotonic count of mutagen infections initiated.
+     * Incremented in {@link #resolveMutagenCollisions} each time a new
+     * {@link Infection} record is inserted into the bean's map. The phase-gate
+     * integration test asserts this is > 0 after 300 ticks.
+     */
+    private long mutagenInfectionEventCount = 0L;
 
     /**
      * Monotonic count of lightning strikes FIRED. <b>"Attempted-strike"
@@ -267,6 +285,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 tx.pathPointsMin(), tx.pathPointsMax(),
                 tx.pathOffsetMin(), tx.pathOffsetMax());
         activeToxin = new ToxinEvent(tickNumber, tx.lifetimeTicks(), path, 0, seed);
+        toxinEventCount++; // Plan 14-06 Task 3b: rising-edge counter
         log.debug("Toxin spawned: tick={} pathLen={} seed={}", tickNumber, path.size(), seed);
     }
 
@@ -509,6 +528,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 Infection infection = new Infection(dur, (byte) strain,
                         cfg.damagePerTick(), dur, new Position(x, y));
                 infections.put(id, infection);
+                mutagenInfectionEventCount++; // Plan 14-06 Task 3b counter
             }
         }
     }
@@ -1016,6 +1036,163 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     public void drainPostActionGrants(long tickNumber) {
         Mutagen cfg = config.mutagen();
         processPendingGrants(tickNumber, cfg);
+    }
+
+    // ── Plan 14-06 Task 1: test harness hooks ──────────────────────
+
+    /**
+     * Plan 14-06 Task 1: full env-state reset + RNG reseed for deterministic
+     * cross-run replay. Clears engine-local grids AND the shared
+     * {@link EnvCleanupHooksBean} maps (cycle-4 action item #1 — state lives on
+     * the bean now).
+     *
+     * <p>Also reseeds {@link #rng} from {@code config.seed()} (null → 0L) so
+     * two successive runs produce byte-identical Poisson roll sequences.
+     */
+    public void resetForTest() {
+        int w = worldGrid.getWidth(), h = worldGrid.getHeight();
+        for (int x = 0; x < w; x++) {
+            java.util.Arrays.fill(toxinGrid[x], (byte) 0);
+            java.util.Arrays.fill(toxinGridNext[x], (byte) 0);
+            java.util.Arrays.fill(mutagenGrid[x], (byte) 0);
+            java.util.Arrays.fill(mutagenGridNext[x], (byte) 0);
+            java.util.Arrays.fill(mutagenLastReinforcedTick[x], 0L);
+        }
+        nonZeroToxinCellCount = 0;
+        activeToxin = null;
+        activeMutagen = null;
+        // cycle-4 action item #1: shared state lives on EnvCleanupHooksBean now.
+        envCleanupHooksBean.getInfections().clear();
+        envCleanupHooksBean.getCureImmuneUntil().clear();
+        synchronized (envCleanupHooksBean.getPendingGrants()) {
+            envCleanupHooksBean.getPendingGrants().clear();
+        }
+        cellStatusCache.clear();
+        entityStatusCache.clear();
+        envDamageAppliedThisTick = false;
+        lightningStrikeCount = 0L;
+        toxinEventCount = 0L;
+        mutagenInfectionEventCount = 0L;
+        gridReadCountForTest = 0;
+        long seed = config.seed() == null ? 0L : config.seed();
+        this.rng = new Random(seed);
+    }
+
+    /**
+     * Plan 14-06 Task 1: pass-through accessor — every finalize* call produces
+     * exactly one compost event via {@link DeathCleanupHooks#applyCompost}, so
+     * the death count IS the compost event count.
+     */
+    public long getCompostEventCount() {
+        return deathFinalizer.getDeathEventCount();
+    }
+
+    /**
+     * Plan 14-06 Task 3b: rising-edge count of toxin events spawned since bean
+     * creation (or last {@link #resetForTest}).
+     */
+    public long getToxinEventCount() {
+        return toxinEventCount;
+    }
+
+    /**
+     * Plan 14-06 Task 3b: monotonic count of mutagen infections initiated
+     * since bean creation (or last {@link #resetForTest}).
+     */
+    public long getMutagenInfectionEventCount() {
+        return mutagenInfectionEventCount;
+    }
+
+    /**
+     * Plan 14-06 Task 3b: alias for {@link #lightningStrikeCount()} exposed
+     * under the canonical {@code getXxxEventCount()} naming convention so all
+     * four env-effect counters share a consistent accessor shape on the
+     * phase-gate test.
+     */
+    public long getLightningStrikeEventCount() {
+        return lightningStrikeCount;
+    }
+
+    /**
+     * Run ONLY the env-owned tick phases for deterministic testing.
+     *
+     * <p><b>cycle-6 HIGH #4 CONSTRAINT:</b> this method calls
+     * {@link #processEnvDeaths()} which routes CompositeMember env-deaths
+     * through {@code SimulationEngine.handleMemberDeath()}
+     * (SimulationEngine.java:665-703) which uses {@code ThreadLocalRandom}.
+     * For deterministic runs, the caller MUST guarantee no composites are
+     * registered during the run.
+     * {@link com.paralife.engine.EnvironmentDeterminismTest} asserts
+     * {@code compositeRegistry.getAll().isEmpty()} at driveRun start to enforce
+     * this.
+     *
+     * <p>This is the honest boundary between "deterministic env engine" and
+     * "the whole sim uses ThreadLocalRandom."
+     */
+    public void onTickEnvOnlyForTest(long tickNumber) {
+        try {
+            cellStatusCache.clear();
+            entityStatusCache.clear();
+            buffRegistry.expireBuffs(tickNumber);
+
+            if (!config.enabled()) {
+                envDamageAppliedThisTick = false;
+                return;
+            }
+
+            // Toxin pipeline (Plan 14-02):
+            spawnToxin(tickNumber);
+            advanceToxin(tickNumber);
+            resolveToxinCollisions(tickNumber);
+
+            // Mutagen pipeline (Plan 14-03):
+            spawnMutagen(tickNumber);
+            advanceMutagen(tickNumber);
+            resolveMutagenCollisions(tickNumber);
+            tickBuffsAndInfections(tickNumber);
+
+            // Lightning (Plan 14-04):
+            spawnLightning(tickNumber);
+
+            buildStatusCaches();
+
+            // Env-death sweep — short-circuited when no env damage applied.
+            processEnvDeaths();
+        } catch (RuntimeException ex) {
+            log.error("onTickEnvOnlyForTest failed at tick {}", tickNumber, ex);
+        } finally {
+            envDamageAppliedThisTick = false;
+        }
+    }
+
+    /**
+     * Grid-scale nutrient total. Sums {@link Cell#nutrientLevel} across every
+     * cell.
+     *
+     * <p>cycle-4 action item #9 (Codex MEDIUM): compost (D-24/D-25 bumps on
+     * death cell + 8 neighbors) and lightning (outer ring fertility boost)
+     * both mutate nutrient levels. Fertility drift across supposedly-identical
+     * deterministic runs is the PRIMARY invariant this harness exists to
+     * protect.
+     *
+     * <p>cycle-6 LOW: uses a SINGLE {@link WorldGrid#snapshot()} call +
+     * iteration over {@link WorldGrid.GridSnapshot} instead of 65k individual
+     * {@code getCell} calls (each of which acquires a read lock). Cheap
+     * end-of-run polish for the primary perf hot spot in the determinism
+     * harness.
+     *
+     * @return sum of Cell.nutrientLevel across the whole grid (always &gt;= 0)
+     */
+    public int totalNutrients() {
+        WorldGrid.GridSnapshot snap = worldGrid.snapshot();
+        Cell[][] cells = snap.cells();
+        int total = 0;
+        for (int x = 0; x < snap.width(); x++) {
+            for (int y = 0; y < snap.height(); y++) {
+                total += cells[x][y].nutrientLevel();
+            }
+        }
+        return total;
     }
 
     // ── Test-only helpers (package-private) ──────────────────────
