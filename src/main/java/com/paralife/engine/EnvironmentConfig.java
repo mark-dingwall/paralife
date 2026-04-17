@@ -99,8 +99,11 @@ public record EnvironmentConfig(
             int speed,
             int lifetimeTicks,
             int diffusionRadius,
+            double diffusionRate,
             double decayRate,
             double splashDamageFraction,
+            int baseDamage,
+            int intensityThreshold,
             Resistance resistance
     ) {
         public Toxin {
@@ -128,18 +131,26 @@ public record EnvironmentConfig(
                 throw new IllegalArgumentException("toxin.lifetimeTicks must be > 0: " + lifetimeTicks);
             if (diffusionRadius < 0)
                 throw new IllegalArgumentException("toxin.diffusionRadius must be >= 0: " + diffusionRadius);
+            if (diffusionRate < 0.0 || diffusionRate > 1.0)
+                throw new IllegalArgumentException(
+                        "toxin.diffusionRate must be in [0, 1]: " + diffusionRate);
             if (decayRate < 0.0 || decayRate > 1.0)
                 throw new IllegalArgumentException("toxin.decayRate must be in [0, 1]: " + decayRate);
             if (splashDamageFraction < 0.0 || splashDamageFraction > 1.0)
                 throw new IllegalArgumentException(
                         "toxin.splashDamageFraction must be in [0, 1]: " + splashDamageFraction);
+            if (baseDamage < 0)
+                throw new IllegalArgumentException("toxin.baseDamage must be >= 0: " + baseDamage);
+            if (intensityThreshold < 0 || intensityThreshold > 255)
+                throw new IllegalArgumentException(
+                        "toxin.intensityThreshold must be in [0, 255]: " + intensityThreshold);
             if (resistance == null)
                 throw new IllegalArgumentException("toxin.resistance required");
         }
 
         public static Toxin defaults() {
             return new Toxin(Season.AUTUMN, 0.03, 0.005,
-                    4, 8, 5, 25, 3, 80, 3, 0.1, 0.2,
+                    4, 8, 5, 25, 3, 80, 3, 0.5, 0.1, 0.2, 10, 20,
                     Resistance.defaults());
         }
 

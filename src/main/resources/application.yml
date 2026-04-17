@@ -109,8 +109,11 @@ paralife:
         speed: 3
         lifetime-ticks: 80
         diffusion-radius: 3
+        diffusion-rate: 0.5
         decay-rate: 0.1
         splash-damage-fraction: 0.2
+        base-damage: 10
+        intensity-threshold: 20
         resistance:
           catalyst: 1.0
           membrane: 0.7

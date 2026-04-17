@@ -1,5 +1,7 @@
 package com.paralife.engine;
 
+import com.paralife.engine.EnvironmentConfig.Toxin;
+import com.paralife.engine.SeasonTracker.Season;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
 import com.paralife.world.Entity.BondedPair;
@@ -17,6 +19,7 @@ import org.springframework.stereotype.Component;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
@@ -31,19 +34,13 @@ import java.util.Set;
  * {@code @Order(15)} from CONTEXT.md D-45 is stale — that slot is already
  * occupied).
  *
- * <p>Responsibilities (plan 01 scaffolding — effect bodies filled in plans
- * 02/03/04):
- * <ul>
- *   <li>Roll seasonal Poisson for each event type</li>
- *   <li>Spawn + advance active events (toxin path, mutagen gossip, lightning, compost)</li>
- *   <li>Resolve entity–environment collisions</li>
- *   <li>Apply corpse compost on entity death via {@link EnvCleanupHooksBean.CompostSink}</li>
- *   <li>Build per-tick {@code cellStatusCache} + {@code entityStatusCache} for
- *       PerceptionBroadcaster (D-41)</li>
- *   <li>Update {@link BuffRegistry} (expire survivor buffs, grant on cure)</li>
- *   <li>Sweep env-damaged entities at end of tick via {@link DeathFinalizer}
- *       (same-tick death model — cycle-5 contract)</li>
- * </ul>
+ * <p>Plan 14-02 fills the toxin effect body: Poisson spawn on AUTUMN peak,
+ * Catmull-Rom spline advance via pre-sampled path, per-tick CA diffusion with
+ * configurable Moore-neighbourhood radius + diffusionRate, per-cell entity
+ * damage with normalised {@code intensity/255.0} fraction and per-type
+ * resistance. BondedPair uses MAX of member-type multipliers.
+ *
+ * <p>Plans 03/04/05 will fill mutagen / lightning / perception bodies.
  *
  * <p><b>cycle-6 HIGH #1 — seeded RNG.</b> Production constructor branches on
  * {@code config.seed() == null}; production yaml omits the key so production
@@ -70,6 +67,12 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
      */
     public static final int TICK_ORDER = 14;
 
+    // ── D-38 / D-39 status bit constants ──────────────────────────────
+    /** Cell-status bit: toxin intensity above {@link Toxin#intensityThreshold()}. */
+    public static final byte CELL_STATUS_TOXIN_PRESENT = 0x01;
+    /** Entity-status bit: entity currently standing on a toxic cell (intensity > 0). */
+    public static final byte ENTITY_STATUS_TOXIC = 0x01;
+
     private final WorldGrid worldGrid;
     private final SeasonTracker seasonTracker;
     private final EnvironmentConfig config;
@@ -78,6 +81,26 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     private final DeathFinalizer deathFinalizer;
     private final EnvCleanupHooksBean envCleanupHooksBean;
     private Random rng;
+    private final ToxinPathGenerator toxinPathGenerator;
+
+    /**
+     * Toxin shadow grids — double-buffered (Pitfall 2). {@link #toxinGrid} is the
+     * authoritative state read by damage + perception; {@link #toxinGridNext} is
+     * the CA write target that is swapped in after each {@link CellularAutomaton#diffuseStep}.
+     */
+    private final byte[][] toxinGrid;
+    private final byte[][] toxinGridNext;
+
+    /** Single active toxin event (D-03 — max 1). Null when no event active. */
+    private ToxinEvent activeToxin;
+
+    /**
+     * Number of non-zero cells in {@link #toxinGrid}. Updated on every diffuse
+     * step via the return value of {@link CellularAutomaton#diffuseStep} AND
+     * on direct writes via {@link #stampToxinIntensityForTest}. Enables an O(1)
+     * idle-tick fast-path in {@link #advanceToxin}.
+     */
+    private int nonZeroToxinCellCount = 0;
 
     /** D-41: per-tick status caches — derived read-only projections from shadow grids. */
     private final Map<Position, Byte> cellStatusCache = new HashMap<>();
@@ -114,6 +137,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         this.deathFinalizer = deathFinalizer;
         this.envCleanupHooksBean = envCleanupHooksBean;
         this.rng = rng;
+        this.toxinPathGenerator = new ToxinPathGenerator();
+        this.toxinGrid = new byte[worldGrid.getWidth()][worldGrid.getHeight()];
+        this.toxinGridNext = new byte[worldGrid.getWidth()][worldGrid.getHeight()];
     }
 
     /**
@@ -143,8 +169,11 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 return;
             }
 
-            // TODO(plans 02/03/04): roll Poisson, advance events, resolve collisions,
-            //                       populate status caches, drain post-action grants.
+            // Plan 14-02 toxin pipeline:
+            spawnToxin(event.tickNumber());
+            advanceToxin(event.tickNumber());
+            resolveToxinCollisions(event.tickNumber());
+            buildStatusCaches();
 
             // Final step: env-death sweep — short-circuited when no env damage applied.
             processEnvDeaths();
@@ -154,6 +183,209 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         } finally {
             envDamageAppliedThisTick = false;
         }
+    }
+
+    // ── Toxin pipeline (Plan 14-02) ──────────────────────────────────
+
+    /**
+     * Roll seasonal Poisson for a new toxin event. Max 1 active (D-03) — skip
+     * if {@link #activeToxin} is non-null. WINTER gate: no events fire during
+     * the off-season when lambda is floored by {@code config.toxin().offSeasonLambda()}.
+     */
+    void spawnToxin(long tickNumber) {
+        if (activeToxin != null) return;
+        double lambda = seasonalToxinLambda(tickNumber);
+        if (rng.nextDouble() >= lambda) return;
+
+        Toxin tx = config.toxin();
+        long seed = rng.nextLong();
+        List<Position> path = toxinPathGenerator.generatePath(
+                worldGrid.getWidth(), worldGrid.getHeight(),
+                tx.pathPointsMin(), tx.pathPointsMax(),
+                tx.pathOffsetMin(), tx.pathOffsetMax());
+        activeToxin = new ToxinEvent(tickNumber, tx.lifetimeTicks(), path, 0, seed);
+        log.debug("Toxin spawned: tick={} pathLen={} seed={}", tickNumber, path.size(), seed);
+    }
+
+    /**
+     * Peak-season sine-scaled Poisson lambda (D-27). Off-season uses the flat
+     * {@code offSeasonLambda}. Peak season is {@link Toxin#peakSeason()}.
+     */
+    double seasonalToxinLambda(long tickNumber) {
+        Toxin tx = config.toxin();
+        Season current = seasonTracker.getSeason(tickNumber);
+        if (current != tx.peakSeason()) {
+            return tx.offSeasonLambda();
+        }
+        // Sine scale 0..1..0 across the peak season window. Use the seasonal
+        // multiplier (1 ± amplitude) renormalised to a 0..1 fraction.
+        double mult = seasonTracker.getSeasonalMultiplier(tickNumber);
+        double amp = seasonTracker.getConfig().amplitude();
+        double frac = amp > 0.0 ? Math.clamp((mult - (1.0 - amp)) / (2.0 * amp), 0.0, 1.0) : 1.0;
+        return tx.offSeasonLambda() + (tx.peakLambda() - tx.offSeasonLambda()) * frac;
+    }
+
+    /**
+     * Advance the active toxin event along its pre-sampled path and diffuse
+     * the shadow grid. Fast-path: when {@code activeToxin == null &&
+     * nonZeroToxinCellCount == 0} do nothing — no scans.
+     */
+    void advanceToxin(long tickNumber) {
+        // O(1) idle-tick fast-path (T-14-02-07).
+        if (activeToxin == null && nonZeroToxinCellCount == 0) {
+            return;
+        }
+
+        Toxin tx = config.toxin();
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+
+        // ── Step 1: advance the head (if event active) ─────────────
+        if (activeToxin != null) {
+            if (activeToxin.isExpired(tickNumber)) {
+                activeToxin = null;
+            } else {
+                int newHead = activeToxin.headIdx();
+                for (int s = 0; s < tx.speed() && newHead < activeToxin.prePath().size(); s++) {
+                    Position pos = activeToxin.prePath().get(newHead);
+                    // Stamp at full intensity on every cell the head visits.
+                    int before = toxinGrid[pos.x()][pos.y()] & 0xFF;
+                    toxinGrid[pos.x()][pos.y()] = (byte) 255;
+                    if (before == 0) nonZeroToxinCellCount++;
+                    newHead++;
+                }
+                if (newHead >= activeToxin.prePath().size()) {
+                    activeToxin = null;
+                } else {
+                    activeToxin = activeToxin.withHeadIdx(newHead);
+                }
+            }
+        }
+
+        // ── Step 2: CA diffusion (double-buffered) ────────────────
+        // diffusionRate + decayRate + diffusionRadius read from config.toxin()
+        // (cycle-2 addition; no longer hardcoded).
+        int nz = CellularAutomaton.diffuseStep(toxinGrid, toxinGridNext, w, h,
+                config.toxin().diffusionRate(), tx.decayRate(), 1, tx.diffusionRadius());
+        // Swap src/next by copying dst back to src. We could flip pointers,
+        // but that would require mutable field references; the shadow grids are
+        // final byte[][] so copy is simpler + safer.
+        for (int x = 0; x < w; x++) {
+            System.arraycopy(toxinGridNext[x], 0, toxinGrid[x], 0, h);
+        }
+        nonZeroToxinCellCount = nz;
+    }
+
+    /**
+     * Apply toxin damage to occupants of cells with positive intensity. Damage
+     * formula per D-08/D-09: {@code baseDamage * (intensity/255.0) * typeResistance}.
+     * Covers Particle, BondedPair, AND CompositeMember (occupant-type-exhaustive
+     * per must-haves).
+     *
+     * <p><b>BondedPair rule:</b> resistance is the MAX of per-type multipliers
+     * for {@code primaryType} and {@code secondaryType} — worst-case resistance
+     * drives damage. Documented inline.
+     */
+    void resolveToxinCollisions(long tickNumber) {
+        Toxin tx = config.toxin();
+        int baseDamage = tx.baseDamage();
+        if (baseDamage <= 0) return;
+
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                int intensity = toxinGrid[x][y] & 0xFF;
+                if (intensity <= 0) continue;
+                Cell cell = worldGrid.getCell(x, y);
+                Entity occ = cell.occupant();
+                if (occ == null) continue;
+
+                double fraction = intensity / 255.0;
+                if (occ instanceof Particle p) {
+                    double resistance = tx.resistance().forType(p.type());
+                    int damage = (int) (baseDamage * fraction * resistance);
+                    if (damage <= 0) continue;
+                    worldGrid.setEntity(x, y, p.withEnergy(Math.max(0, p.energy() - damage)));
+                    markEnvDamageApplied();
+                } else if (occ instanceof BondedPair bp) {
+                    // BondedPair MAX rule: worst-case resistance between primary+secondary.
+                    double resistance = Math.max(
+                            tx.resistance().forType(bp.primaryType()),
+                            tx.resistance().forType(bp.secondaryType()));
+                    int damage = (int) (baseDamage * fraction * resistance);
+                    if (damage <= 0) continue;
+                    worldGrid.setEntity(x, y, bp.withEnergy(Math.max(0, bp.energy() - damage)));
+                    markEnvDamageApplied();
+                } else if (occ instanceof CompositeMember cm) {
+                    double resistance = tx.resistance().forType(cm.type());
+                    int damage = (int) (baseDamage * fraction * resistance);
+                    if (damage <= 0) continue;
+                    worldGrid.setEntity(x, y, cm.withEnergy(Math.max(0, cm.energy() - damage)));
+                    markEnvDamageApplied();
+                }
+            }
+        }
+    }
+
+    /**
+     * Populate {@link #cellStatusCache} and {@link #entityStatusCache} for
+     * PerceptionBroadcaster (Plan 05). Cell-visibility threshold is
+     * {@link Toxin#intensityThreshold()}; entity-level TOXIC bit fires for
+     * ANY positive intensity — separate rules, separate thresholds (must-haves).
+     */
+    void buildStatusCaches() {
+        if (nonZeroToxinCellCount == 0 && activeToxin == null) return;
+        Toxin tx = config.toxin();
+        int threshold = tx.intensityThreshold();
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                int intensity = toxinGrid[x][y] & 0xFF;
+                if (intensity <= 0) continue;
+
+                Position pos = new Position(x, y);
+                if (intensity >= threshold) {
+                    Byte prior = cellStatusCache.get(pos);
+                    byte merged = (byte) ((prior == null ? 0 : prior) | CELL_STATUS_TOXIN_PRESENT);
+                    cellStatusCache.put(pos, merged);
+                }
+                // Entity-level TOXIC: fire on ANY positive intensity.
+                Cell cell = worldGrid.getCell(x, y);
+                String id = EntityIds.entityIdOf(cell.occupant());
+                if (id != null) {
+                    Byte prior = entityStatusCache.get(id);
+                    byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_TOXIC);
+                    entityStatusCache.put(id, merged);
+                }
+            }
+        }
+    }
+
+    /**
+     * Read the current toxin intensity at {@code pos}. Package-visible for
+     * SimulationEngine + ActionResolver splash-damage lookup (Task 4).
+     */
+    public int toxinIntensityAt(Position pos) {
+        int x = Math.floorMod(pos.x(), worldGrid.getWidth());
+        int y = Math.floorMod(pos.y(), worldGrid.getHeight());
+        return toxinGrid[x][y] & 0xFF;
+    }
+
+    /**
+     * Compute splash damage for an attacker whose defender stands on a toxic
+     * cell. Returns 0 for cells with no toxin. Formula per D-10:
+     * {@code round(baseDamage * (intensity/255.0) * splashDamageFraction)}.
+     */
+    public int computeSplashDamage(Position defenderPos) {
+        Toxin tx = config.toxin();
+        int intensity = toxinIntensityAt(defenderPos);
+        if (intensity <= 0) return 0;
+        double fraction = intensity / 255.0;
+        return (int) Math.round(tx.baseDamage() * fraction * tx.splashDamageFraction());
     }
 
     // ── Corpse compost (D-24, D-25) ───────────────────────────────
@@ -293,6 +525,75 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     /** Test helper — read the short-circuit flag. */
     boolean envDamageAppliedThisTickForTest() {
         return envDamageAppliedThisTick;
+    }
+
+    /** Test helper — stamp an exact intensity on a grid cell, updating the counter. */
+    void stampToxinIntensityForTest(Position pos, int intensity) {
+        int x = Math.floorMod(pos.x(), worldGrid.getWidth());
+        int y = Math.floorMod(pos.y(), worldGrid.getHeight());
+        int before = toxinGrid[x][y] & 0xFF;
+        int clamped = Math.clamp(intensity, 0, 255);
+        toxinGrid[x][y] = (byte) clamped;
+        if (before == 0 && clamped > 0) nonZeroToxinCellCount++;
+        else if (before > 0 && clamped == 0) nonZeroToxinCellCount--;
+    }
+
+    /** Test helper — synchronous resolveToxinCollisions for a single tick. */
+    void resolveToxinCollisionsForTest(long tickNumber) {
+        resolveToxinCollisions(tickNumber);
+    }
+
+    /** Test helper — run advanceToxin once (diffusion step). */
+    void advanceToxinForTest(long tickNumber) {
+        advanceToxin(tickNumber);
+    }
+
+    /** Test helper — force an active toxin event (skips Poisson roll). */
+    void forceSpawnToxinForTest(long tickNumber) {
+        Toxin tx = config.toxin();
+        long seed = rng.nextLong();
+        List<Position> path = toxinPathGenerator.generatePath(
+                worldGrid.getWidth(), worldGrid.getHeight(),
+                tx.pathPointsMin(), tx.pathPointsMax(),
+                tx.pathOffsetMin(), tx.pathOffsetMax());
+        activeToxin = new ToxinEvent(tickNumber, tx.lifetimeTicks(), path, 0, seed);
+    }
+
+    /** Test helper — expose active toxin event. */
+    ToxinEvent activeToxinEvent() {
+        return activeToxin;
+    }
+
+    /** Test helper — expose non-zero toxin cell counter. */
+    int nonZeroToxinCellCountForTest() {
+        return nonZeroToxinCellCount;
+    }
+
+    /** Test helper — call buildStatusCaches directly. */
+    void buildStatusCachesForTest() {
+        buildStatusCaches();
+    }
+
+    /**
+     * Test helper — wipe toxin grid + event state between tests sharing a
+     * Spring context. Zeroes {@code toxinGrid} + {@code toxinGridNext}, clears
+     * {@code activeToxin}, resets {@code nonZeroToxinCellCount} and the
+     * {@code envDamageAppliedThisTick} flag.
+     */
+    void resetToxinStateForTest() {
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                toxinGrid[x][y] = 0;
+                toxinGridNext[x][y] = 0;
+            }
+        }
+        activeToxin = null;
+        nonZeroToxinCellCount = 0;
+        envDamageAppliedThisTick = false;
+        cellStatusCache.clear();
+        entityStatusCache.clear();
     }
 
     /**
