@@ -151,7 +151,12 @@ public class BotClient {
         private void handlePerception(WebSocketSession wsSession, JsonNode node) {
             perceptionCount.incrementAndGet();
             try {
-                // Deserialize perception
+                // Phase 14 (cycle-4 action item #11): CellView status fields
+                // (cellStatus, entityStatus) are deserialised natively by
+                // Jackson from the expanded 6-field record. No manual parsing
+                // needed here. Any residual raw-map / JsonNode path is
+                // pre-existing Phase 09 tech debt and is NOT modified by this
+                // phase.
                 Messages.Perception perception = objectMapper.treeToValue(node, Messages.Perception.class);
 
                 // Let brain decide
