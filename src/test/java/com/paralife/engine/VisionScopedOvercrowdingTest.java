@@ -103,18 +103,13 @@ class VisionScopedOvercrowdingTest {
 
     @Test
     void overcrowdedBitMaskedFromCacheAndRecomputedPerBot() {
-        // cycle-6 MEDIUM #9: the env cache may carry a GLOBAL OVERCROWDED bit;
-        // the broadcaster MUST mask bit 0 out and OR in the per-bot value. A
+        // cycle-6 MEDIUM #9: env cache may carry a GLOBAL OVERCROWDED bit;
+        // broadcaster MUST mask bit 0 out and OR in the per-bot value. A
         // globally-overcrowded cell that is NOT overcrowded in a particular
         // bot's vision must present as cellStatus bit 0 = 0 for that bot.
         //
-        // Non-bit-0 cache bits (MUTAGEN_ZONE=0x04 etc.) must pass through
-        // untouched. TOXIN_PRESENT currently aliases bit 0 in
-        // EnvironmentEngine (shipped by Plan 14-02 as 0x01 — same bit as the
-        // vision-scoped OVERCROWDED). That pre-existing bit-0 collision means
-        // the mask strips the TOXIN_PRESENT bit too in the 0xFF edge case;
-        // intentional env TOXIN projection paths stamp bit 1 semantics via
-        // the `entityStatus` byte separately (ENTITY_STATUS_TOXIC).
+        // Non-bit-0 cache bits (TOXIN_PRESENT=0x02, MUTAGEN_ZONE=0x04) pass
+        // through untouched per D-38 bit layout.
         Position cell = new Position(10, 10);
         byte cached = (byte) 0xFF;  // all bits on — globally overcrowded + every env bit
         Mockito.when(envEngineMock.getCellStatus(cell)).thenReturn(cached);
@@ -125,9 +120,13 @@ class VisionScopedOvercrowdingTest {
         assertThat(status & 0x01)
                 .as("cycle-6 MEDIUM #9: cached OVERCROWDED bit masked; per-bot bit OR'd in")
                 .isEqualTo(0);
+        // TOXIN_PRESENT (bit 1, 0x02) survives the OVERCROWDED strip (D-38).
+        assertThat(status & EnvironmentEngine.CELL_STATUS_TOXIN_PRESENT)
+                .as("TOXIN_PRESENT preserved from cache (bit 1, non-colliding per D-38)")
+                .isEqualTo(EnvironmentEngine.CELL_STATUS_TOXIN_PRESENT);
         // Preserved cache bits on bit 2 (MUTAGEN_ZONE = 0x04).
         assertThat(status & EnvironmentEngine.CELL_STATUS_MUTAGEN_ZONE)
-                .as("MUTAGEN_ZONE preserved from cache (non-bit-0)")
+                .as("MUTAGEN_ZONE preserved from cache (bit 2)")
                 .isEqualTo(EnvironmentEngine.CELL_STATUS_MUTAGEN_ZONE);
     }
 

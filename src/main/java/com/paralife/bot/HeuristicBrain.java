@@ -45,14 +45,14 @@ public class HeuristicBrain {
     /** Energy threshold above which the bot will try to reproduce. */
     public static final int REPRODUCE_THRESHOLD = 70;
 
-    /** Plan 14-05: bit 0 in {@code entityStatus} — entity currently on a toxic cell. */
-    static final byte ENTITY_STATUS_TOXIC = 0x01;
-    /** Plan 14-05: bit 2 in {@code entityStatus} — entity has an active infection. */
+    /** D-39 bit 1 (0x02): entity currently on a toxic cell. */
+    static final byte ENTITY_STATUS_TOXIC = 0x02;
+    /** D-39 bit 2 (0x04): entity has an active infection. */
     static final byte ENTITY_STATUS_MUTATING = 0x04;
-    /** Plan 14-05: bit 3 in {@code entityStatus} — entity carries an active survivor buff. */
+    /** D-39 bit 3 (0x08): entity carries an active survivor buff. */
     static final byte ENTITY_STATUS_BUFFED = 0x08;
-    /** Plan 14-05: bit 0 in {@code cellStatus} — cell's toxin intensity above threshold. */
-    static final byte CELL_STATUS_TOXIN_PRESENT = 0x01;
+    /** D-38 bit 1 (0x02): cell's toxin intensity above threshold. */
+    static final byte CELL_STATUS_TOXIN_PRESENT = 0x02;
 
     /**
      * Fraction of maxEnergy below which the bot treats TOXIC cells as no-go.

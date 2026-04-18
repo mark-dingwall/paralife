@@ -71,15 +71,18 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     public static final int TICK_ORDER = 14;
 
     // ── D-38 / D-39 status bit constants ──────────────────────────────
-    /** Cell-status bit 1: toxin intensity above {@link Toxin#intensityThreshold()}. */
-    public static final byte CELL_STATUS_TOXIN_PRESENT = 0x01;
-    /** Cell-status bit 2: mutagen strain cell (D-38). */
+    // D-38 cellStatus layout: bit 0 OVERCROWDED (per-bot), bit 1 TOXIN_PRESENT, bit 2 MUTAGEN_ZONE.
+    // D-39 entityStatus layout: bit 0 STARVING (server-global via Cell.FLAG_STARVING),
+    // bit 1 TOXIC, bit 2 MUTATING, bit 3 BUFFED.
+    /** Cell-status bit 1 (0x02): toxin intensity above {@link Toxin#intensityThreshold()} (D-38). */
+    public static final byte CELL_STATUS_TOXIN_PRESENT = 0x02;
+    /** Cell-status bit 2 (0x04): mutagen strain cell (D-38). */
     public static final byte CELL_STATUS_MUTAGEN_ZONE = 0x04;
-    /** Entity-status bit 1: entity currently standing on a toxic cell (intensity > 0). */
-    public static final byte ENTITY_STATUS_TOXIC = 0x01;
-    /** Entity-status bit 2: entity has an active {@link Infection} (D-39). */
+    /** Entity-status bit 1 (0x02): entity currently standing on a toxic cell (D-39). */
+    public static final byte ENTITY_STATUS_TOXIC = 0x02;
+    /** Entity-status bit 2 (0x04): entity has an active {@link Infection} (D-39). */
     public static final byte ENTITY_STATUS_MUTATING = 0x04;
-    /** Entity-status bit 3: entity has any active survivor buff (D-39). */
+    /** Entity-status bit 3 (0x08): entity has any active survivor buff (D-39). */
     public static final byte ENTITY_STATUS_BUFFED = 0x08;
 
     private final WorldGrid worldGrid;
