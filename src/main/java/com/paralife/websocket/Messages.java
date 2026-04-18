@@ -212,6 +212,34 @@ public sealed interface Messages {
      * per-bot; {@code flags}'s OVERCROWDED bit is server-authoritative and
      * global. Same underlying world-state, two different projections.
      *
+     * <p><b>D-38 {@code cellStatus} bit layout:</b>
+     * <pre>
+     *   bit 0 (0x01) — OVERCROWDED      (vision-scoped per-bot; recomputed)
+     *   bit 1 (0x02) — TOXIN_PRESENT    (from layer-2 cache; toxin &gt; threshold)
+     *   bit 2 (0x04) — MUTAGEN_ZONE     (from layer-2 cache; mutagen grid != 0)
+     *   bits 3-5     — reserved
+     *   bits 6-7     — unused (byte sign)
+     * </pre>
+     *
+     * <p><b>D-39 {@code entityStatus} bit layout:</b>
+     * <pre>
+     *   bit 0 (0x01) — STARVING (served via Cell.FLAG_STARVING, not projected here)
+     *   bit 1 (0x02) — TOXIC         (occupant stands on toxic cell)
+     *   bit 2 (0x04) — MUTATING      (active infection; BuffRegistry or infection map)
+     *   bit 3 (0x08) — BUFFED        (active survivor buff)
+     *   bits 4-5     — reserved
+     *   bits 6-7     — unused (byte sign)
+     * </pre>
+     *
+     * <p><b>Three-layer pipeline</b> (see CLAUDE.md &gt; Architecture &gt; "Env state projection"):
+     * <ol>
+     *   <li>Layer 1: shadow grids in {@code EnvironmentEngine} — intensity 0-255 per effect.</li>
+     *   <li>Layer 2: read-only {@code cellStatusCache} / {@code entityStatusCache} bitmask
+     *       projection (D-41). Rebuilt per tick in {@code buildStatusCaches()}.</li>
+     *   <li>Layer 3: this {@code cellStatus} / {@code entityStatus} byte — per-bot
+     *       derivation from layer 2 with OVERCROWDED recomposition.</li>
+     * </ol>
+     *
      * <p>Back-compat: 3-arg and 4-arg constructors preserved so Phase 13 tests
      * and callers continue to compile.
      *

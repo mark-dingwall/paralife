@@ -57,9 +57,21 @@ Paralife is a distributed living simulation — a toroidal 2D world populated by
 
 **Tick pipeline** (Spring `@EventListener` on `TickEvent`):
 1. `SimulationEngine` `@Order(10)` — Combat, energy decay, death removal, nutrient spawning
-2. `ActionResolver` `@Order(20)` — Drain pending bot actions, resolve moves/consume/reproduce/rest
-3. `PerceptionBroadcaster` `@Order(50)` — Send 5x5 neighbourhood perception to each bot
-4. `TickBroadcaster` `@Order(100)` — Broadcast tick snapshot to all connected clients
+2. `EnvironmentEngine` `@Order(14)` — Toxin/mutagen/lightning/compost; rebuilds status caches
+3. `ActionResolver` `@Order(20)` — Drain pending bot actions, resolve moves/consume/reproduce/rest
+4. `EnvPostActionReconciler` `@Order(25)` — Apply post-action buff grants, clear cure-immunity
+5. `PerceptionBroadcaster` `@Order(50)` — Send 5x5 neighbourhood perception to each bot
+6. `TickBroadcaster` `@Order(100)` — Broadcast tick snapshot to all connected clients
+
+**Env state projection — three layers** (Phase 14, decisions D-38/D-39/D-40/D-41):
+
+| Layer | Surface | Owner | Purpose |
+|-------|---------|-------|---------|
+| 1. Shadow grids | `byte[][] toxinGrid`, `mutagenGrid` (intensity 0–255) | `EnvironmentEngine` | Authoritative effect state; CA diffusion, spline paths, gossip |
+| 2. Status caches | `Map<Position,Byte> cellStatusCache`, `Map<String,Byte> entityStatusCache` | `EnvironmentEngine.buildStatusCaches()` | Per-tick read-only bitmask projection (D-41). Derived from layer 1 + registries (BuffRegistry, Infection map). Rebuilt every tick, not a second source of truth |
+| 3. Wire bitmask | `Messages.CellView.cellStatus`, `entityStatus` bytes | `PerceptionBroadcaster.cellToView` (per-bot) | Zero-trust vision-scoped bitmask. OVERCROWDED is **redacted per bot**: `cellStatus = (layer2 & ~BIT_OVERCROWDED) \| perBotOvercrowdedBit` — bit 0 recomputed from bot's 5x5 Moore count so outer vision cells correctly under-report global overcrowding (D-40 incomplete-information design) |
+
+Bit layout (D-38 `cellStatus` / D-39 `entityStatus`): OVERCROWDED=bit 0, TOXIN_PRESENT=bit 1 (`0x02`), MUTAGEN_ZONE=bit 2 (`0x04`). STARVING lives on `Cell.flags` (not `entityStatus`) as server-global entity-intrinsic state. `Cell.flags` retains `FLAG_OVERCROWDED`/`FLAG_STARVING` unchanged; env effects do NOT extend `Cell.flags` — intensity values don't fit single bits and cache locality favours per-effect shadow grids.
 
 **Entry points:**
 - `ParalifeApplication.main()` — Spring Boot startup
