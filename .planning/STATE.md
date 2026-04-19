@@ -6,8 +6,8 @@ current_phase: 15
 current_phase_name: protocol & transport overhaul
 current_plan: Not started
 status: planning
-stopped_at: Phase 14 context gathered. 14-CONTEXT.md + 14-DISCUSSION-LOG.md written.
-last_updated: "2026-04-18T00:45:57.991Z"
+stopped_at: Phase 15 context gathered; formal schema review flagged as pre-plan gate (D-50)
+last_updated: "2026-04-19T03:29:37.853Z"
 last_activity: 2026-04-18
 progress:
   total_phases: 6
@@ -56,9 +56,9 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-17T00:00:00Z
-Stopped at: Phase 14 context gathered. 14-CONTEXT.md + 14-DISCUSSION-LOG.md written.
+Last session: 2026-04-19T03:29:37.845Z
+Stopped at: Phase 15 context gathered; formal schema review flagged as pre-plan gate (D-50)
 ROADMAP updated — inserted Phase 15 (Protocol & Transport Overhaul), renumbered
 emergence tests to Phase 16. Phase 14 ships with existing JSON protocol.
-Resume file: .planning/phases/14-environmental-rules/14-CONTEXT.md
+Resume file: .planning/phases/15-protocol-transport-overhaul/15-CONTEXT.md
 Next command: /gsd-plan-phase 14
