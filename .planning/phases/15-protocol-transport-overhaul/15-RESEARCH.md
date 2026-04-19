@@ -982,27 +982,32 @@ class PerceptionCodecRoundTripTest {
 | A7 | `ImageIO.read` handles indexed-palette PNGs transparently via `getRGB()` | §PNG format handling | Very low — this is documented JDK behaviour |
 | A8 | Respawn per-session cap (e.g. 5) is needed to prevent runaway respawn storms | §Respawn flow | Low — exact cap is a planner/user decision; the schema mentions `E|429` so the mechanism is expected |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Vector 9 coord width:** `v+0F-03L5` — is the relative coord `+0F-0` (4 chars) then event code `3L5`? Or `+0F-03` (6 chars) then `L5`? Schema §2 says relative coords are 4-char, but the vector as written appears 6-char if the event is `L5`. Likely typo/clarification needed.
    - What we know: schema §2 defines relative coords as `[+-]X[+-]Y` where X, Y are single base64 chars → 4 chars total.
    - What's unclear: the parse tree of vector 9's event.
    - Recommendation: planner flags to user during plan-phase review; if typo, correct the vector; if extension, document schema amendment.
 
+   - **RESOLVED:** routed through plan 15-05 Task 1 as a `## CHECKPOINT REACHED` path. Implementer tries literal-string parse first (interpretation: `+0F` and `-03` as 3-char absolute coords in events — new precedent, not 6-char relative). If round-trip fails against the literal string, executor raises the checkpoint to the user. Schema lock is preserved either way; no silent patching.
 2. **Jetty 12 per-frame bytes-saved hook:** does `Session.getOutputStatistics()` (or any equivalent) expose post-deflate byte count on Jetty 12.0.x?
    - What we know: the deflate extension internally tracks it; public API exposure is unclear.
    - What's unclear: whether the metric D-38 #1 can be exact or must be estimated.
    - Recommendation: prototype the metric during implementation; if exact not available, ship as estimate with clear naming + documentation.
 
+   - **RESOLVED:** ship `paralife.ws.bytes.saved` as an estimate — record raw encoded payload size as the numerator; the deflated byte count is best-effort via `jetty-websocket-core` internal stats if reachable, otherwise metric carries a comment "best-effort estimate; Jetty 12 does not expose per-frame post-deflate length publicly." Plan 15-10 owns the estimate decision.
 3. **Authority-lite FEEDER/ATTACKER/REPRODUCER action path:** schema §7 says "server auto-picks a fallback if nothing arrives." Current `ActionResolver.resolveFeederConsume` already implements auto-consume. Does authority-lite actually change server behaviour (allow bot to override fallback) or is this documentation-only for MVP?
    - What we know: current resolver code is server-autonomous.
    - What's unclear: whether bot-submitted action for FEEDER is wired into resolver in Phase 15, or deferred post-MVP.
    - Recommendation: planner includes one task for wiring `a|E|<numpad>` from an authority-lite FEEDER into `ActionResolver.queueAction` and resolving to a specific target when provided. Leave server-autonomous path as fallback.
 
+   - **RESOLVED:** Phase 15 ships server-autonomous fallback unchanged — authority-lite members receive the full `T` frame at radius 1 (per SCHEMA §7) but the client does NOT submit actions this phase. Action reception wiring is explicitly deferred post-MVP. Plan 15-08 includes the reduced radius and frame shape; plan 15-09 does not add FEEDER/ATTACKER/REPRODUCER action emitters.
 4. **Rock PNG source:** shipping binary resources into a Gradle module — do we want to generate them via a one-off script committed to the repo, bundle pre-made PNGs from an artist, or generate procedurally at build time?
    - What we know: no existing rocks assets.
    - What's unclear: project preference for binary resources in src.
    - Recommendation: ship 5 pre-made PNGs in `src/main/resources/rocks/`. Note the generation command in a README alongside the assets. Keeps build fast and deterministic.
+
+   - **RESOLVED:** plan 15-04 commits 5 pre-generated PNGs to `src/main/resources/rocks/` as opaque binaries. Generation script is not part of this phase. File sizes and counts documented in 15-04 Task 1 acceptance criteria.
 
 ## Environment Availability
 
