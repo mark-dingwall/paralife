@@ -178,21 +178,23 @@ Replace JSON-per-tick messaging with a compact text protocol; swap Tomcat → Je
   Planner picks.
 
 ### Claude's Discretion
-- **D-48:** Exact direction char encoding (8 alphabetic N/E/S/W/U/V/X/Y vs numeric 0–7). Affects RLE suffix, ATT_IN/OUT args, FLEEING from-coord convention, Action frame direction slot. Decide during formal schema review.
-- **D-49:** Season multiplier encoding inside `season=` (fixed-point decimal string "1.05" vs base64 fixed-point vs omit and re-derive client-side from season phase + tick). Decide during formal schema review.
+None — every open encoding / grammar decision requires user input during formal schema review (D-50). No auto-decide fallback. Planner must pause for user confirmation on each D-50 item before writing PLAN.md.
 
 ### Formal Schema Review — pre-planning gate
-- **D-50:** **MANDATORY gate between discuss-phase and plan-phase.** This CONTEXT.md locks the shape; the grammar must be formally reviewed and committed as `15-SCHEMA.md` before PLAN.md is written. Review covers:
-  1. Status block sentinel: Option A (`:<c><e?>`) vs Option B (`:<c>;<e>`) vs Option C (`:<c><e>` fixed 2-char). Cell token examples laid out in discussion log.
-  2. Direction char encoding (D-48).
-  3. Far-perception marker namespace disambiguation (role letter collision — e.g. `L` = lightning OR LOCOMOTOR).
-  4. Season multiplier encoding (D-49).
-  5. Rock map delivery — Welcome-embedded vs separate one-shot frame (D-37).
-  6. Action frame grammar (D-46).
-  7. Final message-type char allocation (T, CT, MT, W, R, r, E, A + any auxiliaries).
-  8. Any edge cases surfaced by encoding a representative tick sample and decoding it back through the codec under test.
+- **D-48:** **Direction char encoding** — single-char encoding for compass directions used in RLE run suffixes, `ATT_IN` / `ATT_OUT` args, FLEEING from-coord convention, Action frame direction slot. Candidates: 8 alphabetic (`N E S W U V X Y` where U=NE, V=SE, X=SW, Y=NW) vs numeric `0-7`. **User-gated — surface during schema review.**
+- **D-49:** **Season multiplier encoding** — how the sine-wave multiplier is packed into the `season=<season>,<multiplier>` section. Candidates: fixed-point decimal string `"1.05"`, base64 fixed-point integer, or omit from wire and re-derive client-side from season phase + tick. **User-gated — surface during schema review.**
+- **D-50:** **MANDATORY gate between discuss-phase and plan-phase.** This CONTEXT.md locks the shape; the grammar must be formally reviewed and committed as `15-SCHEMA.md` before PLAN.md is written. Every item below requires user input — planner pauses for confirmation on each before finalising:
+  1. **Status block sentinel:** Option A (`:<c><e?>` positional with single sentinel), Option B (`:<c>;<e>` dual separator), Option C (`:<c><e>` fixed 2-char when `:` present). Worked examples + byte-cost table preserved in `15-DISCUSSION-LOG.md`.
+  2. **Direction char encoding** (D-48).
+  3. **Far-perception marker namespace disambiguation** — `L` = lightning strike token OR LOCOMOTOR role letter. Parser-side disambiguation via positional rule (roles only appear after kind=6 subcode; markers appear as bare `<coord><letter>`), or segregate alphabets.
+  4. **Season multiplier encoding** (D-49).
+  5. **Rock map delivery** — embedded in Welcome frame vs separate one-shot frame after Welcome (D-37).
+  6. **Action frame grammar** — likely `A|<verb>|<dir?>|<ranks?>` mirroring tick frame, verbs M/C/R/Z, ranks = concatenated direction chars for composite LOCOMOTOR STV voting (D-46).
+  7. **Final message-type char allocation** — `T`, `CT`, `MT`, `W`, `R`, `r`, `E`, `A` — confirm no collisions, reserve a future namespace.
+  8. **Edge-case shakedown** — encode a representative tick sample, decode back through the codec under test, verify round-trip equality on every frame type including empty, single-cell, dense-RLE, and state-change variants.
+  9. **FLEEING-in-or-out** — decide whether `F:<expiryTick>,<fromX>,<fromY>` effect + lightning flee formula fold into Phase 15 schema-lock plan, or defer to Phase 14 follow-up. Impacts whether far-perception marker `L` has a concrete consumer this phase.
 
-  Planner's first task: drive this review and commit `15-SCHEMA.md` with the locked grammar + parse-tree + test vectors. Only after that is PLAN.md written.
+  **Planner's first task:** drive this review interactively, commit `15-SCHEMA.md` with locked grammar + parse tree + worked test vectors + round-trip proof. Only then is PLAN.md written. If any item is genuinely non-user-gated after discussion, note explicitly in `15-SCHEMA.md` with rationale.
 
 </decisions>
 
