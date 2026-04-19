@@ -124,17 +124,30 @@ Plans:
 - Unit tests for each environmental effect
 
 ### Phase 15: Protocol & Transport Overhaul
-**Goal:** Replace JSON per-tick messaging with compact text perception protocol; switch container to Jetty; enable permessage-deflate with precompress fan-out infrastructure; redesign bots as stateless reactive agents
+**Goal:** Replace JSON per-tick messaging with compact text perception protocol; switch container Tomcat→Jetty; enable permessage-deflate with server_no_context_takeover on both sides; redesign bots as stateless reactive agents; zero-trust vision filtering
 **Depends on:** Phase 14 (env effects provide diverse message types to exercise codec)
+**Requirements:** R20, R21, R22, R23, R24, R25, R26, R27, R28, R29
+**Plans:** 11 plans
+Plans:
+- [ ] 15-01-PLAN.md — Housekeeping: ROADMAP fan-out-criterion removal + REQUIREMENTS R20-R29 add (R15-R19 remap to Phase 16)
+- [ ] 15-02-PLAN.md — Codec package scaffolding (Frame/Coord/KindData sealed hierarchies, Base64Codec, ParseCursor, CodecException, stub PerceptionCodec, RED 13-vector test)
+- [ ] 15-03-PLAN.md — Container swap + Jetty deflate customizer + handshake + refusal integration tests
+- [ ] 15-04-PLAN.md — PNG-based rock generation (RockConfig + RockGenerator + 5 perlin PNGs + determinism test)
+- [ ] 15-05-PLAN.md — PerceptionCodec encode/decode implementation (13 vectors GREEN) + error-path + DoS-sentinel test (CHECKPOINT for Vector 9 coord ambiguity)
+- [ ] 15-06-PLAN.md — WorldWebSocketHandler rewrite (codec I/O + respawn FSM + E|429 cap) + ActionResolver verb dispatch + IRV vote replacement + Messages.java strip
+- [ ] 15-07-PLAN.md — Delete old heartbeat TickBroadcaster + git mv engine/PerceptionBroadcaster → websocket/TickBroadcaster (preserve vision-scoped OVERCROWDED mask-and-OR)
+- [ ] 15-08-PLAN.md — TickBroadcaster projection rewrite to codec Frames + authority tiers (full/authority-lite/passive) + FLEEING effect + alarm routing + zero-trust test
+- [ ] 15-09-PLAN.md — BotClient Jetty-native transport + D-33 client-side enforcement + codec replaces Jackson + HeuristicBrain pure function + Phase 09 tech debt #3 fix + respawn flow
+- [ ] 15-10-PLAN.md — Micrometer metrics (WebSocketMetrics bean: paralife.ws.bytes.saved / active.sessions / tick.frame.bytes) + actuator reachability test
+- [ ] 15-11-PLAN.md — Test migration: all Messages.* references ported to codec Frame; ./gradlew test exits 0 end-to-end
 **Success Criteria:**
-- Compact text Perception protocol with sparse relative coords, base36 encoding, fixed-width status bitmasks
+- Compact text Perception protocol with sparse relative coords, base64 encoding, fixed-width status bitmasks
 - Stateless bot redesign — server sends complete authoritative state per tick; no client-side caching
 - Zero-trust perception filtering — server sends only data derivable from entity's vision range
 - Tomcat → Jetty container swap, permessage-deflate negotiated both sides with `server_no_context_takeover=true`
-- Precompress fan-out infrastructure (`BroadcastChannel` + `CompressedFrame`) ready for future visualizer broadcast channel
 - PerceptionCodec with shared encode/decode used by both server and bot client
 - Bot→Server compact action format
-- Actuator custom metrics (bytes saved, compress ops saved, active sessions)
+- Actuator custom metrics (bytes saved, active sessions, tick frame bytes distribution)
 - Rock generation algorithm defined (enables run-length encoding decision)
 - All existing tests pass under new protocol
 
