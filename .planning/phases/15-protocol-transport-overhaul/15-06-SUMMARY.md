@@ -239,3 +239,9 @@ All three removals are explicit in the plan's Part D migration table and their c
 | 1    | 38d2a24 | feat(15-06): rewrite WorldWebSocketHandler around PerceptionCodec + respawn FSM |
 | 2    | f8dda15 | feat(15-06): AlarmQueue + ActionResolver Frame-dispatch + IRV + Messages partial strip |
 | 3    | e241683 | test(15-06): add IRV resolver and handler FSM coverage |
+| docs | 0a0cfcb | docs(15-06): complete codec-handler + verb-dispatch + IRV plan |
+
+## Self-Check: PASSED
+
+All claimed files and commits verified present. Compile clean, narrowed Messages
+strip grep passes, retained subset still referenced, 7/7 new tests green.
