@@ -9,12 +9,18 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Integration test: launch bots, verify they connect, register, and make decisions.
+ * Plan 15-11: bot lifecycle over the codec-native protocol.
+ *
+ * <p>Migrated from the Jackson-JSON era — all wire I/O now flows through
+ * {@link com.paralife.codec.PerceptionCodec}. The pre-Phase-15 JSON-parse
+ * assertions have been removed; this test focuses on the BotClient lifecycle
+ * (connect → register → receive perception → submit action) using
+ * {@link BotLauncher}. Wire-protocol correctness is covered by
+ * {@code WebSocketIntegrationTest} and {@code RespawnFlowIntegrationTest}.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {
@@ -45,16 +51,20 @@ class BotClientIntegrationTest {
 
         assertThat(bots).hasSize(9);
 
-        // Verify all registered
+        // Verify all registered (each received an S|<entityId> sync frame).
         for (BotClient bot : bots) {
-            assertThat(bot.isRegistered()).isTrue();
-            assertThat(bot.getEntityId()).isNotNull();
+            assertThat(bot.isRegistered())
+                    .as("Bot should be registered after launch")
+                    .isTrue();
+            assertThat(bot.getEntityId())
+                    .as("Registered bot must have an entityId from the sync frame")
+                    .isNotNull();
         }
 
-        // Let them run for ~2 seconds (about 20 ticks at 100ms)
+        // Let them run for ~2 seconds (about 20 ticks at 100ms).
         Thread.sleep(2000);
 
-        // Verify all bots have received perceptions and submitted actions
+        // Each bot should have processed perception frames and submitted action frames.
         int totalPerceptions = 0;
         int totalActions = 0;
         for (BotClient bot : bots) {
@@ -62,20 +72,20 @@ class BotClientIntegrationTest {
                     .as("Bot %s should still be connected", bot.getEntityId())
                     .isTrue();
             assertThat(bot.getPerceptionCount())
-                    .as("Bot %s should have received perceptions", bot.getEntityId())
+                    .as("Bot %s should have received tick frames", bot.getEntityId())
                     .isGreaterThan(0);
             assertThat(bot.getActionCount())
-                    .as("Bot %s should have submitted actions", bot.getEntityId())
+                    .as("Bot %s should have submitted action frames", bot.getEntityId())
                     .isGreaterThan(0);
 
             totalPerceptions += bot.getPerceptionCount();
             totalActions += bot.getActionCount();
         }
 
-        log.info("9 bots ran for ~20 ticks: {} total perceptions, {} total actions",
+        log.info("9 bots ran for ~20 ticks: {} tick frames, {} action frames",
                 totalPerceptions, totalActions);
 
-        // Sanity: should have at least 5 perceptions per bot on average
+        // Sanity: should have at least 5 tick frames per bot on average.
         assertThat(totalPerceptions).isGreaterThan(9 * 5);
         assertThat(totalActions).isGreaterThan(9 * 5);
     }
@@ -85,10 +95,8 @@ class BotClientIntegrationTest {
         String uri = "ws://localhost:" + port + "/ws/world";
         List<BotClient> bots = launcher.launch(uri, 3);
 
-        // Wait for some ticks
         Thread.sleep(500);
 
-        // Disconnect all
         launcher.shutdown();
 
         for (BotClient bot : bots) {

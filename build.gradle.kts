@@ -54,16 +54,31 @@ dependencies {
 sourceSets {
     test {
         java {
+            // Plan 15-11 cleans up the remaining exclusions:
+            // - WebSocketIntegrationTest, HundredBotIntegrationTest (via Task 1),
+            //   TickBroadcasterProjectionTest, CompositePerceptionTest,
+            //   CompositeActionTest, CompositeMovementTest,
+            //   PerceptionActionIntegrationTest (Task 2), and
+            //   BotClientIntegrationTest (Task 1) are migrated to the codec-native
+            //   wire protocol and re-enabled.
+            // - HeuristicBrainTest is superseded by HeuristicBrainDeterminismTest
+            //   (added in plan 15-09) plus end-to-end coverage in
+            //   MetabolismIntegrationTest + PopulationDynamicsTest; deleted here
+            //   to avoid reconstructing the pre-Phase-15 Messages.* perception
+            //   fixtures that the new pure-fn HeuristicBrain does not accept.
+            // - ActionResolverTest + CompositeIntegrationTest remain excluded;
+            //   they couple to the 8-arg (ObjectMapper) ActionResolver ctor that
+            //   plan 15-06 removed and migrating them is outside plan 15-11
+            //   scope. Tracked as deferred tech debt — see 15-11 SUMMARY.
+            // - VisionScopedOvercrowdingTest remains excluded; it types against
+            //   Messages.CellView + TickBroadcaster.cellToViewForTest() which
+            //   the codec rewrite removed. The predicate it exercises
+            //   (computeVisionScopedOvercrowded) is still covered by
+            //   TickBroadcasterProjectionTest vision-scoped assertions after
+            //   this plan's migration. Tracked as deferred tech debt.
             exclude("com/paralife/engine/ActionResolverTest.java")
-            exclude("com/paralife/engine/CompositeActionTest.java")
             exclude("com/paralife/engine/CompositeIntegrationTest.java")
-            exclude("com/paralife/engine/CompositeMovementTest.java")
-            exclude("com/paralife/websocket/WebSocketIntegrationTest.java")
             exclude("com/paralife/websocket/VisionScopedOvercrowdingTest.java")
-            exclude("com/paralife/websocket/TickBroadcasterProjectionTest.java")
-            exclude("com/paralife/websocket/CompositePerceptionTest.java")
-            exclude("com/paralife/bot/HeuristicBrainTest.java")
-            exclude("com/paralife/bot/BotClientIntegrationTest.java")
         }
     }
 }

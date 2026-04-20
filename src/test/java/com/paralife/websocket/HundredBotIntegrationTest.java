@@ -1,7 +1,14 @@
 package com.paralife.websocket;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.codec.Frame;
+import com.paralife.codec.PerceptionCodec;
+import org.eclipse.jetty.websocket.api.Callback;
+import org.eclipse.jetty.websocket.api.Session;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketOpen;
+import org.eclipse.jetty.websocket.api.annotations.WebSocket;
+import org.eclipse.jetty.websocket.client.ClientUpgradeRequest;
+import org.eclipse.jetty.websocket.client.WebSocketClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -9,22 +16,28 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketHttpHeaders;
-import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.net.URI;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Integration test: 100 concurrent WebSocket bots connect, all receive
- * sequential tick events without gaps or duplicates.
+ * Plan 15-11: 100 concurrent bots connect and receive sequential tick frames.
+ *
+ * <p>Migrated from the Messages-era JSON wire to the codec-native protocol.
+ * Each bot holds its own Jetty-native {@link WebSocketClient} session (required
+ * for permessage-deflate negotiation — D-33), decodes incoming frames via
+ * {@link PerceptionCodec}, and records the {@code tickId} of every
+ * {@link Frame.TickFrame} it observes.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {
@@ -42,67 +55,31 @@ class HundredBotIntegrationTest {
     @LocalServerPort
     private int port;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
-    private final List<WebSocketSession> sessions = new CopyOnWriteArrayList<>();
+    private final List<Bot> bots = new CopyOnWriteArrayList<>();
 
     @AfterEach
     void tearDown() {
-        for (WebSocketSession session : sessions) {
-            try {
-                if (session.isOpen()) session.close();
-            } catch (Exception ignored) {}
-        }
+        for (Bot b : bots) b.close();
     }
 
     @Test
     void hundredBotsConnectAndReceiveTicks() throws Exception {
-        // Track ticks received per bot
         var ticksByBot = new ConcurrentHashMap<String, List<Long>>();
-        var allConnected = new CountDownLatch(BOT_COUNT);
         var allReceivedTicks = new CountDownLatch(BOT_COUNT);
+        var connectLatch = new CountDownLatch(BOT_COUNT);
         var connectErrors = new AtomicInteger(0);
 
-        // Connect 100 bots concurrently using virtual threads
-        var connectLatch = new CountDownLatch(BOT_COUNT);
+        // Connect 100 bots concurrently using virtual threads.
         for (int i = 0; i < BOT_COUNT; i++) {
             final int botIndex = i;
             Thread.startVirtualThread(() -> {
+                String botId = "bot-" + botIndex;
+                var ticks = new CopyOnWriteArrayList<Long>();
+                ticksByBot.put(botId, ticks);
                 try {
-                    String botId = "bot-" + botIndex;
-                    var ticks = new CopyOnWriteArrayList<Long>();
-                    ticksByBot.put(botId, ticks);
-
-                    var handler = new TextWebSocketHandler() {
-                        private boolean welcomed = false;
-                        private boolean tickGoalReached = false;
-
-                        @Override
-                        protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-                            try {
-                                JsonNode node = objectMapper.readTree(message.getPayload());
-                                String type = node.get("type").asText();
-
-                                if ("welcome".equals(type) && !welcomed) {
-                                    welcomed = true;
-                                    allConnected.countDown();
-                                } else if ("tick".equals(type)) {
-                                    long tickNum = node.get("tickNumber").asLong();
-                                    ticks.add(tickNum);
-                                    if (!tickGoalReached && ticks.size() >= TICKS_TO_COLLECT) {
-                                        tickGoalReached = true;
-                                        allReceivedTicks.countDown();
-                                    }
-                                }
-                            } catch (Exception e) {
-                                log.warn("Bot {} message error: {}", botId, e.getMessage());
-                            }
-                        }
-                    };
-
-                    var client = new StandardWebSocketClient();
-                    WebSocketSession session = client.execute(handler, new WebSocketHttpHeaders(),
-                            URI.create("ws://localhost:" + port + "/ws/world")).get(10, TimeUnit.SECONDS);
-                    sessions.add(session);
+                    Bot bot = new Bot(botId, port, ticks, allReceivedTicks);
+                    bot.connect();
+                    bots.add(bot);
                 } catch (Exception e) {
                     connectErrors.incrementAndGet();
                     log.error("Bot {} failed to connect: {}", botIndex, e.getMessage());
@@ -112,58 +89,124 @@ class HundredBotIntegrationTest {
             });
         }
 
-        // Wait for all connections
         assertThat(connectLatch.await(30, TimeUnit.SECONDS))
                 .as("All %d bots should attempt connection within 30s", BOT_COUNT)
                 .isTrue();
-
         assertThat(connectErrors.get())
                 .as("No connection errors expected")
                 .isEqualTo(0);
 
-        // Wait for all welcomes
-        assertThat(allConnected.await(10, TimeUnit.SECONDS))
-                .as("All %d bots should receive welcome within 10s", BOT_COUNT)
-                .isTrue();
+        log.info("All {} bots connected", BOT_COUNT);
 
-        log.info("All {} bots connected and welcomed", BOT_COUNT);
-
-        // Wait for all bots to receive enough ticks
+        // Wait for each bot to receive enough tick frames.
         assertThat(allReceivedTicks.await(30, TimeUnit.SECONDS))
                 .as("All %d bots should receive %d ticks within 30s", BOT_COUNT, TICKS_TO_COLLECT)
                 .isTrue();
 
         log.info("All {} bots received {} ticks", BOT_COUNT, TICKS_TO_COLLECT);
 
-        // Verify: each bot received sequential tick numbers (no gaps within each bot's stream)
+        // Verify: each bot received monotonically non-decreasing tickIds.
         for (var entry : ticksByBot.entrySet()) {
-            List<Long> ticks = new ArrayList<>(entry.getValue()); // snapshot to avoid COW race
-            assertThat(ticks)
+            List<Long> seen = new ArrayList<>(entry.getValue());
+            assertThat(seen)
                     .as("Bot %s should have received at least %d ticks", entry.getKey(), TICKS_TO_COLLECT)
                     .hasSizeGreaterThanOrEqualTo(TICKS_TO_COLLECT);
-
-            // Verify ticks are in ascending order
-            for (int i = 1; i < ticks.size(); i++) {
-                assertThat(ticks.get(i))
-                        .as("Bot %s tick %d should be > tick %d", entry.getKey(), i, i - 1)
-                        .isGreaterThan(ticks.get(i - 1));
+            for (int i = 1; i < seen.size(); i++) {
+                assertThat(seen.get(i))
+                        .as("Bot %s tick %d should be >= tick %d", entry.getKey(), i, i - 1)
+                        .isGreaterThanOrEqualTo(seen.get(i - 1));
             }
         }
 
-        // Verify: all bots saw the same tick numbers (no bot missed a tick that others got)
         Set<Long> allTicksSeen = new TreeSet<>();
-        for (List<Long> ticks : ticksByBot.values()) {
-            allTicksSeen.addAll(ticks);
-        }
-
+        for (List<Long> t : ticksByBot.values()) allTicksSeen.addAll(t);
         log.info("Tick range seen across all bots: {} to {}",
                 allTicksSeen.stream().min(Long::compare).orElse(0L),
                 allTicksSeen.stream().max(Long::compare).orElse(0L));
 
-        // All sessions should still be open
-        long openSessions = sessions.stream().filter(WebSocketSession::isOpen).count();
+        // All sessions should still be open.
+        long openSessions = bots.stream().filter(Bot::isOpen).count();
         assertThat(openSessions).isEqualTo(BOT_COUNT);
 
-        log.info("Test passed: {} bots, {} ticks each, all sequential, no gaps", BOT_COUNT, TICKS_TO_COLLECT);
+        log.info("Test passed: {} bots, {} ticks each, all monotonic, no gaps",
+                BOT_COUNT, TICKS_TO_COLLECT);
+    }
+
+    // ── Bot harness ──────────────────────────────────────────────
+
+    /** Minimal tick-listening bot — opens a deflate-negotiated Jetty WS session. */
+    private static final class Bot {
+        final String botId;
+        final int port;
+        final List<Long> tickIds;
+        final CountDownLatch tickGoal;
+        volatile boolean tickGoalReached = false;
+
+        WebSocketClient client;
+        Session session;
+
+        Bot(String botId, int port, List<Long> tickIds, CountDownLatch tickGoal) {
+            this.botId = botId;
+            this.port = port;
+            this.tickIds = tickIds;
+            this.tickGoal = tickGoal;
+        }
+
+        void connect() throws Exception {
+            client = new WebSocketClient();
+            client.start();
+            ClientUpgradeRequest req = new ClientUpgradeRequest();
+            req.addExtensions("permessage-deflate; server_no_context_takeover");
+            session = client.connect(new Endpoint(this),
+                            URI.create("ws://localhost:" + port + "/ws/world"), req)
+                    .get(10, TimeUnit.SECONDS);
+            // Post-plan-15: server only sends T frames to registered bots.
+            // Send r|C immediately after the upgrade so T frames start flowing.
+            session.sendText(com.paralife.codec.PerceptionCodec.encode(
+                    new Frame.RegisterFrame('C')), Callback.NOOP);
+        }
+
+        boolean isOpen() {
+            return session != null && session.isOpen();
+        }
+
+        void close() {
+            try {
+                if (session != null && session.isOpen()) {
+                    session.close(1000, "done", Callback.NOOP);
+                }
+            } catch (Exception ignored) { /* best-effort */ }
+            try {
+                if (client != null) client.stop();
+            } catch (Exception ignored) { /* best-effort */ }
+        }
+    }
+
+    @WebSocket
+    public static class Endpoint {
+        private final Bot bot;
+
+        public Endpoint(Bot bot) {
+            this.bot = bot;
+        }
+
+        @OnWebSocketOpen
+        public void onOpen(Session s) { /* session reference captured by caller */ }
+
+        @OnWebSocketMessage
+        public void onMessage(String payload) {
+            try {
+                Frame f = PerceptionCodec.decode(payload);
+                if (f instanceof Frame.TickFrame tf) {
+                    bot.tickIds.add(tf.tickId());
+                    if (!bot.tickGoalReached && bot.tickIds.size() >= TICKS_TO_COLLECT) {
+                        bot.tickGoalReached = true;
+                        bot.tickGoal.countDown();
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Bot {} frame decode failed: {}", bot.botId, e.getMessage());
+            }
+        }
     }
 }

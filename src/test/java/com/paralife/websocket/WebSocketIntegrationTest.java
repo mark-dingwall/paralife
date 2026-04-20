@@ -1,26 +1,48 @@
 package com.paralife.websocket;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.codec.Frame;
+import com.paralife.codec.PerceptionCodec;
+import org.eclipse.jetty.websocket.api.Callback;
+import org.eclipse.jetty.websocket.api.Session;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketOpen;
+import org.eclipse.jetty.websocket.api.annotations.WebSocket;
+import org.eclipse.jetty.websocket.client.ClientUpgradeRequest;
+import org.eclipse.jetty.websocket.client.WebSocketClient;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketHttpHeaders;
-import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.net.URI;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Plan 15-11: codec-native lifecycle tests.
+ *
+ * <p>Exercises the post-plan-15-06 wire protocol:
+ * <ul>
+ *   <li>Connection establishment with {@code permessage-deflate;
+ *       server_no_context_takeover} negotiation (D-33).</li>
+ *   <li>No Welcome frame — the server stays quiet until it sees an {@code r|}
+ *       frame (collapsed into {@code S|} sync per SCHEMA §5).</li>
+ *   <li>Register → {@link Frame.SyncFrame} response carrying {@code entityId}.</li>
+ *   <li>Tick broadcast → stream of {@link Frame.TickFrame}s with monotonic
+ *       {@code tickId}.</li>
+ *   <li>Malformed frame → {@link Frame.ErrorFrame} with code 400.</li>
+ * </ul>
+ *
+ * <p>Uses Jetty's native {@link WebSocketClient} (added in plan 15-09) because
+ * Spring's {@link org.springframework.web.socket.client.standard.StandardWebSocketClient}
+ * cannot advertise {@code Sec-WebSocket-Extensions} through its public API, and
+ * the server-side {@code DeflateEnforcementFilter} rejects upgrades without it.
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {
         "paralife.tick.interval-ms=100",  // Fast ticks for testing
@@ -33,163 +55,144 @@ class WebSocketIntegrationTest {
     @LocalServerPort
     private int port;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
-    private WebSocketSession clientSession;
+    private WebSocketClient client;
+    private Session session;
 
     @AfterEach
     void tearDown() throws Exception {
-        if (clientSession != null && clientSession.isOpen()) {
-            clientSession.close();
+        if (session != null && session.isOpen()) {
+            session.close(1000, "test done", Callback.NOOP);
+        }
+        if (client != null) {
+            client.stop();
         }
     }
 
     @Test
-    void connectAndReceiveWelcome() throws Exception {
-        var messages = new CopyOnWriteArrayList<String>();
-        var welcomeLatch = new CountDownLatch(1);
+    void tickFramesBroadcastAfterRegister() throws Exception {
+        // Post-plan-15 the server only sends T frames to registered bots.
+        // An unregistered session stays silent — pre-plan-15 "welcome/tick"
+        // broadcast semantics are gone.
+        var frames = new CopyOnWriteArrayList<Frame>();
+        var tickLatch = new CountDownLatch(3);
 
-        clientSession = connectClient(messages, welcomeLatch);
+        CaptureEndpoint cap = new CaptureEndpoint(frames, frame -> {
+            if (frame instanceof Frame.TickFrame) tickLatch.countDown();
+        });
+        session = openConnection(cap);
 
-        assertThat(welcomeLatch.await(5, TimeUnit.SECONDS))
-                .as("Should receive welcome message")
-                .isTrue();
-
-        // Parse welcome message
-        JsonNode welcome = objectMapper.readTree(messages.get(0));
-        assertThat(welcome.get("type").asText()).isEqualTo("welcome");
-        assertThat(welcome.get("worldWidth").asInt()).isEqualTo(16);
-        assertThat(welcome.get("worldHeight").asInt()).isEqualTo(16);
-        assertThat(welcome.has("sessionId")).isTrue();
-        assertThat(welcome.has("currentTick")).isTrue();
-    }
-
-    @Test
-    void receivesTickBroadcasts() throws Exception {
-        var messages = new CopyOnWriteArrayList<String>();
-        var tickLatch = new CountDownLatch(3); // Wait for 3 tick messages
-
-        var handler = new TextWebSocketHandler() {
-            @Override
-            protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-                String payload = message.getPayload();
-                messages.add(payload);
-                if (payload.contains("\"type\":\"tick\"")) {
-                    tickLatch.countDown();
-                }
-            }
-        };
-
-        var client = new StandardWebSocketClient();
-        clientSession = client.execute(handler, new WebSocketHttpHeaders(),
-                URI.create("ws://localhost:" + port + "/ws/world")).get(5, TimeUnit.SECONDS);
+        // Register first — otherwise no T frames will flow.
+        sendEncoded(session, new Frame.RegisterFrame('C'));
 
         assertThat(tickLatch.await(5, TimeUnit.SECONDS))
-                .as("Should receive at least 3 tick messages")
+                .as("Should receive at least 3 tick frames after register")
                 .isTrue();
 
-        // Verify tick messages have expected structure
-        var tickMessages = messages.stream()
-                .filter(m -> m.contains("\"type\":\"tick\""))
-                .map(m -> {
-                    try { return objectMapper.readTree(m); }
-                    catch (Exception e) { throw new RuntimeException(e); }
-                })
-                .toList();
-
-        assertThat(tickMessages).hasSizeGreaterThanOrEqualTo(3);
-        for (JsonNode tick : tickMessages) {
-            assertThat(tick.get("type").asText()).isEqualTo("tick");
-            assertThat(tick.has("tickNumber")).isTrue();
-            assertThat(tick.has("timestamp")).isTrue();
-            assertThat(tick.has("entityCount")).isTrue();
+        long prevTickId = -1L;
+        int tickCount = 0;
+        for (Frame f : frames) {
+            if (f instanceof Frame.TickFrame t) {
+                assertThat(t.tickId()).isGreaterThanOrEqualTo(0L);
+                if (prevTickId >= 0) {
+                    assertThat(t.tickId()).isGreaterThanOrEqualTo(prevTickId);
+                }
+                prevTickId = t.tickId();
+                tickCount++;
+            }
         }
+        assertThat(tickCount).isGreaterThanOrEqualTo(3);
     }
 
     @Test
-    void registerEntityAndReceiveConfirmation() throws Exception {
-        var messages = new CopyOnWriteArrayList<String>();
-        var registeredLatch = new CountDownLatch(1);
+    void registerReceivesSyncFrame() throws Exception {
+        var frames = new CopyOnWriteArrayList<Frame>();
+        var syncLatch = new CountDownLatch(1);
 
-        var handler = new TextWebSocketHandler() {
-            @Override
-            protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-                String payload = message.getPayload();
-                messages.add(payload);
-                if (payload.contains("\"type\":\"registered\"")) {
-                    registeredLatch.countDown();
-                }
-            }
-        };
+        CaptureEndpoint cap = new CaptureEndpoint(frames, frame -> {
+            if (frame instanceof Frame.SyncFrame) syncLatch.countDown();
+        });
+        session = openConnection(cap);
 
-        var client = new StandardWebSocketClient();
-        clientSession = client.execute(handler, new WebSocketHttpHeaders(),
-                URI.create("ws://localhost:" + port + "/ws/world")).get(5, TimeUnit.SECONDS);
+        // Plan 15-11: no welcome frame — client sends r| first. Server responds S|<id>.
+        sendEncoded(session, new Frame.RegisterFrame('C'));
 
-        // Wait for welcome first
-        Thread.sleep(200);
-
-        // Send register message
-        String registerJson = objectMapper.writeValueAsString(new Messages.Register("cell"));
-        clientSession.sendMessage(new TextMessage(registerJson));
-
-        assertThat(registeredLatch.await(5, TimeUnit.SECONDS))
-                .as("Should receive registered confirmation")
+        assertThat(syncLatch.await(5, TimeUnit.SECONDS))
+                .as("Should receive S (sync) frame in response to r")
                 .isTrue();
 
-        // Parse registered response
-        var registeredMsg = messages.stream()
-                .filter(m -> m.contains("\"type\":\"registered\""))
+        Frame.SyncFrame sync = frames.stream()
+                .filter(f -> f instanceof Frame.SyncFrame)
+                .map(f -> (Frame.SyncFrame) f)
                 .findFirst()
                 .orElseThrow();
-
-        JsonNode registered = objectMapper.readTree(registeredMsg);
-        assertThat(registered.get("type").asText()).isEqualTo("registered");
-        assertThat(registered.has("entityId")).isTrue();
-        assertThat(registered.get("x").asInt()).isBetween(0, 15);
-        assertThat(registered.get("y").asInt()).isBetween(0, 15);
+        assertThat(sync.entityId()).isNotBlank();
     }
 
     @Test
-    void invalidMessageReturnsError() throws Exception {
-        var messages = new CopyOnWriteArrayList<String>();
+    void invalidMessageReturnsErrorFrame() throws Exception {
+        var frames = new CopyOnWriteArrayList<Frame>();
         var errorLatch = new CountDownLatch(1);
 
-        var handler = new TextWebSocketHandler() {
-            @Override
-            protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-                String payload = message.getPayload();
-                messages.add(payload);
-                if (payload.contains("\"type\":\"error\"")) {
-                    errorLatch.countDown();
-                }
-            }
-        };
+        CaptureEndpoint cap = new CaptureEndpoint(frames, frame -> {
+            if (frame instanceof Frame.ErrorFrame) errorLatch.countDown();
+        });
+        session = openConnection(cap);
 
-        var client = new StandardWebSocketClient();
-        clientSession = client.execute(handler, new WebSocketHttpHeaders(),
-                URI.create("ws://localhost:" + port + "/ws/world")).get(5, TimeUnit.SECONDS);
-
-        Thread.sleep(200);
-
-        // Send garbage
-        clientSession.sendMessage(new TextMessage("{\"not\":\"valid\"}"));
+        // Malformed — not a valid single-letter frame type per SCHEMA §5/§6.
+        session.sendText("{\"not\":\"valid\"}", Callback.NOOP);
 
         assertThat(errorLatch.await(5, TimeUnit.SECONDS))
-                .as("Should receive error for invalid message")
+                .as("Should receive E| error frame for malformed input")
                 .isTrue();
+
+        Frame.ErrorFrame err = frames.stream()
+                .filter(f -> f instanceof Frame.ErrorFrame)
+                .map(f -> (Frame.ErrorFrame) f)
+                .findFirst()
+                .orElseThrow();
+        assertThat(err.code()).isEqualTo(400);
     }
 
-    private WebSocketSession connectClient(CopyOnWriteArrayList<String> messages, CountDownLatch latch) throws Exception {
-        var handler = new TextWebSocketHandler() {
-            @Override
-            protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-                messages.add(message.getPayload());
-                latch.countDown();
-            }
-        };
+    // ── Helpers ──────────────────────────────────────────────────
 
-        var client = new StandardWebSocketClient();
-        return client.execute(handler, new WebSocketHttpHeaders(),
-                URI.create("ws://localhost:" + port + "/ws/world")).get(5, TimeUnit.SECONDS);
+    private Session openConnection(CaptureEndpoint endpoint) throws Exception {
+        client = new WebSocketClient();
+        client.start();
+        ClientUpgradeRequest req = new ClientUpgradeRequest();
+        req.addExtensions("permessage-deflate; server_no_context_takeover");
+        return client.connect(endpoint, URI.create("ws://localhost:" + port + "/ws/world"), req)
+                .get(5, TimeUnit.SECONDS);
+    }
+
+    private static void sendEncoded(Session session, Frame frame) {
+        session.sendText(PerceptionCodec.encode(frame), Callback.NOOP);
+    }
+
+    @WebSocket
+    public static class CaptureEndpoint {
+        private final CopyOnWriteArrayList<Frame> sink;
+        private final java.util.function.Consumer<Frame> onFrame;
+
+        CaptureEndpoint(CopyOnWriteArrayList<Frame> sink, java.util.function.Consumer<Frame> onFrame) {
+            this.sink = sink;
+            this.onFrame = onFrame;
+        }
+
+        @OnWebSocketOpen
+        public void onOpen(Session s) {
+            // no-op — session reference retained by caller via connect().get()
+        }
+
+        @OnWebSocketMessage
+        public void onMessage(String message) {
+            try {
+                Frame f = PerceptionCodec.decode(message);
+                sink.add(f);
+                onFrame.accept(f);
+            } catch (Exception e) {
+                // decode failures are their own signal; rethrow would close the session.
+                sink.add(new Frame.ErrorFrame(999, Optional.of("decode-fail: " + e.getMessage())));
+            }
+        }
     }
 }
