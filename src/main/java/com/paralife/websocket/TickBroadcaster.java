@@ -168,12 +168,14 @@ public class TickBroadcaster {
     // ── Frame construction ─────────────────────────────────────────────
 
     /**
-     * Build the per-bot tick frame. Package-private to allow
+     * Build the per-bot tick frame. Public to allow
      * {@code ZeroTrustFilteringTest} (in {@code com.paralife.engine}) to
      * exercise the encoder end-to-end — the frame must never carry entity
-     * ids, so asserting that on encoded output IS the contract.
+     * ids, so asserting that on encoded output IS the contract. Test-only
+     * callers never send the result; production callers funnel through
+     * {@link #onTick}.
      */
-    Frame.TickFrame buildTickFrame(BotRegistry.BotState bot, long tickId) {
+    public Frame.TickFrame buildTickFrame(BotRegistry.BotState bot, long tickId) {
         Position pos = bot.position();
         Cell selfCell = worldGrid.getCell(pos.x(), pos.y());
         Entity occupant = selfCell.occupant();
@@ -316,6 +318,9 @@ public class TickBroadcaster {
                 int gy = dy + radius;
                 CellData d = grid[gx][gy];
                 if (d == null || consumed[gx][gy]) continue;
+                // SCHEMA §8.1: empty cells (no kind, no env) are NOT emitted.
+                // presence=0 is forbidden on the wire.
+                if (d.kind == null && d.envState == 0) continue;
 
                 if (d.kind != null && d.kind == 'R') {
                     int bestDir = 0;
