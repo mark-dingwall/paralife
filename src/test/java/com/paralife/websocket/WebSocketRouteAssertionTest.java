@@ -89,30 +89,24 @@ class WebSocketRouteAssertionTest {
                 }
             }
 
-            // 2. Consume the Welcome frame that WorldWebSocketHandler sends on
-            // afterConnectionEstablished. We don't assert on its contents — the
-            // point of this test is that the handler was reached — but we must
-            // drain the socket so the next frame we read is the reply to our
-            // probe. The server has negotiated deflate, but the first broadcast
-            // after the handshake is typically non-compressed (RSV1=0) for a
-            // session with server_no_context_takeover because the deflater
-            // context resets each frame boundary.
-            WsFrame welcome = readFrame(in);
-            assertNotNull(welcome, "Expected Welcome frame from server");
-
-            // 3. Send a deliberately malformed text frame. handleTextMessage
-            // will fail Jackson parse and reply with an Error(INVALID_MESSAGE).
+            // 2. Send a deliberately malformed text frame. The post-plan-15-06
+            // handler's PerceptionCodec.decode() rejects it and replies with
+            // E|400|Malformed frame (see WorldWebSocketHandler line ~109). The
+            // plan-15-06 rewrite also dropped the post-connect Welcome frame
+            // (see afterConnectionEstablished), so this test no longer drains
+            // an initial Welcome — the first server→client frame is the error
+            // reply to our probe.
             writeMaskedTextFrame(out, "GARBAGE");
             out.flush();
 
-            // 4. Read the reply. Must contain the Error reply produced from
+            // 3. Read the reply. Must contain the Error reply produced from
             // inside handleTextMessage — proof the frame reached it.
             WsFrame reply = readFrame(in);
             assertNotNull(reply, "No reply frame from server within 5s — "
                     + "text frame did not reach WorldWebSocketHandler.handleTextMessage");
             String payload = decodePayload(reply);
-            assertTrue(payload.contains("INVALID_MESSAGE") || payload.contains("\"error\""),
-                    "Expected INVALID_MESSAGE error reply, got: " + payload);
+            assertTrue(payload.startsWith("E|400"),
+                    "Expected E|400|... error reply, got: " + payload);
         }
     }
 
