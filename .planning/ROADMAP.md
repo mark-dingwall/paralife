@@ -127,14 +127,14 @@ Plans:
 **Goal:** Replace JSON per-tick messaging with compact text perception protocol; switch container Tomcat→Jetty; enable permessage-deflate with server_no_context_takeover on both sides; redesign bots as stateless reactive agents; zero-trust vision filtering
 **Depends on:** Phase 14 (env effects provide diverse message types to exercise codec)
 **Requirements:** R20, R21, R22, R23, R24, R25, R26, R27, R28, R29
-**Plans:** 5/11 plans executed
+**Plans:** 6/11 plans executed
 Plans:
 - [x] 15-01-PLAN.md — Housekeeping: ROADMAP fan-out-criterion removal + REQUIREMENTS R20-R29 add (R15-R19 remap to Phase 16)
 - [x] 15-02-PLAN.md — Codec package scaffolding (Frame/Coord/KindData sealed hierarchies, Base64Codec, ParseCursor, CodecException, stub PerceptionCodec, RED 13-vector test)
 - [x] 15-03-PLAN.md — Container swap + Jetty deflate customizer + handshake + refusal integration tests
 - [x] 15-04-PLAN.md — PNG-based rock generation (RockConfig + RockGenerator + 5 perlin PNGs + determinism test)
 - [x] 15-05-PLAN.md — PerceptionCodec encode/decode implementation (13 vectors GREEN) + error-path + DoS-sentinel test (CHECKPOINT for Vector 9 coord ambiguity)
-- [ ] 15-06-PLAN.md — WorldWebSocketHandler rewrite (codec I/O + respawn FSM + E|429 cap) + ActionResolver verb dispatch + IRV vote replacement + Messages.java strip
+- [x] 15-06-PLAN.md — WorldWebSocketHandler rewrite (codec I/O + respawn FSM + E|429 cap) + ActionResolver verb dispatch + IRV vote replacement + Messages.java partial strip + AlarmQueue bean
 - [ ] 15-07-PLAN.md — Delete old heartbeat TickBroadcaster + git mv engine/PerceptionBroadcaster → websocket/TickBroadcaster (preserve vision-scoped OVERCROWDED mask-and-OR)
 - [ ] 15-08-PLAN.md — TickBroadcaster projection rewrite to codec Frames + authority tiers (full/authority-lite/passive) + FLEEING effect + alarm routing + zero-trust test
 - [ ] 15-09-PLAN.md — BotClient Jetty-native transport + D-33 client-side enforcement + codec replaces Jackson + HeuristicBrain pure function + Phase 09 tech debt #3 fix + respawn flow
