@@ -19,9 +19,14 @@ repositories {
 }
 
 dependencies {
-    implementation("org.springframework.boot:spring-boot-starter-web")
-    implementation("org.springframework.boot:spring-boot-starter-websocket")
+    implementation("org.springframework.boot:spring-boot-starter-web") {
+        exclude(group = "org.springframework.boot", module = "spring-boot-starter-tomcat")
+    }
+    implementation("org.springframework.boot:spring-boot-starter-websocket") {
+        exclude(group = "org.springframework.boot", module = "spring-boot-starter-tomcat")
+    }
     implementation("org.springframework.boot:spring-boot-starter-actuator")
+    implementation("org.springframework.boot:spring-boot-starter-jetty")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
