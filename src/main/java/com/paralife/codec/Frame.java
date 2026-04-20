@@ -44,6 +44,13 @@ public sealed interface Frame
      *   <li>{@code 3} — 7×7 with SENSOR_PLUS_1 buff active.</li>
      * </ul>
      * Any other value is rejected at construction.
+     *
+     * <p>{@code blockOrder} preserves the wire-order of optional blocks so the
+     * codec can round-trip byte-for-byte. Allowed chars: {@code 's', 'c', 'f',
+     * 'v', 'p', 'g'}. Only blocks that actually carry data appear in the list.
+     * Empty list means canonical schema order (s, c, f, v, p, g). Decoders
+     * populate this from what they see on the wire; producers that do not care
+     * about order can pass {@code List.of()} and rely on canonical ordering.
      */
     record TickFrame(
             long tickId,
@@ -55,7 +62,8 @@ public sealed interface Frame
             List<ActiveEffect> effects,
             List<Event> events,
             Optional<PoolSnapshot> pool,
-            List<RosterMember> roster
+            List<RosterMember> roster,
+            List<Character> blockOrder
     ) implements Frame {
         public TickFrame {
             if (tickId < 0) throw new IllegalArgumentException("tickId negative: " + tickId);
@@ -71,12 +79,18 @@ public sealed interface Frame
             effects = (effects == null) ? List.of() : List.copyOf(effects);
             events = (events == null) ? List.of() : List.copyOf(events);
             roster = (roster == null) ? List.of() : List.copyOf(roster);
+            blockOrder = (blockOrder == null) ? List.of() : List.copyOf(blockOrder);
             // Minimal-form invariant: sensorRadius==0 implies no vision/effects/pool/roster.
             if (sensorRadius == 0) {
                 if (!cells.isEmpty() || change.isPresent() || !effects.isEmpty()
                         || pool.isPresent() || !roster.isEmpty()) {
                     throw new IllegalArgumentException(
                             "sensorRadius=0 (minimal form) must have empty cells/change/effects/pool/roster; only events allowed");
+                }
+            }
+            for (Character ch : blockOrder) {
+                if (ch == null || "scfvpg".indexOf(ch) < 0) {
+                    throw new IllegalArgumentException("blockOrder char must be one of s/c/f/v/p/g: " + ch);
                 }
             }
         }
