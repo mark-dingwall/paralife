@@ -5,9 +5,10 @@ milestone_name: Combination & Emergence
 current_phase: 15
 current_phase_name: Protocol & Transport Overhaul
 current_plan: 11
-status: phase-complete
-stopped_at: Phase 15 COMPLETE — all 11 plans shipped. Plan 15-11 Task 4 deleted Messages.java + three stale excluded tests (ActionResolverTest, CompositeIntegrationTest, VisionScopedOvercrowdingTest); build.gradle.kts exclusion block removed. 561/0/3 tests green in isolation and under Task-3 HEAD; MetabolismIntegrationTest is a known ~50% flake under full-suite load (virtual-thread leakage across Spring contexts when paralife.tick.auto-start=true) — out of Phase 15 scope, tracked as deferred tech debt. Messages.java fully gone; zero imports across src/. Codec-native end-to-end. Next: Phase 16 (Emergent Behavior Tests) planning.
-last_updated: "2026-04-21T02:10:00.000Z"
+status: phase-uat-partial
+uat_retry_blocked_on: Phase 15.1 (BotRunner operator CLI)
+stopped_at: Phase 15 UAT demoted to partial 2026-04-21. Tests 3/5/6/7 relied on throwaway BotLauncher.main + runBot JavaExec that was reverted before close; no supported operator CLI existed. Phase 15.1 ships BotRunner as the permanent primitive, then retries the four tests with real evidence. Plan 15-11 code landed; 561/0/3 tests green in isolation. Next: execute Phase 15.1 (BotRunner + gradle task + UAT retry).
+last_updated: "2026-04-21T09:00:00.000Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 6
@@ -25,23 +26,23 @@ See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
 
-**Current focus:** Phase 16 — Emergent Behavior Tests (Phase 15 complete)
+**Current focus:** Phase 15.1 — Bot Operator CLI (closes Phase 15 UAT debt)
 
-**Status:** Phase 15 complete
+**Status:** Phase 15 UAT partial — awaiting Phase 15.1 BotRunner
 **Current Phase:** 15
 **Current Phase Name:** Protocol & Transport Overhaul
 **Total Phases:** 16
-**Current Plan:** 11 (complete)
+**Current Plan:** 11 (code complete, UAT retry blocked on 15.1)
 **Total Plans in Phase:** 11
-**Progress:** [██████████] 100%
-**Last Activity:** 2026-04-20
+**Progress:** [█████████░] UAT partial
+**Last Activity:** 2026-04-21
 
 ## Current Position
 
-Phase: 15 (Protocol & Transport Overhaul) — COMPLETE
-Plan: 11 of 11 (all plans shipped)
-Status: Phase-complete — ready for Phase 16 planning
-Last activity: 2026-04-20 -- Plan 15-11 Task 4 landed (commit 3b64e83): Messages.java deleted + 3 stale excluded tests removed + build.gradle.kts exclusion block cleared. Codec-native end-to-end; zero Messages.* imports across src/. Full suite 561/0/3 green in isolation. MetabolismIntegrationTest pre-existing flake under full-suite load tracked as deferred tech debt.
+Phase: 15 (Protocol & Transport Overhaul) — UAT PARTIAL (3/7 pass, 4/7 pending)
+Plan: 11 of 11 (all code plans shipped)
+Status: phase-uat-partial — Phase 15.1 BotRunner in flight to unblock Tests 3/5/6/7 retry
+Last activity: 2026-04-21 -- Phase 15.1 Task 5a landed: UAT Tests 3/5/6/7 demoted from pass → pending; evidence honestly reflects that prior runs depended on a throwaway harness since reverted. STATE flipped phase-complete → phase-uat-partial with uat_retry_blocked_on: Phase 15.1.
 
 ## Accumulated Context
 

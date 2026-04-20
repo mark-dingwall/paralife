@@ -151,6 +151,19 @@ Plans:
 - Rock generation algorithm defined (enables run-length encoding decision)
 - All existing tests pass under new protocol
 
+### Phase 15.1: Bot Operator CLI
+**Goal:** Ship the permanent `BotRunner` operator CLI + `runBot` Gradle task so Phase 15 UAT Tests 3/5/6/7 can be retried with real evidence against a live `bootRun` server. Single-JVM, single-process, 100-bot hard cap enforced at the CLI boundary; multi-process / harness-ID / 1000+ scale deferred to M4.
+**Depends on:** Phase 15 (codec transport + keepalive + respawn FSM must be in place)
+**Success Criteria:**
+- `com.paralife.bot.BotRunner` main class invoking `BotLauncher` with clean SIGTERM/SIGINT shutdown
+- Gradle `runBot` JavaExec task discoverable via `./gradlew tasks --group=application`
+- Hard cap rejects `count > 100` with a clear error citing the validated envelope
+- Optional `--duration` arg for scripted UAT; default runs until interrupted
+- `CLAUDE.md` architecture table corrects `com.paralife.bot` (no longer "test-only, not deployed")
+- Phase 15 UAT Tests 3/5/6/7 retried against `runBot`, evidence captured from server logs and curl probes
+- Phase 15 UAT back to `status: complete`, `passed: 7`; STATE.md back to `phase-complete`
+- M4 seed planted: "External load harness as deployment primitive"
+
 ### Phase 16: Emergent Behavior Tests
 **Goal:** Validate that complex behaviors emerge from the combination of bonding, composites, metabolism, environment, and protocol
 **Depends on:** Phase 15 (all systems including new protocol must be active)
@@ -181,5 +194,6 @@ Plans:
 | 12 | Composite Entities | ✅ Complete |
 | 13 | Energy & Metabolism System | Planning complete |
 | 14 | Environmental Rules | Context complete |
-| 15 | Protocol & Transport Overhaul | ✅ Complete |
+| 15 | Protocol & Transport Overhaul | UAT partial (3/7) — retry blocked on 15.1 |
+| 15.1 | Bot Operator CLI | In progress |
 | 16 | Emergent Behavior Tests | Not started |
