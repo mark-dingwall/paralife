@@ -127,7 +127,7 @@ Plans:
 **Goal:** Replace JSON per-tick messaging with compact text perception protocol; switch container Tomcat→Jetty; enable permessage-deflate with server_no_context_takeover on both sides; redesign bots as stateless reactive agents; zero-trust vision filtering
 **Depends on:** Phase 14 (env effects provide diverse message types to exercise codec)
 **Requirements:** R20, R21, R22, R23, R24, R25, R26, R27, R28, R29
-**Plans:** 8/11 plans executed
+**Plans:** 9/11 plans executed
 Plans:
 - [x] 15-01-PLAN.md — Housekeeping: ROADMAP fan-out-criterion removal + REQUIREMENTS R20-R29 add (R15-R19 remap to Phase 16)
 - [x] 15-02-PLAN.md — Codec package scaffolding (Frame/Coord/KindData sealed hierarchies, Base64Codec, ParseCursor, CodecException, stub PerceptionCodec, RED 13-vector test)
@@ -137,7 +137,7 @@ Plans:
 - [x] 15-06-PLAN.md — WorldWebSocketHandler rewrite (codec I/O + respawn FSM + E|429 cap) + ActionResolver verb dispatch + IRV vote replacement + Messages.java partial strip + AlarmQueue bean
 - [x] 15-07-PLAN.md — Delete old heartbeat TickBroadcaster + git mv engine/PerceptionBroadcaster → websocket/TickBroadcaster (preserve vision-scoped OVERCROWDED mask-and-OR)
 - [x] 15-08-PLAN.md — TickBroadcaster projection rewrite to codec Frames + authority tiers (full/authority-lite/passive) + FLEEING effect + alarm routing + zero-trust test
-- [ ] 15-09-PLAN.md — BotClient Jetty-native transport + D-33 client-side enforcement + codec replaces Jackson + HeuristicBrain pure function + Phase 09 tech debt #3 fix + respawn flow
+- [x] 15-09-PLAN.md — BotClient Jetty-native transport + D-33 client-side enforcement + codec replaces Jackson + HeuristicBrain pure function + Phase 09 tech debt #3 fix + respawn flow
 - [ ] 15-10-PLAN.md — Micrometer metrics (WebSocketMetrics bean: paralife.ws.bytes.saved / active.sessions / tick.frame.bytes) + actuator reachability test
 - [ ] 15-11-PLAN.md — Test migration: all Messages.* references ported to codec Frame; ./gradlew test exits 0 end-to-end
 **Success Criteria:**
@@ -181,5 +181,5 @@ Plans:
 | 12 | Composite Entities | ✅ Complete |
 | 13 | Energy & Metabolism System | Planning complete |
 | 14 | Environmental Rules | Context complete |
-| 15 | Protocol & Transport Overhaul | In progress (7/11 plans) |
+| 15 | Protocol & Transport Overhaul | In progress (9/11 plans) |
 | 16 | Emergent Behavior Tests | Not started |
