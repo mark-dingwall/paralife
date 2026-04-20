@@ -65,3 +65,20 @@ tasks.jacocoTestReport {
         html.required = true
     }
 }
+
+// Phase 15.1: operator CLI for launching bot clients against a running server.
+// BotRunner enforces a 100-bot hard cap matching the v1.0/v2.0 validated envelope.
+// Invocation: ./gradlew runBot --args="ws://localhost:8080/ws/world 100 60"
+tasks.register<JavaExec>("runBot") {
+    group = "application"
+    description = "Launch N bot clients against a live server (Phase 15.1 operator CLI, 100-bot cap)"
+    mainClass.set("com.paralife.bot.BotRunner")
+    classpath = sourceSets["main"].runtimeClasspath
+    standardInput = System.`in`
+    // Forward any -Dparalife.* system properties set on the gradle invocation so UAT
+    // runs can override bot-side JVM tunables if needed.
+    systemProperties = System.getProperties()
+            .entries
+            .filter { (it.key as String).startsWith("paralife.") }
+            .associate { it.key as String to it.value }
+}

@@ -1,0 +1,161 @@
+package com.paralife.bot;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.CountDownLatch;
+
+/**
+ * Single-process operator CLI for launching bot clients against a live Paralife server.
+ *
+ * <h2>Scope</h2>
+ * Minimum-viable operator CLI — glue layer over {@link BotLauncher} that adds a
+ * {@code main} entry point, SIGTERM/SIGINT shutdown handling, and an optional
+ * duration timer for scripted UAT runs. All bot-side logic (connection,
+ * registration, codec I/O, respawn FSM, heuristic brain) lives in
+ * {@link BotClient} / {@link BotLauncher} / {@link HeuristicBrain} and is
+ * reused verbatim.
+ *
+ * <h2>Hard cap: 100 bots per invocation</h2>
+ * Rejects {@code count > 100} with a non-zero exit. The v1.0/v2.0 milestone
+ * success criteria (see {@code .planning/PROJECT.md}) validate up to 100
+ * concurrent bots against a single-JVM server; beyond that is unvalidated
+ * territory. The cap is enforced at the CLI boundary to force the scale
+ * conversation to happen at the M4 boundary rather than silently drift.
+ *
+ * <h2>Explicit non-goals</h2>
+ * <ul>
+ *   <li>Multi-process coordination / harness-ID protocol</li>
+ *   <li>Per-harness metrics</li>
+ *   <li>Cross-process respawn semantics</li>
+ *   <li>World-partition-aware bot placement</li>
+ *   <li>Bot counts beyond 100</li>
+ * </ul>
+ * All of the above are M4 scope — the primitive that supersedes this CLI is
+ * the external load harness described by the M4 seed planted alongside
+ * Phase 15.1. Do not extend {@code BotRunner} in those directions; spin up
+ * the harness instead.
+ *
+ * <h2>Usage</h2>
+ * <pre>
+ *   ./gradlew runBot --args="ws://localhost:8080/ws/world 1"
+ *   ./gradlew runBot --args="ws://localhost:8080/ws/world 100 60"
+ * </pre>
+ *
+ * Arguments:
+ * <ul>
+ *   <li>{@code server-uri} — WebSocket endpoint, e.g. {@code ws://localhost:8080/ws/world}</li>
+ *   <li>{@code count} — bot count, {@code 1 <= count <= 100}</li>
+ *   <li>{@code duration-seconds} — optional; if omitted, runs until SIGINT/SIGTERM</li>
+ * </ul>
+ *
+ * Exit codes: 0 on clean shutdown, 1 on arg error, 2 on launch failure.
+ */
+public final class BotRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(BotRunner.class);
+
+    static final int MAX_BOTS = 100;
+
+    private BotRunner() {
+        // CLI entry point only.
+    }
+
+    public static void main(String[] args) {
+        if (args.length < 2 || args.length > 3) {
+            System.err.println("Usage: BotRunner <server-uri> <count> [duration-seconds]");
+            System.err.println("  server-uri       e.g. ws://localhost:8080/ws/world");
+            System.err.println("  count            1..100 (validated v1.0/v2.0 envelope)");
+            System.err.println("  duration-seconds optional; omit for run-until-interrupted");
+            System.exit(1);
+            return;
+        }
+
+        String uri = args[0];
+        int count;
+        try {
+            count = Integer.parseInt(args[1]);
+        } catch (NumberFormatException e) {
+            System.err.println("count must be an integer (got '" + args[1] + "')");
+            System.exit(1);
+            return;
+        }
+
+        if (count < 1) {
+            System.err.println("count must be >= 1 (got " + count + ")");
+            System.exit(1);
+            return;
+        }
+        if (count > MAX_BOTS) {
+            System.err.println("count=" + count + " exceeds validated envelope (max="
+                    + MAX_BOTS + "). The v1.0/v2.0 milestone success criteria validate "
+                    + "up to " + MAX_BOTS + " concurrent bots per single-JVM process. "
+                    + "For 1000+ scale use the M4 external load harness, not BotRunner.");
+            System.exit(1);
+            return;
+        }
+
+        Long durationSeconds = null;
+        if (args.length == 3) {
+            try {
+                durationSeconds = Long.parseLong(args[2]);
+            } catch (NumberFormatException e) {
+                System.err.println("duration-seconds must be an integer (got '" + args[2] + "')");
+                System.exit(1);
+                return;
+            }
+            if (durationSeconds < 1) {
+                System.err.println("duration-seconds must be >= 1 (got " + durationSeconds + ")");
+                System.exit(1);
+                return;
+            }
+        }
+
+        log.info("BotRunner starting — uri={} count={} duration={}",
+                uri, count, durationSeconds == null ? "indefinite" : durationSeconds + "s");
+
+        BotLauncher launcher = new BotLauncher();
+        CountDownLatch exitLatch = new CountDownLatch(1);
+
+        Thread shutdownHook = new Thread(() -> {
+            log.info("BotRunner shutting down — draining {} bots", launcher.getBots().size());
+            try {
+                launcher.shutdown();
+            } catch (RuntimeException e) {
+                log.warn("shutdown raised: {}", e.getMessage());
+            } finally {
+                exitLatch.countDown();
+            }
+        }, "bot-runner-shutdown");
+        Runtime.getRuntime().addShutdownHook(shutdownHook);
+
+        try {
+            launcher.launch(uri, count);
+        } catch (Exception e) {
+            log.error("BotLauncher.launch failed: {}", e.getMessage(), e);
+            System.exit(2);
+            return;
+        }
+
+        log.info("BotRunner: {} bots launched; {} remain after connect window",
+                count, launcher.getBots().size());
+
+        if (durationSeconds != null) {
+            try {
+                Thread.sleep(durationSeconds * 1000L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.info("BotRunner interrupted during duration sleep");
+            }
+            log.info("BotRunner duration reached; exiting");
+            System.exit(0);
+        } else {
+            log.info("BotRunner running indefinitely; Ctrl-C (SIGINT) or SIGTERM to stop");
+            try {
+                exitLatch.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+}

@@ -53,7 +53,7 @@ Paralife is a distributed living simulation — a toroidal 2D world populated by
 | World | `com.paralife.world` | `WorldGrid`, `Cell`, `Entity` (sealed), `Position` |
 | Engine | `com.paralife.engine` | `SimulationEngine`, `ActionResolver`, `PerceptionBroadcaster`, `TickEngine`, `BotRegistry` |
 | WebSocket | `com.paralife.websocket` | `WorldWebSocketHandler`, `TickBroadcaster`, `Messages` (sealed), `SessionRegistry` |
-| Bot | `com.paralife.bot` | `BotClient`, `HeuristicBrain`, `BotLauncher` (test-only, not deployed) |
+| Bot | `com.paralife.bot` | `BotClient`, `HeuristicBrain`, `BotLauncher`, `BotRunner` (autonomous client processes; `BotRunner` is the operator CLI invoked via `./gradlew runBot`, 100-bot cap) |
 
 **Tick pipeline** (Spring `@EventListener` on `TickEvent`):
 1. `SimulationEngine` `@Order(10)` — Combat, energy decay, death removal, nutrient spawning
