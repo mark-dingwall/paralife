@@ -57,7 +57,7 @@ Phase 15 plan 11 Task 4: Three excluded-from-build test files (ActionResolverTes
 
 ### Blockers/Concerns
 
-- **WS keepalive gap** (surfaced by Phase 15 UAT Test 7, 2026-04-21): BotClient/HeuristicBrain emit no action frames when a bot has nothing to do; Jetty server-side read-idle timeout (~30s default) then closes the session with 1001. Blocked external verification of the respawn FSM and indicates long-lived bots would drop every ~30s in production. Fix candidates: `HeuristicBrain` returns `REST` when no better verb, BotClient sends app-level ping every 15s, or server raises `websocket.idleTimeout` (e.g. 5min). Address when a keepalive / long-running-bot scenario becomes relevant (not in Phase 15 scope; consider scheduling into Phase 16 or a small follow-up plan). See 15-UAT.md Gaps.
+_(none — WS keepalive gap resolved 2026-04-21 via WebSocketKeepaliveService + 60s Jetty idle timeout; Phase 15 UAT Test 7 re-run passes.)_
 
 ## Session Continuity
 

@@ -3,7 +3,7 @@ status: complete
 phase: 15-protocol-transport-overhaul
 source: [15-01-SUMMARY.md, 15-02-SUMMARY.md, 15-03-SUMMARY.md, 15-04-SUMMARY.md, 15-05-SUMMARY.md, 15-06-SUMMARY.md, 15-07-SUMMARY.md, 15-08-SUMMARY.md, 15-09-SUMMARY.md, 15-10-SUMMARY.md, 15-11-SUMMARY.md]
 started: 2026-04-20T12:58:27Z
-updated: 2026-04-21T02:05:00Z
+updated: 2026-04-21T02:50:00Z
 ---
 
 ## Tests
@@ -39,18 +39,18 @@ evidence: "3-bot runBot harness running; curl /actuator/metrics/paralife.ws.acti
 
 ### 7. Respawn FSM After Death
 expected: Connect a bot, wait for it to take lethal damage (`v...D` event). BotClient clears `entityId`, keeps the session open, and after `respawnCooldownMs + 0..respawnJitterMs` sends a fresh `r|<species>` register. Server assigns new entityId and the bot resumes receiving tick frames. An E|429 response on respawn cap triggers disconnect (no retry storm).
-result: issue
-evidence: "100-bot runBot harness (180s). All 100 bots connected + registered 01:57:21; all 100 dropped 01:57:57 (~36s later) with `Connection Idle Timeout` → close 1001 before any combat death could trigger respawn. Respawn FSM could not be exercised externally. Finding: Jetty server WS idle timeout (~30s default) fires on read side; BotClient/HeuristicBrain emits no keepalive / rest-action frames, so server closes idle sessions. Retrospectively weakens Test 5's 1001 close-code attribution — those likely were also idle evictions at the 30s harness boundary."
+result: pass
+evidence: "Initial 100-bot runBot harness (180s) on 2026-04-21 dropped all sessions at ~36s (`Connection Idle Timeout`, close 1001) before any combat death — root cause was missing WebSocket keepalive. Follow-up fix: new `WebSocketKeepaliveService` sends RFC 6455 server→client PING every 30 ticks (≈15s) + Jetty server idle timeout bumped to 60s via `JettyRequestUpgradeStrategy.addWebSocketConfigurer`. Integration test `WebSocketKeepaliveIntegrationTest` (2 tests) confirms pings flow on cadence and that an otherwise-silent session stays open past the idle window. Protocol/SCHEMA untouched — transport-layer fix only."
 
 ## Summary
 
 total: 7
-passed: 6
-issues: 1
+passed: 7
+issues: 0
 pending: 0
 skipped: 0
 blocked: 0
 
 ## Gaps
 
-- **WS keepalive gap (Test 7 finding):** BotClient / HeuristicBrain never emits action frames on bots with nothing to do (no entity state change, idle heuristic path). Jetty server-side read-idle timeout (~30s default) closes these sessions with 1001. Impacts: (a) respawn FSM cannot be exercised in long-running harnesses — bots are idle-evicted before any combat death; (b) long-lived bots in production would drop every ~30s without explicit keepalive. Fix candidates: `HeuristicBrain` returns `REST` verb when no better action (cheapest; already-allowed action in protocol), or BotClient sends app-level ping every 15s, or server raises `websocket.idleTimeout` to e.g. 5min. Defer to a follow-up phase — not in phase-15 scope but discovered during its UAT.
+_(none — prior WS keepalive gap resolved by WebSocketKeepaliveService + bumped Jetty idle timeout; see Test 7 evidence.)_
