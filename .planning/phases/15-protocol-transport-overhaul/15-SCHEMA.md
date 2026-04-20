@@ -3,6 +3,7 @@
 **Committed:** 2026-04-20
 **Status:** LOCKED — gate D-50 satisfied. PLAN.md may now be written.
 **Supersedes:** multiple 15-CONTEXT.md decisions (see §Decision Reversal Table).
+**Revised:** 2026-04-20 — Vector 9 coord corrected (user directive during cross-AI review replan). Vector audit: only Vector 9 required a fix; all other vectors use valid 4-char relative / 1-char numpad / 4-char absolute forms per §2.
 
 This document is the **single source of truth** for the Phase 15 compact wire protocol. Codec implementation (`PerceptionCodec`), round-trip tests, and planner agents all bind to this spec. Any change after lock must update this file *and* the round-trip test vectors before code changes land.
 
@@ -30,6 +31,8 @@ Three forms coexist. Parser chooses by first-char class + known context slot.
 | **Absolute** | `XXYY` unsigned base64 (4 chars) | 0..4095 per axis | self position in `T` header; strike coord in `fF:` effect context |
 | **Relative** | `[+-]X[+-]Y` signed base64 (4 chars) | ±63 per axis | visible cells, events with source |
 | **Numpad** | single digit `1`-`9` | 8 adjacent + `5`=self | actions, RLE direction, 3-rank vote, adjacent-event coords |
+
+**There is no "extended relative" 6-char coord form.** All relative coords are exactly 4 chars (1 sign + 1 base64 magnitude, per axis). Any event/effect whose source coord exceeds ±63 must be expressed either in absolute form (stored as trailing ctx) or clamped — not by widening relative. If a coord must exceed ±63 on the wire, add a new positional slot; do not overload relative.
 
 ### Numpad layout
 
@@ -193,6 +196,8 @@ Three tiers determine which `T` form a bot receives and what actions are accepte
 ### Authority-lite rationale
 
 FEEDER / ATTACKER / REPRODUCER can see radius-1 because they may have multiple valid targets (adjacent nutrients, prey, empty cells). They **may** submit an action to choose among them; server auto-picks a fallback if nothing arrives — preserves MVP's "server-autonomous" parity. As bots gain post-MVP abilities they override the fallback.
+
+**Phase 15 scope note (authority-lite client submission):** Phase 15 ships authority-lite server-side support — the dispatcher accepts E/A/R verbs from FEEDER/ATTACKER/REPRODUCER and the auto-fallback kicks in when nothing arrives. Authority-lite **client-side brain logic** (FEEDER heuristic choosing between two adjacent nutrients, etc.) is **out of scope for Phase 15**; the MVP `HeuristicBrain` handles solo + bonded + LOCOMOTOR only. Authority-lite brain branches land post-MVP. Tracked in §13.
 
 ### Alarm ubiquity
 
@@ -376,6 +381,8 @@ Magnitude bound to code per the table below; parser knows per-code whether to co
 
 **Renames from initial D-14:** damage-received `D` → `H` (frees `D` for died). Role code dropped from `N` entry (LOCOMOTOR reads role from the `g` roster it already holds). Member alarm absorbed into `v` (no standalone `m` block).
 
+**Lightning coord range.** `L` events use the same 4-char relative coord as any other `v` event. Lightning strike coords that would exceed ±63 in relative form are clamped to the wire magnitude limit server-side (lightning visibility already requires proximity enough to flee, so this is not a practical restriction). There is NO special 6-char "extended relative" coord for lightning.
+
 ### 8.5 `g` block — composite roster (coord-first)
 
 ```
@@ -447,7 +454,7 @@ Decisions from `15-CONTEXT.md` superseded by this schema:
 3. **Proper IRV vote resolution** (replaces plurality).
 4. **Client-side respawn flow** (session stays open post-death; randomised cooldown; `r` re-register; server `S` or `E|429`).
 5. **Coord-first convention** for spatial blocks (`s` / `g` / `v`); code-first for type blocks (`f` / `c`).
-6. **Authority-lite tier** for FEEDER / ATTACKER / REPRODUCER — radius-1 vision; target choice permitted.
+6. **Authority-lite tier** for FEEDER / ATTACKER / REPRODUCER — radius-1 vision; target choice permitted (server-side); client-side brain for authority-lite is post-MVP.
 7. **Nutrient kind `F`** in `s` block (was missing from initial lock).
 8. **Presence bitmask** in `s` cell tokens (supersedes `;` sentinel from D-50 #1).
 
@@ -464,7 +471,7 @@ Decisions from `15-CONTEXT.md` superseded by this schema:
 - D-29 (pseudonym IDs rejected).
 - D-30, D-31, D-32, D-33 (container / compression / handshake).
 - D-34, D-35, D-36 (rock generation).
-- D-38 (three Micrometer metrics).
+- D-38 (three Micrometer metrics — but `bytes.saved` Counter is deferred per §13; Phase 15 ships only `active.sessions` + `tick.frame.bytes`).
 - D-39 (fan-out metric dropped with infra).
 - D-40, D-41 (codec architecture).
 - D-42, D-43, D-44 (stateless bot refactor).
@@ -486,7 +493,7 @@ These MUST all satisfy `PerceptionCodec.encode(decode(x)) == x` byte-for-byte. I
 | 6 | LOCOMOTOR full frame (pool + roster + vision + alarm + own dmg + FLEEING) | `T\|004\|0A1B\|15/80\|2\|s61R,91F,43C1,+3-21R62,+3+33M32\|fF:2E:0F03\|v6H3,6N,T3\|p120/200\|g62,93,+0+21` |
 | 7 | Authority-lite FEEDER (radius-1 vision of a nutrient south) | `T\|004\|0C1E\|20/60\|1\|s21F` |
 | 8 | Passive member (DEFENDER) minimal frame | `T\|004\|0D2F\|18/50\|v6H3` |
-| 9 | FLEEING active (effect carries abs strike; event carries rel lightning-hit) | `T\|001\|0A1B\|15/80\|2\|fF:2E:0F03\|v+0F-03L5` |
+| 9 | FLEEING active (effect carries abs strike; event carries rel lightning-hit) | `T\|001\|0A1B\|15/80\|2\|fF:2E:0F03\|v+F-3L5` |
 | 10 | Resync (Sync with two active effects, no `f` prefix) | `S\|7A\|S:1Fg8,I:1Ef0` |
 | 11 | Multi-member alarm (LOCO sees two alarms) | `T\|005\|0A1B\|30/100\|2\|g62,93,+0+21\|v6N,9N` |
 | 12 | Env-only cell (empty cell with toxin hazard, relative anchor) | `T\|001\|0A1B\|15/80\|2\|s+2+022` |
@@ -498,7 +505,7 @@ These MUST all satisfy `PerceptionCodec.encode(decode(x)) == x` byte-for-byte. I
 - **Vector 4** — `+1+13M32`: relative (+1,+1), presence=3 (both), kind=M, entityState=3 (STARVING|MUTATING), envState=2 (TOXIN).
 - **Vector 5** — `cC:7A` = bonded primary = Catalyst, new maxEnergy slot `7A` (carried in ctx).
 - **Vector 6** — `43C1` combines "Catalyst at W" + OVERCROWDED into one presence=3 entry (kind=C, no entity state = omitted, envState=1). `R62` run = starter + 2 = 3 rocks east. `fF:2E:0F03` = FLEEING expires tick `2E` with strike coord abs (15, 3).
-- **Vector 9** — `fF:2E:0F03` + `v+0F-03L5`: effect stores abs strike (15, 3); event says bot took 5 lightning dmg from relative (+15, -3). (If vision extends only to ±2, the relative coord still parses but falls outside the 5×5 snapshot — acceptable; lightning events can originate off-grid from the vision scope.)
+- **Vector 9** — `fF:2E:0F03` + `v+F-3L5`: effect stores abs strike (15, 3); event says bot took 5 lightning dmg from relative offset (+15, -3). The relative coord is 4 chars: sign `+`, magnitude `F` (base64 → 15), sign `-`, magnitude `3` (base64 → 3). This is the standard §2 relative form; there is NO 6-char "extended relative" coord. If vision extends only to ±2, the relative coord still parses but falls outside the 5×5 snapshot — acceptable; lightning events can originate off-grid from the vision scope. If an L event's source exceeds ±63, the encoder clamps to ±63 (see §8.4 lightning coord range note).
 - **Vector 10** — `S:1Fg8,I:1Ef0` = SENSOR_PLUS_1 expires `1Fg8`, MUTATING expires `1Ef0`.
 - **Vector 13** — `43R824,124,-1-124`: starter at W is presence=3 rock run of 3 south (`R82`) with envState=4 (MUTAGEN) on starter; supplements at SW (`124` = numpad 1, presence=2, envState=4) and relative (-1,-2) (`-1-124` = presence=2, envState=4). Client merges: 3 rocks in column, each with MUTAGEN_ZONE.
 
@@ -511,9 +518,9 @@ These MUST all satisfy `PerceptionCodec.encode(decode(x)) == x` byte-for-byte. I
 | Solo Particle | Full `T` | 2 (3 with SENSOR_PLUS_1) | M, E, A, R | Own authority |
 | Bonded Pair | Full `T` | 2 (3 with SENSOR_PLUS_1) | M, E, A, R | Primary decides |
 | LOCOMOTOR | Full `T` + `p` + `g`; receives `vN` alarms | Composite-stitched (SENSORs' combined field) | V primary; M fallback if size = 1 | Orchestrates composite movement |
-| FEEDER | Full `T` (no `p`/`g`) | 1 (adjacent cells) | E, L | Authority-lite; server auto-picks fallback |
-| ATTACKER | Full `T` (no `p`/`g`) | 1 | A, L | Authority-lite |
-| REPRODUCER | Full `T` (no `p`/`g`) | 1 | R, L | Authority-lite |
+| FEEDER | Full `T` (no `p`/`g`) | 1 (adjacent cells) | E, L | Authority-lite; server auto-picks fallback; client-side target choice deferred post-MVP |
+| ATTACKER | Full `T` (no `p`/`g`) | 1 | A, L | Authority-lite; client-side target choice deferred post-MVP |
+| REPRODUCER | Full `T` (no `p`/`g`) | 1 | R, L | Authority-lite; client-side target choice deferred post-MVP |
 | DEFENDER | Minimal `T` | — | L | Passive absorber |
 | SENSOR | Minimal `T` | — | L | Passive; feeds stitched vision to LOCOMOTOR |
 
@@ -528,6 +535,7 @@ These are hints for the codec implementer; not wire-observable.
 - **Presence bitmask expansion.** Reserve bits 2-5. Future entity-kind flags (e.g. "multi-entity in cell", "cell has special structure") can extend presence without a schema break.
 - **Tagged-block detection.** After the positional header, parser loops on `|`-separated segments, branching on the first char: `s` → vision, `c` → change, `f` → effects, `v` → events, `p` → pool, `g` → roster. Unknown leading char → `E|400` at server, or warn+skip at client (forward compat).
 - **`a` is the lone client-→server frame** — handler dispatches on first byte only.
+- **DoS bounds.** Codec enforces `MAX_S_ENTRIES = 256` (vision cells per `s` block) and `MAX_V_ENTRIES = 32` (events per `v` block). Exceeding either throws `CodecException` → server emits `E|400`. Bounds are constants in `PerceptionCodec` and documented in Frame javadocs.
 
 ---
 
@@ -539,8 +547,9 @@ Tracked here so they're not forgotten when PLAN.md is written.
 - Visualizer UI + observer endpoint → M005.
 - Composite rotation, multi-tick gestation, persistent POISONED debuff, Poisson-disk rock generator, per-session pseudonym IDs → post-MVP.
 - Bot memory / fog-of-war / A* / shadowcasting → post-MVP (curCoords is the foundation).
-- FEEDER / ATTACKER / REPRODUCER advanced target-selection heuristics → post-MVP (MVP ships fallback-auto + basic single-target choice).
+- FEEDER / ATTACKER / REPRODUCER advanced target-selection heuristics (authority-lite client-side brain branches) → post-MVP (MVP ships fallback-auto + server-side dispatch only).
+- **`paralife.ws.bytes.saved` metric deferred** — Jetty 12 does not expose per-frame post-deflate byte length without reaching into extension internals. Phase 15 ships only `paralife.ws.active.sessions` (Gauge) and `paralife.ws.tick.frame.bytes` (DistributionSummary). The bytes-saved Counter lands once Jetty exposes a stable post-deflate length hook, or via observer-phase (M005) fan-out instrumentation. See plan 15-10.
 
 ---
 
-*Schema lock: 2026-04-20 per D-50 gate. PLAN.md proceeds on this spec.*
+*Schema lock: 2026-04-20 per D-50 gate. PLAN.md proceeds on this spec. Vector 9 corrected 2026-04-20 during cross-AI review replan — no other vector changes required.*
