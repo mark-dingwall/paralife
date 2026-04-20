@@ -7,8 +7,8 @@ current_phase_name: Protocol & Transport Overhaul
 current_plan: 11
 status: phase-complete
 stopped_at: Phase 15 COMPLETE — all 11 plans shipped. Plan 15-11 Task 4 deleted Messages.java + three stale excluded tests (ActionResolverTest, CompositeIntegrationTest, VisionScopedOvercrowdingTest); build.gradle.kts exclusion block removed. 561/0/3 tests green in isolation and under Task-3 HEAD; MetabolismIntegrationTest is a known ~50% flake under full-suite load (virtual-thread leakage across Spring contexts when paralife.tick.auto-start=true) — out of Phase 15 scope, tracked as deferred tech debt. Messages.java fully gone; zero imports across src/. Codec-native end-to-end. Next: Phase 16 (Emergent Behavior Tests) planning.
-last_updated: "2026-04-20T18:45:00.000Z"
-last_activity: 2026-04-20
+last_updated: "2026-04-21T02:10:00.000Z"
+last_activity: 2026-04-21
 progress:
   total_phases: 6
   completed_phases: 5
@@ -57,7 +57,7 @@ Phase 15 plan 11 Task 4: Three excluded-from-build test files (ActionResolverTes
 
 ### Blockers/Concerns
 
-None.
+- **WS keepalive gap** (surfaced by Phase 15 UAT Test 7, 2026-04-21): BotClient/HeuristicBrain emit no action frames when a bot has nothing to do; Jetty server-side read-idle timeout (~30s default) then closes the session with 1001. Blocked external verification of the respawn FSM and indicates long-lived bots would drop every ~30s in production. Fix candidates: `HeuristicBrain` returns `REST` when no better verb, BotClient sends app-level ping every 15s, or server raises `websocket.idleTimeout` (e.g. 5min). Address when a keepalive / long-running-bot scenario becomes relevant (not in Phase 15 scope; consider scheduling into Phase 16 or a small follow-up plan). See 15-UAT.md Gaps.
 
 ## Session Continuity
 
