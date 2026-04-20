@@ -17,6 +17,7 @@ import com.paralife.engine.CompositeRegistry;
 import com.paralife.engine.EnvironmentEngine;
 import com.paralife.engine.SimulationConfig;
 import com.paralife.engine.TickEvent;
+import com.paralife.metrics.WebSocketMetrics;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
 import com.paralife.world.Entity.BondedPair;
@@ -37,6 +38,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -106,6 +108,7 @@ public class TickBroadcaster {
     private final BuffRegistry buffRegistry;
     private final SimulationConfig simulationConfig;
     private final AlarmQueue alarmQueue;
+    private final WebSocketMetrics metrics;
 
     /**
      * SCHEMA §8.5 g-block send-on-change: per-session last roster hash. Updated
@@ -119,7 +122,8 @@ public class TickBroadcaster {
     public TickBroadcaster(BotRegistry botRegistry, SessionRegistry sessionRegistry,
                            WorldGrid worldGrid, CompositeRegistry compositeRegistry,
                            EnvironmentEngine environmentEngine, BuffRegistry buffRegistry,
-                           SimulationConfig simulationConfig, AlarmQueue alarmQueue) {
+                           SimulationConfig simulationConfig, AlarmQueue alarmQueue,
+                           WebSocketMetrics metrics) {
         this.botRegistry = botRegistry;
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
@@ -128,6 +132,7 @@ public class TickBroadcaster {
         this.buffRegistry = buffRegistry;
         this.simulationConfig = simulationConfig;
         this.alarmQueue = alarmQueue;
+        this.metrics = metrics;
     }
 
     @EventListener
@@ -149,6 +154,10 @@ public class TickBroadcaster {
                 synchronized (session) {
                     session.sendMessage(new TextMessage(encoded));
                 }
+                // Plan 15-10: record raw pre-deflate UTF-8 byte length on the
+                // DistributionSummary. No bytes-saved estimate — deferred per
+                // SCHEMA §13 until Jetty exposes a stable post-deflate hook.
+                metrics.recordFrameSize(encoded.getBytes(StandardCharsets.UTF_8).length);
                 sent++;
             } catch (IOException e) {
                 failed++;
