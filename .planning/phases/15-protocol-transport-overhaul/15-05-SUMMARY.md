@@ -127,6 +127,10 @@ Encoding V11 in canonical schema order (s, c, f, v, p, g) produces `...|v...|g..
 
 Plan executed as written otherwise. Vector 9 round-tripped on the first attempt (schema was pre-corrected in 15-01). No CHECKPOINT was needed.
 
+### Post-plan resolution — `blockOrder` removed
+
+User reviewed the Rule 3 deviation and chose to resolve rather than retain. Fix landed in a follow-up commit: V11 rewritten to canonical order (`v` before `g`), schema §6.3.1 gained an explicit "encoders MUST emit canonical order" clause, `TickFrame.blockOrder` field + encode/decode branches deleted. Net −40 lines. Rationale: the field was dead weight for server producers (which always emit canonical) and saved only one accidental test-vector literal.
+
 ## Issues Encountered
 
 ### Out-of-scope: 16 pre-existing integration tests still fail

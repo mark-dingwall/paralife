@@ -34,9 +34,6 @@ public final class PerceptionCodec {
      */
     public static final int MAX_V_ENTRIES = 32;
 
-    /** Canonical block order per SCHEMA §6.3.1 when TickFrame.blockOrder is empty. */
-    private static final char[] CANONICAL_BLOCK_ORDER = {'s', 'c', 'f', 'v', 'p', 'g'};
-
     private PerceptionCodec() {
         // utility — not instantiable
     }
@@ -82,61 +79,31 @@ public final class PerceptionCodec {
         }
         sb.append('|').append(Base64Codec.encodeDigit(t.sensorRadius()));
 
-        List<Character> order = t.blockOrder().isEmpty()
-                ? canonicalPresentOrder(t)
-                : t.blockOrder();
-        for (Character block : order) {
-            switch (block) {
-                case 's' -> {
-                    if (!t.cells().isEmpty()) {
-                        sb.append('|');
-                        encodeSBlock(sb, t.cells());
-                    }
-                }
-                case 'c' -> {
-                    if (t.change().isPresent()) {
-                        sb.append('|');
-                        encodeCBlock(sb, t.change().get());
-                    }
-                }
-                case 'f' -> {
-                    if (!t.effects().isEmpty()) {
-                        sb.append('|');
-                        encodeFBlock(sb, t.effects());
-                    }
-                }
-                case 'v' -> {
-                    if (!t.events().isEmpty()) {
-                        sb.append('|');
-                        encodeVBlock(sb, t.events());
-                    }
-                }
-                case 'p' -> {
-                    if (t.pool().isPresent()) {
-                        sb.append('|');
-                        encodePBlock(sb, t.pool().get());
-                    }
-                }
-                case 'g' -> {
-                    if (!t.roster().isEmpty()) {
-                        sb.append('|');
-                        encodeGBlock(sb, t.roster());
-                    }
-                }
-                default -> throw new CodecException("Unknown block char: " + block);
-            }
+        // Canonical block order per SCHEMA §6.3.1: s, c, f, v, p, g.
+        if (!t.cells().isEmpty()) {
+            sb.append('|');
+            encodeSBlock(sb, t.cells());
         }
-    }
-
-    private static List<Character> canonicalPresentOrder(Frame.TickFrame t) {
-        List<Character> out = new ArrayList<>(6);
-        if (!t.cells().isEmpty()) out.add('s');
-        if (t.change().isPresent()) out.add('c');
-        if (!t.effects().isEmpty()) out.add('f');
-        if (!t.events().isEmpty()) out.add('v');
-        if (t.pool().isPresent()) out.add('p');
-        if (!t.roster().isEmpty()) out.add('g');
-        return out;
+        if (t.change().isPresent()) {
+            sb.append('|');
+            encodeCBlock(sb, t.change().get());
+        }
+        if (!t.effects().isEmpty()) {
+            sb.append('|');
+            encodeFBlock(sb, t.effects());
+        }
+        if (!t.events().isEmpty()) {
+            sb.append('|');
+            encodeVBlock(sb, t.events());
+        }
+        if (t.pool().isPresent()) {
+            sb.append('|');
+            encodePBlock(sb, t.pool().get());
+        }
+        if (!t.roster().isEmpty()) {
+            sb.append('|');
+            encodeGBlock(sb, t.roster());
+        }
     }
 
     // ---- Sync frame ----
@@ -416,7 +383,6 @@ public final class PerceptionCodec {
         List<Event> events = List.of();
         Optional<PoolSnapshot> pool = Optional.empty();
         List<RosterMember> roster = List.of();
-        List<Character> blockOrder = new ArrayList<>(6);
 
         // Minimal-form note: the '|' before the block letter was already consumed
         // during disambiguation; subsequent blocks (if any) still start with '|'.
@@ -434,39 +400,31 @@ public final class PerceptionCodec {
                         throw new CodecException("Minimal form forbids s block at " + (c.index() - 1));
                     }
                     cells = parseSBlock(c);
-                    blockOrder.add('s');
                 }
                 case 'c' -> {
                     if (minimal) {
                         throw new CodecException("Minimal form forbids c block at " + (c.index() - 1));
                     }
                     change = Optional.of(parseCBlock(c));
-                    blockOrder.add('c');
                 }
                 case 'f' -> {
                     if (minimal) {
                         throw new CodecException("Minimal form forbids f block at " + (c.index() - 1));
                     }
                     effects = parseFBlock(c);
-                    blockOrder.add('f');
                 }
-                case 'v' -> {
-                    events = parseVBlock(c);
-                    blockOrder.add('v');
-                }
+                case 'v' -> events = parseVBlock(c);
                 case 'p' -> {
                     if (minimal) {
                         throw new CodecException("Minimal form forbids p block at " + (c.index() - 1));
                     }
                     pool = Optional.of(parsePBlock(c));
-                    blockOrder.add('p');
                 }
                 case 'g' -> {
                     if (minimal) {
                         throw new CodecException("Minimal form forbids g block at " + (c.index() - 1));
                     }
                     roster = parseGBlock(c);
-                    blockOrder.add('g');
                 }
                 default -> throw new CodecException(
                         "Unknown block type: " + blockType + " at " + (c.index() - 1));
@@ -474,7 +432,7 @@ public final class PerceptionCodec {
         }
 
         return new Frame.TickFrame(tickId, curX, curY, (int) energy, (int) maxEnergy,
-                sensorRadius, cells, change, effects, events, pool, roster, blockOrder);
+                sensorRadius, cells, change, effects, events, pool, roster);
     }
 
     // ---- s block parse ----

@@ -156,6 +156,8 @@ Tagged optional blocks (letter-prefix, no `=`):
 | `p` | Bot is in a composite and has full-authority tier | `<pool>/<maxPool>` shared-pool snapshot |
 | `g` | Composite roster changed since last `T` to this bot | Member coord + role list (§8.5) |
 
+**Block ordering.** Present optional blocks MUST be emitted in the canonical order above: `s, c, f, v, p, g`. Absent blocks are skipped; order among those present is fixed. Decoders MAY accept other orders for forward-compat, but encoders MUST emit canonical. Round-trip tests therefore assume canonical emit order.
+
 #### 6.3.2 Minimal form (passive composite members)
 
 ```
@@ -495,7 +497,7 @@ These MUST all satisfy `PerceptionCodec.encode(decode(x)) == x` byte-for-byte. I
 | 8 | Passive member (DEFENDER) minimal frame | `T\|004\|0D2F\|18/50\|v6H3` |
 | 9 | FLEEING active (effect carries abs strike; event carries rel lightning-hit) | `T\|001\|0A1B\|15/80\|2\|fF:2E:0F03\|v+F-3L5` |
 | 10 | Resync (Sync with two active effects, no `f` prefix) | `S\|7A\|S:1Fg8,I:1Ef0` |
-| 11 | Multi-member alarm (LOCO sees two alarms) | `T\|005\|0A1B\|30/100\|2\|g62,93,+0+21\|v6N,9N` |
+| 11 | Multi-member alarm (LOCO sees two alarms) | `T\|005\|0A1B\|30/100\|2\|v6N,9N\|g62,93,+0+21` |
 | 12 | Env-only cell (empty cell with toxin hazard, relative anchor) | `T\|001\|0A1B\|15/80\|2\|s+2+022` |
 | 13 | RLE with per-cell env supplements (rock column of 3 south from W, all MUTAGEN_ZONE) | `T\|001\|0A1B\|15/80\|2\|s43R824,124,-1-124` |
 

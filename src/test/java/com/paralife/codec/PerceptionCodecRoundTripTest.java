@@ -53,8 +53,8 @@ class PerceptionCodecRoundTripTest {
                 "T|001|0A1B|15/80|2|fF:2E:0F03|v+F-3L5",
                 // V10 — resync (Sync with two active effects, no `f` prefix per SCHEMA §6.2)
                 "S|7A|S:1Fg8,I:1Ef0",
-                // V11 — multi-member alarm (LOCO sees two alarms)
-                "T|005|0A1B|30/100|2|g62,93,+0+21|v6N,9N",
+                // V11 — multi-member alarm (LOCO sees two alarms). Canonical block order per §6.3.1: v before g.
+                "T|005|0A1B|30/100|2|v6N,9N|g62,93,+0+21",
                 // V12 — env-only cell (empty cell with toxin hazard, relative anchor)
                 "T|001|0A1B|15/80|2|s+2+022",
                 // V13 — RLE with per-cell env supplements (rock column of 3 south, all MUTAGEN_ZONE)
