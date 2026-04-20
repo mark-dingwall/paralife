@@ -52,7 +52,14 @@ public class TickBroadcaster {
         }
 
         var snapshot = worldGrid.snapshot();
-        var tickMessage = new Messages.Tick(
+        // Plan 15-06 Task 2 Part D — legacy heartbeat record was deleted in
+        // this plan's partial strip. The full rewrite of this broadcaster
+        // around {@link com.paralife.codec.Frame.TickFrame} lands in plan 15-07 /
+        // 15-08; until then we emit a local transitional record so the JSON wire
+        // output is byte-compatible with the previous heartbeat. The record is
+        // package-private and lives here only until plan 15-07 deletes this file.
+        var tickMessage = new LegacyTickHeartbeat(
+                "tick",
                 event.tickNumber(),
                 event.timestamp().toEpochMilli(),
                 snapshot.entityCount(),
@@ -92,4 +99,23 @@ public class TickBroadcaster {
             log.error("Failed to serialize tick message: {}", e.getMessage(), e);
         }
     }
+
+    /**
+     * Transitional DTO — preserves the byte-for-byte JSON shape of the
+     * pre-Plan-15-06 heartbeat record until plan 15-07 rewrites this
+     * broadcaster around {@link com.paralife.codec.Frame.TickFrame}.
+     * Declared here (not reused from the websocket DTO bag) so the narrowed
+     * partial strip in plan 15-06 Task 2 Part D can delete the heartbeat
+     * record on schedule.
+     */
+    record LegacyTickHeartbeat(
+            String type,
+            long tickNumber,
+            long timestamp,
+            int entityCount,
+            int bondCount,
+            int compositeCount,
+            String seasonPhase,
+            double seasonalMultiplier
+    ) {}
 }

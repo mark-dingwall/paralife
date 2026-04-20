@@ -7,78 +7,35 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import java.util.List;
 
 /**
- * Base class for all WebSocket messages.
- * Uses JSON type discrimination via "type" field.
+ * Base class for residual (not-yet-migrated) WebSocket message DTOs.
+ *
+ * <p><b>Plan 15-06 Task 2 Part D — PARTIAL STRIP.</b> The wire-bound records
+ * whose consumers migrate in this plan have been removed:
+ * {@code Welcome, Registered, Heartbeat, Register, Action, ActionResult,
+ * Tick, CompositeAction, CompositeJoined}. Those paths now run on
+ * {@link com.paralife.codec.Frame} via {@link com.paralife.codec.PerceptionCodec}.
+ *
+ * <p>The remaining DTOs ({@link CellView}, {@link Perception},
+ * {@link EntityState}, {@link CompositePerception}) are used by
+ * {@code PerceptionBroadcaster} / {@code HeuristicBrain} / {@code BotClient}
+ * and the per-tick perception JSON path. Those consumers migrate in plans
+ * 15-08 / 15-09; the final deletion of this file lands in plan 15-11 after
+ * all consumers are fully migrated.
+ *
+ * <p>The {@code @JsonSubTypes} annotation is retained but reduced to the
+ * subset that still ships over the JSON channel ({@link Perception} and
+ * {@link CompositePerception}). {@link CellView} and {@link EntityState} are
+ * embedded value types, not top-level messages.
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
 @JsonSubTypes({
-        // Server → Client
-        @JsonSubTypes.Type(value = Messages.Welcome.class, name = "welcome"),
-        @JsonSubTypes.Type(value = Messages.Tick.class, name = "tick"),
-        @JsonSubTypes.Type(value = Messages.Registered.class, name = "registered"),
-        @JsonSubTypes.Type(value = Messages.Error.class, name = "error"),
         @JsonSubTypes.Type(value = Messages.Perception.class, name = "perception"),
-        @JsonSubTypes.Type(value = Messages.ActionResult.class, name = "action_result"),
-        // Client → Server
-        @JsonSubTypes.Type(value = Messages.Register.class, name = "register"),
-        @JsonSubTypes.Type(value = Messages.Heartbeat.class, name = "heartbeat"),
-        @JsonSubTypes.Type(value = Messages.Action.class, name = "action"),
-        // Composite entity messages
         @JsonSubTypes.Type(value = Messages.CompositePerception.class, name = "composite_perception"),
-        @JsonSubTypes.Type(value = Messages.CompositeAction.class, name = "composite_action"),
-        @JsonSubTypes.Type(value = Messages.CompositeJoined.class, name = "composite_joined"),
 })
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public sealed interface Messages {
+public sealed interface Messages permits Messages.Perception, Messages.CompositePerception {
 
     // ── Server → Client ───────────────────────────────────────────
-
-    /**
-     * Sent to client immediately on WebSocket connection.
-     */
-    record Welcome(
-            String sessionId,
-            int worldWidth,
-            int worldHeight,
-            long currentTick
-    ) implements Messages {}
-
-    /**
-     * Broadcast to all clients each tick.
-     *
-     * <p>Phase 13 Plan 03 adds {@code seasonPhase} (season enum name, e.g.
-     * {@code "SPRING"}) and {@code seasonalMultiplier} (global sine-wave
-     * nutrient-spawn multiplier, in {@code [1 - amplitude, 1 + amplitude]}).
-     * Field is named {@code seasonalMultiplier} rather than
-     * {@code fertilityMultiplier} to distinguish from per-cell
-     * {@code Cell.nutrientLevel} soil fertility.
-     */
-    record Tick(
-            long tickNumber,
-            long timestamp,
-            int entityCount,
-            int bondCount,
-            int compositeCount,
-            String seasonPhase,
-            double seasonalMultiplier
-    ) implements Messages {}
-
-    /**
-     * Server → Client: registration confirmed.
-     */
-    record Registered(
-            String entityId,
-            int x,
-            int y
-    ) implements Messages {}
-
-    /**
-     * Server → Client: error message.
-     */
-    record Error(
-            String code,
-            String message
-    ) implements Messages {}
 
     /**
      * Server → Client: per-tick perception for a registered bot.
@@ -92,40 +49,6 @@ public sealed interface Messages {
             List<List<CellView>> neighbourhood,
             /** Neighbourhood radius (e.g. 2 means a 5×5 grid centred on the entity). */
             int radius
-    ) implements Messages {}
-
-    /**
-     * Server → Client: result of a submitted action.
-     */
-    record ActionResult(
-            long tickNumber,
-            boolean success,
-            String actionType,
-            String reason
-    ) implements Messages {}
-
-    // ── Client → Server ───────────────────────────────────────────
-
-    /**
-     * Client → Server: register as an entity in the world.
-     */
-    record Register(
-            String entityType
-    ) implements Messages {}
-
-    /**
-     * Client → Server: keep-alive.
-     */
-    record Heartbeat() implements Messages {}
-
-    /**
-     * Client → Server: submit an action for the current tick.
-     * actionType: "move", "consume", "reproduce", "rest"
-     * direction: for move/reproduce — "N", "NE", "E", "SE", "S", "SW", "W", "NW"
-     */
-    record Action(
-            String actionType,
-            String direction
     ) implements Messages {}
 
     // ── Composite entity messages ────────────────────────────────
@@ -144,29 +67,10 @@ public sealed interface Messages {
             String role
     ) implements Messages {}
 
-    /**
-     * Client -> Server: composite member action with optional STV ranked preferences (D-26, D-34).
-     * rankedPreferences is used by LOCOMOTOR members for direction voting.
-     */
-    record CompositeAction(
-            String actionType,
-            String direction,
-            List<String> rankedPreferences
-    ) implements Messages {}
-
-    /**
-     * Server -> Client: notification that entity joined a composite (D-33).
-     */
-    record CompositeJoined(
-            String compositeId,
-            String role,
-            int compositeSize
-    ) implements Messages {}
-
     // ── Shared view types ─────────────────────────────────────────
 
     /**
-     * Compact view of an entity's own state, sent inside Perception.
+     * Compact view of an entity's own state, sent inside {@link Perception}.
      */
     record EntityState(
             String entityId,
@@ -230,15 +134,6 @@ public sealed interface Messages {
      *   bits 4-5     — reserved
      *   bits 6-7     — unused (byte sign)
      * </pre>
-     *
-     * <p><b>Three-layer pipeline</b> (see CLAUDE.md &gt; Architecture &gt; "Env state projection"):
-     * <ol>
-     *   <li>Layer 1: shadow grids in {@code EnvironmentEngine} — intensity 0-255 per effect.</li>
-     *   <li>Layer 2: read-only {@code cellStatusCache} / {@code entityStatusCache} bitmask
-     *       projection (D-41). Rebuilt per tick in {@code buildStatusCaches()}.</li>
-     *   <li>Layer 3: this {@code cellStatus} / {@code entityStatus} byte — per-bot
-     *       derivation from layer 2 with OVERCROWDED recomposition.</li>
-     * </ol>
      *
      * <p>Back-compat: 3-arg and 4-arg constructors preserved so Phase 13 tests
      * and callers continue to compile.
