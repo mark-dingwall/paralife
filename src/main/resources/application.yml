@@ -21,6 +21,15 @@ paralife:
   world:
     width: 256
     height: 256
+    rock:
+      seed: 0
+      density-threshold: 128
+      textures:
+        - /rocks/perlin-01.png
+        - /rocks/perlin-02.png
+        - /rocks/perlin-03.png
+        - /rocks/perlin-04.png
+        - /rocks/perlin-05.png
   tick:
     interval-ms: 500
     auto-start: true
