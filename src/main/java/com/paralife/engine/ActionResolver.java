@@ -1,6 +1,7 @@
 package com.paralife.engine;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.codec.Frame;
 import com.paralife.websocket.Messages;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.paralife.websocket.SessionRegistry;
@@ -227,6 +228,61 @@ public class ActionResolver {
         pendingActions.get().put(sessionId, action);
         log.debug("Action queued: session={} type={} dir={}", sessionId,
                 action.actionType(), action.direction());
+    }
+
+    /**
+     * Plan 15-06 Task 1 transitional overload — accepts {@link Frame.ActionFrame}
+     * from the codec-driven {@code WorldWebSocketHandler}. Task 2 rewrites the
+     * whole verb-dispatch pipeline around {@code Frame.ActionFrame}; for Task 1
+     * this adapter keeps production compile green by translating the incoming
+     * frame to the legacy {@link Messages.Action} shape used by the existing
+     * {@link #resolveActions} pipeline.
+     *
+     * <p>Task 2 Part B replaces this overload with the full verb-dispatch
+     * implementation per SCHEMA §8.6 plus IRV + alarm routing.
+     */
+    public void queueAction(String sessionId, Frame.ActionFrame frame) {
+        Messages.Action legacy = translateToLegacy(frame);
+        if (legacy == null) {
+            log.debug("Dropping action with unmapped verb={}: session={}", frame.verb(), sessionId);
+            return;
+        }
+        pendingActions.get().put(sessionId, legacy);
+        log.debug("Action queued (from frame): session={} verb={}", sessionId, frame.verb());
+    }
+
+    /**
+     * Transitional — translate the Task 1 {@link Frame.ActionFrame} into the
+     * legacy {@link Messages.Action} shape. Retired by Task 2 Part B.
+     */
+    private static Messages.Action translateToLegacy(Frame.ActionFrame frame) {
+        String dir = frame.arg().map(ActionResolver::numpadToDirectionName).orElse(null);
+        return switch (frame.verb()) {
+            case 'M' -> new Messages.Action("move", dir);
+            case 'E' -> new Messages.Action("consume", dir);
+            case 'A' -> new Messages.Action("attack", dir);
+            case 'R' -> new Messages.Action("reproduce", dir);
+            case 'V' -> new Messages.Action("move", dir); // LOCOMOTOR vote — Task 2 re-routes
+            case 'L' -> new Messages.Action("rest", null); // alarm — Task 2 routes to AlarmQueue
+            default -> null;
+        };
+    }
+
+    /** Numpad digit → legacy Direction.name(); '5' (self) returns null. */
+    private static String numpadToDirectionName(String arg) {
+        if (arg == null || arg.isEmpty()) return null;
+        return switch (arg.charAt(0)) {
+            case '7' -> "NW";
+            case '8' -> "N";
+            case '9' -> "NE";
+            case '4' -> "W";
+            case '5' -> null;
+            case '6' -> "E";
+            case '1' -> "SW";
+            case '2' -> "S";
+            case '3' -> "SE";
+            default -> null;
+        };
     }
 
     /**

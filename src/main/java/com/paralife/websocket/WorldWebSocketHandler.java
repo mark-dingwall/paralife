@@ -1,16 +1,19 @@
 package com.paralife.websocket;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.codec.CodecException;
+import com.paralife.codec.Frame;
+import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.ActionResolver;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.MetabolicProfile;
 import com.paralife.engine.TickEngine;
-import com.paralife.world.Entity;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
 
+import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,70 +24,100 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 /**
- * Handles WebSocket connections for the paralife world.
- * On connect: sends Welcome message with world info.
- * On message: handles Register and Heartbeat from clients.
- * On close: cleans up session.
+ * Plan 15-06 — codec-driven WebSocket handler.
+ *
+ * <p>All wire I/O runs through {@link PerceptionCodec}. There is no Jackson on
+ * the inbound or outbound hot path. Inbound text messages are decoded as
+ * {@link Frame}; outbound responses are encoded back to the compact wire
+ * format per {@code 15-SCHEMA.md}.
+ *
+ * <p><b>Session FSM (D-33).</b> Each session carries a two-state life cycle:
+ * <ul>
+ *   <li><b>Unregistered</b> (initial) — {@code entityId} attribute null. Only
+ *       {@code r|} (RegisterFrame) is accepted; everything else responds with
+ *       {@code E|404|no active entity}.</li>
+ *   <li><b>Alive</b> — {@code entityId} non-null. Action frames
+ *       ({@code a|…}) are queued against the resolver. A second {@code r|}
+ *       is rejected {@code E|409|already registered}.</li>
+ *   <li><b>Dead (respawn pending)</b> — reached when a downstream component
+ *       (plan 15-08 tick broadcaster) calls {@link #markDead(WebSocketSession)}.
+ *       The session's {@code entityId} attribute is cleared; {@code entityType}
+ *       survives so the client does not have to re-specify. A subsequent
+ *       {@code r|} re-registers, counted by {@code respawnCount}.</li>
+ * </ul>
+ *
+ * <p><b>Respawn cap (T-15-04).</b> {@link #MAX_RESPAWNS_PER_SESSION} bounds
+ * respawn storms per session. The first {@code r|} is registration, not
+ * counted; subsequent {@code r|} accepts each increment {@code respawnCount}.
+ * Exceeding the cap yields {@code E|429|respawn cap exceeded}. The session
+ * itself stays open so a client can still observe the final error.
  */
 @Component
 public class WorldWebSocketHandler extends TextWebSocketHandler {
 
     private static final Logger log = LoggerFactory.getLogger(WorldWebSocketHandler.class);
 
+    /**
+     * D-33 per-session respawn cap. Bounds the respawn-storm DoS vector
+     * (T-15-04). Value is a reasonable default; exposing it as a configurable
+     * property is deferred to a later plan.
+     */
+    private static final int MAX_RESPAWNS_PER_SESSION = 5;
+
+    /** Max random-placement attempts before declaring the grid effectively full. */
+    private static final int MAX_PLACEMENT_ATTEMPTS = 50;
+
+    // Session attribute keys (D-33 FSM).
+    private static final String ATTR_ENTITY_ID = "entityId";
+    private static final String ATTR_ENTITY_TYPE = "entityType";
+    private static final String ATTR_RESPAWN_COUNT = "respawnCount";
+
     private final SessionRegistry sessionRegistry;
     private final WorldGrid worldGrid;
     private final TickEngine tickEngine;
     private final BotRegistry botRegistry;
     private final ActionResolver actionResolver;
-    private final ObjectMapper objectMapper;
     private final MetabolicProfile metabolicProfile;
 
     public WorldWebSocketHandler(SessionRegistry sessionRegistry, WorldGrid worldGrid,
                                   TickEngine tickEngine, BotRegistry botRegistry,
-                                  ActionResolver actionResolver, ObjectMapper objectMapper,
+                                  ActionResolver actionResolver,
                                   MetabolicProfile metabolicProfile) {
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
         this.tickEngine = tickEngine;
         this.botRegistry = botRegistry;
         this.actionResolver = actionResolver;
-        this.objectMapper = objectMapper;
         this.metabolicProfile = metabolicProfile;
     }
 
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+    public void afterConnectionEstablished(WebSocketSession session) {
         sessionRegistry.register(session);
-
-        var welcome = new Messages.Welcome(
-                session.getId(),
-                worldGrid.getWidth(),
-                worldGrid.getHeight(),
-                tickEngine.getCurrentTick()
-        );
-
-        sendMessage(session, welcome);
+        // Plan 15-06: no Welcome frame — the protocol no longer has one.
+        // First `r|` from the client returns an `S|<entityId>` sync frame.
         log.info("Client connected: {} (total: {})", session.getId(), sessionRegistry.getSessionCount());
     }
 
     @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+        Frame frame;
         try {
-            Messages msg = objectMapper.readValue(message.getPayload(), Messages.class);
+            frame = PerceptionCodec.decode(message.getPayload());
+        } catch (CodecException e) {
+            log.warn("Malformed frame from {}: {}", session.getId(), e.getMessage());
+            sendFrame(session, new Frame.ErrorFrame(400, Optional.of("Malformed frame")));
+            return;
+        }
 
-            switch (msg) {
-                case Messages.Register register -> handleRegister(session, register);
-                case Messages.Heartbeat heartbeat -> handleHeartbeat(session);
-                case Messages.Action action -> handleAction(session, action);
-                case Messages.CompositeAction compositeAction -> handleCompositeAction(session, compositeAction);
-                default -> {
-                    log.warn("Unexpected message type from {}: {}", session.getId(), msg.getClass().getSimpleName());
-                    sendMessage(session, new Messages.Error("UNKNOWN_MESSAGE", "Unhandled message type"));
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Invalid message from {}: {}", session.getId(), e.getMessage());
-            sendMessage(session, new Messages.Error("INVALID_MESSAGE", e.getMessage()));
+        switch (frame) {
+            case Frame.RegisterFrame r -> handleRegister(session, r);
+            case Frame.ActionFrame a -> handleAction(session, a);
+            case Frame.SyncFrame ignored -> sendFrame(session,
+                    new Frame.ErrorFrame(400, Optional.of("Client cannot send S")));
+            case Frame.TickFrame ignored -> sendFrame(session,
+                    new Frame.ErrorFrame(400, Optional.of("Client cannot send T")));
+            case Frame.ErrorFrame ignored -> { /* ignore client-sent errors */ }
         }
     }
 
@@ -112,24 +145,49 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         botRegistry.unregisterBySession(sessionId);
     }
 
-    private static final int MAX_PLACEMENT_ATTEMPTS = 50;
+    private void handleRegister(WebSocketSession session, Frame.RegisterFrame register) {
+        var attrs = session.getAttributes();
 
-    private void handleRegister(WebSocketSession session, Messages.Register register) throws Exception {
-        String entityId = "entity-" + session.getId();
-
-        // Parse particle type from register message, default to CATALYST
-        ParticleType particleType;
-        try {
-            particleType = ParticleType.valueOf(register.entityType().toUpperCase());
-        } catch (IllegalArgumentException | NullPointerException e) {
-            particleType = ParticleType.CATALYST;
+        // Alive? Second r| while alive is rejected (409).
+        Object existingId = attrs.get(ATTR_ENTITY_ID);
+        if (existingId != null) {
+            sendFrame(session, new Frame.ErrorFrame(409, Optional.of("already registered")));
+            return;
         }
 
-        // Phase 13: spawn with per-type max energy (D-02)
+        // Respawn cap gate — first r| is registration (not counted).
+        int respawnCount = respawnCountOf(attrs);
+        Object storedType = attrs.get(ATTR_ENTITY_TYPE);
+        boolean isRespawn = storedType != null;
+        if (isRespawn && respawnCount >= MAX_RESPAWNS_PER_SESSION) {
+            sendFrame(session, new Frame.ErrorFrame(429, Optional.of("respawn cap exceeded")));
+            return;
+        }
+
+        // Resolve ParticleType. Either first-time from frame, or reuse stored.
+        ParticleType particleType;
+        if (isRespawn) {
+            particleType = switch ((Character) storedType) {
+                case 'C' -> ParticleType.CATALYST;
+                case 'M' -> ParticleType.MEMBRANE;
+                case 'S' -> ParticleType.SPORE;
+                default -> ParticleType.CATALYST;
+            };
+        } else {
+            particleType = switch (register.entityType()) {
+                case 'C' -> ParticleType.CATALYST;
+                case 'M' -> ParticleType.MEMBRANE;
+                case 'S' -> ParticleType.SPORE;
+                default -> ParticleType.CATALYST;
+            };
+        }
+
+        String entityId = "entity-" + session.getId()
+                + (isRespawn ? ("-r" + (respawnCount + 1)) : "");
+
         int maxEnergy = metabolicProfile.forType(particleType).maxEnergy();
         Particle particle = Particle.spawn(entityId, particleType, maxEnergy);
 
-        // Try random positions until we find an empty cell
         var rng = ThreadLocalRandom.current();
         int x = -1, y = -1;
         boolean placed = false;
@@ -143,39 +201,73 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         }
 
         if (!placed) {
-            sendMessage(session, new Messages.Error("GRID_FULL", "No empty cell found after "
-                    + MAX_PLACEMENT_ATTEMPTS + " attempts"));
+            sendFrame(session, new Frame.ErrorFrame(503, Optional.of("GRID_FULL")));
             return;
         }
 
-        // Register in bot registry for perception/action tracking
         botRegistry.register(session.getId(), entityId, new Position(x, y));
 
-        sendMessage(session, new Messages.Registered(entityId, x, y));
-        log.info("Entity registered: {} at ({},{}) type={}", entityId, x, y, particleType);
-    }
-
-    private void handleAction(WebSocketSession session, Messages.Action action) {
-        actionResolver.queueAction(session.getId(), action);
-        log.debug("Action queued from {}: type={} dir={}", session.getId(),
-                action.actionType(), action.direction());
-    }
-
-    private void handleCompositeAction(WebSocketSession session, Messages.CompositeAction action) {
-        actionResolver.queueCompositeAction(session.getId(), action);
-        log.debug("Composite action queued from {}: type={} dir={} prefs={}", session.getId(),
-                action.actionType(), action.direction(), action.rankedPreferences());
-    }
-
-    private void handleHeartbeat(WebSocketSession session) {
-        // Heartbeat acknowledged — no response needed
-        log.debug("Heartbeat from {}", session.getId());
-    }
-
-    private void sendMessage(WebSocketSession session, Messages message) throws Exception {
-        String json = objectMapper.writeValueAsString(message);
-        synchronized (session) {
-            session.sendMessage(new TextMessage(json));
+        // Update FSM attributes.
+        attrs.put(ATTR_ENTITY_ID, entityId);
+        if (!isRespawn) {
+            attrs.put(ATTR_ENTITY_TYPE, register.entityType());
+        } else {
+            attrs.put(ATTR_RESPAWN_COUNT, respawnCount + 1);
         }
+
+        sendFrame(session, new Frame.SyncFrame(entityId, List.of()));
+        log.info("Entity registered: {} at ({},{}) type={} respawnCount={}",
+                entityId, x, y, particleType, attrs.get(ATTR_RESPAWN_COUNT));
+    }
+
+    private void handleAction(WebSocketSession session, Frame.ActionFrame action) {
+        Object entityId = session.getAttributes().get(ATTR_ENTITY_ID);
+        if (entityId == null) {
+            sendFrame(session, new Frame.ErrorFrame(404, Optional.of("no active entity")));
+            return;
+        }
+        actionResolver.queueAction(session.getId(), action);
+        log.debug("Action queued from {}: verb={}", session.getId(), action.verb());
+    }
+
+    private static int respawnCountOf(java.util.Map<String, Object> attrs) {
+        Object v = attrs.get(ATTR_RESPAWN_COUNT);
+        if (v instanceof Integer i) return i;
+        return 0;
+    }
+
+    // ── Outbound ─────────────────────────────────────────────────
+
+    /**
+     * Encode {@code frame} via {@link PerceptionCodec#encode} and push over the
+     * socket. Sends are guarded by {@code synchronized (session)} to respect
+     * the single-writer-per-session invariant of the Spring WebSocket API.
+     */
+    void sendFrame(WebSocketSession session, Frame frame) {
+        if (session == null || !session.isOpen()) return;
+        try {
+            String encoded = PerceptionCodec.encode(frame);
+            synchronized (session) {
+                session.sendMessage(new TextMessage(encoded));
+            }
+        } catch (Exception e) {
+            log.warn("Failed to send frame to {}: {}", session.getId(), e.getMessage());
+        }
+    }
+
+    /** Convenience wrapper for send-error-frame callers. */
+    public void sendErrorFrame(WebSocketSession session, int code, String msg) {
+        sendFrame(session, new Frame.ErrorFrame(code, Optional.ofNullable(msg)));
+    }
+
+    /**
+     * Transition the session from Alive to Dead (respawn pending). Called by
+     * the downstream broadcaster (plan 15-08) when it detects the session's
+     * entity has been removed from the grid. Subsequent {@code r|} is accepted
+     * as a respawn, counted against {@link #MAX_RESPAWNS_PER_SESSION}.
+     */
+    public void markDead(WebSocketSession session) {
+        if (session == null) return;
+        session.getAttributes().put(ATTR_ENTITY_ID, null);
     }
 }
