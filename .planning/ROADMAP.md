@@ -161,8 +161,17 @@ Plans:
 - Optional `--duration` arg for scripted UAT; default runs until interrupted
 - `CLAUDE.md` architecture table corrects `com.paralife.bot` (no longer "test-only, not deployed")
 - Phase 15 UAT Tests 3/5/6/7 retried against `runBot`, evidence captured from server logs and curl probes
-- Phase 15 UAT back to `status: complete`, `passed: 7`; STATE.md back to `phase-complete`
+- Phase 15 UAT: Tests 3/5/6 recovered with real evidence; Test 7 found a latent server-side gap (own-death `v|D` never reaches wire) — handed off to Phase 15.2
 - M4 seed planted: "External load harness as deployment primitive"
+
+### Phase 15.2: Own-Death Event Wiring
+**Goal:** Close the latent Phase 15 gap surfaced by 15.1 UAT Test 7 retry — emit own-death `v|D` events onto the wire so `BotClient.handleDeath()` can fire the respawn FSM end-to-end. Scope is TickBroadcaster `buildEventsForBot` (server-side event-source wiring the in-file comment at `src/main/java/com/paralife/websocket/TickBroadcaster.java:636` already flagged as 'plans 15-09+ wire the remaining event sources').
+**Depends on:** Phase 15.1 (BotRunner is the only way to exercise the fix under real combat — Test 7 becomes the acceptance gate)
+**Success Criteria:**
+- TickBroadcaster emits `Event('D', ...)` to a bot on the tick its entity is finalized by DeathFinalizer (and no later, so BotClient sees one D event per death)
+- No wire-protocol changes — reuses the existing v-block slot
+- Phase 15 UAT Test 7 passes with real respawn-loop evidence: `Entity registered: ...-r1` on same session ID, respawnCount increments, E|429 fires only at the configured cap
+- Phase 15 UAT returns to `status: complete`, `passed: 7`
 
 ### Phase 16: Emergent Behavior Tests
 **Goal:** Validate that complex behaviors emerge from the combination of bonding, composites, metabolism, environment, and protocol
@@ -194,6 +203,7 @@ Plans:
 | 12 | Composite Entities | ✅ Complete |
 | 13 | Energy & Metabolism System | Planning complete |
 | 14 | Environmental Rules | Context complete |
-| 15 | Protocol & Transport Overhaul | UAT partial (3/7) — retry blocked on 15.1 |
-| 15.1 | Bot Operator CLI | In progress |
+| 15 | Protocol & Transport Overhaul | UAT 6/7 pass, 1 issue (respawn FSM blocked on 15.2) |
+| 15.1 | Bot Operator CLI | ✅ Complete |
+| 15.2 | Own-Death Event Wiring | Not started (surfaced by 15.1 UAT retry) |
 | 16 | Emergent Behavior Tests | Not started |

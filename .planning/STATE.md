@@ -5,10 +5,10 @@ milestone_name: Combination & Emergence
 current_phase: 15
 current_phase_name: Protocol & Transport Overhaul
 current_plan: 11
-status: phase-uat-partial
-uat_retry_blocked_on: Phase 15.1 (BotRunner operator CLI)
-stopped_at: Phase 15 UAT demoted to partial 2026-04-21. Tests 3/5/6/7 relied on throwaway BotLauncher.main + runBot JavaExec that was reverted before close; no supported operator CLI existed. Phase 15.1 ships BotRunner as the permanent primitive, then retries the four tests with real evidence. Plan 15-11 code landed; 561/0/3 tests green in isolation. Next: execute Phase 15.1 (BotRunner + gradle task + UAT retry).
-last_updated: "2026-04-21T09:00:00.000Z"
+status: phase-uat-issue
+uat_issue_blocked_on: Phase 15.2 (own-death v-block wiring)
+stopped_at: Phase 15.1 code landed 2026-04-21; UAT retry against BotRunner recovered 3 of 4 demoted tests (3/5/6) with real evidence. Test 7 (Respawn FSM) revealed a latent Phase 15 gap — TickBroadcaster.buildEventsForBot (src/main/java/com/paralife/websocket/TickBroadcaster.java:636) never emits own-death `v|D` events onto the wire; comment in-file already flagged it as 'plans 15-09+ wire the remaining event sources' but that wiring was never completed. Combat-tight UAT run produced 105 server-side DeathFinalizer events and 0 bot-side respawns. Out of Phase 15.1 scope — plan explicitly excludes changes to wire protocol / codec / FSM. Tracked for Phase 15.2 (or Phase 16 input). UAT 6/7 pass, 1/7 issue.
+last_updated: "2026-04-21T04:30:00.000Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 6
@@ -26,23 +26,23 @@ See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
 
-**Current focus:** Phase 15.1 — Bot Operator CLI (closes Phase 15 UAT debt)
+**Current focus:** Phase 15.1 close + Phase 15.2 spec (own-death v-block wiring)
 
-**Status:** Phase 15 UAT partial — awaiting Phase 15.1 BotRunner
+**Status:** Phase 15 UAT 6/7 pass, Test 7 blocked on Phase 15.2 fix
 **Current Phase:** 15
 **Current Phase Name:** Protocol & Transport Overhaul
 **Total Phases:** 16
-**Current Plan:** 11 (code complete, UAT retry blocked on 15.1)
+**Current Plan:** 11 (code complete); Phase 15.1 BotRunner landed
 **Total Plans in Phase:** 11
-**Progress:** [█████████░] UAT partial
+**Progress:** [█████████░] UAT 6/7 (1 issue)
 **Last Activity:** 2026-04-21
 
 ## Current Position
 
-Phase: 15 (Protocol & Transport Overhaul) — UAT PARTIAL (3/7 pass, 4/7 pending)
-Plan: 11 of 11 (all code plans shipped)
-Status: phase-uat-partial — Phase 15.1 BotRunner in flight to unblock Tests 3/5/6/7 retry
-Last activity: 2026-04-21 -- Phase 15.1 Task 5a landed: UAT Tests 3/5/6/7 demoted from pass → pending; evidence honestly reflects that prior runs depended on a throwaway harness since reverted. STATE flipped phase-complete → phase-uat-partial with uat_retry_blocked_on: Phase 15.1.
+Phase: 15 (Protocol & Transport Overhaul) — UAT 6/7 pass + 1 issue
+Plan: 11 of 11 (all code plans shipped); Phase 15.1 BotRunner landed
+Status: phase-uat-issue — Test 7 respawn FSM blocked on server-side own-death `v|D` wiring gap; Phase 15.2 to land the fix
+Last activity: 2026-04-21 -- Phase 15.1 code + UAT retries landed. Tests 3/5/6 real-evidence pass against BotRunner; Test 7 revealed a latent TickBroadcaster gap (own-death events never projected onto wire). Phase 15.1 closes with 6/7 pass; Phase 15.2 will land the wire-side death event emission.
 
 ## Accumulated Context
 
