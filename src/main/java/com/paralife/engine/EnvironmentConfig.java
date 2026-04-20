@@ -89,17 +89,6 @@ public record EnvironmentConfig(
                 throw new IllegalArgumentException("lightning.fleeingTicks must be >= 0: " + fleeingTicks);
         }
 
-        /**
-         * 7-arg back-compat constructor: any pre-15-08 call site that did not
-         * pass {@code fleeingTicks} gets {@link #DEFAULT_FLEEING_TICKS}. Keeps
-         * existing tests compiling without a touch.
-         */
-        public Lightning(Season peakSeason, double peakLambda, double offSeasonLambda,
-                         int innerRadius, int outerRadius, int damage, int fertilityBoost) {
-            this(peakSeason, peakLambda, offSeasonLambda, innerRadius, outerRadius, damage,
-                    fertilityBoost, DEFAULT_FLEEING_TICKS);
-        }
-
         public static Lightning defaults() {
             return new Lightning(Season.SUMMER, 0.04, 0.005, 2, 4, 40, 25, DEFAULT_FLEEING_TICKS);
         }

@@ -1,18 +1,30 @@
 package com.paralife.websocket;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.codec.ActiveEffect;
+import com.paralife.codec.CellEntry;
+import com.paralife.codec.Coord;
+import com.paralife.codec.Event;
+import com.paralife.codec.Frame;
+import com.paralife.codec.KindData;
+import com.paralife.codec.PerceptionCodec;
+import com.paralife.codec.PoolSnapshot;
+import com.paralife.codec.RosterMember;
+import com.paralife.codec.StateChange;
+import com.paralife.engine.AlarmQueue;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.BuffRegistry;
 import com.paralife.engine.CompositeRegistry;
-import com.paralife.engine.EntityIds;
 import com.paralife.engine.EnvironmentEngine;
 import com.paralife.engine.SimulationConfig;
 import com.paralife.engine.TickEvent;
-import com.paralife.websocket.Messages.CellView;
-import com.paralife.websocket.Messages.EntityState;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
+import com.paralife.world.Entity.BondedPair;
+import com.paralife.world.Entity.CompositeMember;
+import com.paralife.world.Entity.Nutrient;
 import com.paralife.world.Entity.Particle;
+import com.paralife.world.Entity.Role;
+import com.paralife.world.Entity.Rock;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
 import org.slf4j.Logger;
@@ -25,435 +37,508 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Sends each registered bot a Perception message each tick with their local neighbourhood.
+ * Plan 15-08: codec-driven tick projection (SCHEMA §6.3 / §7 / §8).
  *
- * <p>Runs at Order(50) — after SimulationEngine(10) and ActionResolver(20),
- * before TickBroadcaster(100).
+ * <p>Per-bot {@link Frame.TickFrame} construction → {@link PerceptionCodec}
+ * compact text encoding → WebSocket TextMessage. Jackson is gone; the
+ * {@code Messages.*} record family is NOT imported (plan 15-11 deletes it).
  *
- * <p>For composite members: builds a stitched perception from all SENSOR members,
- * memoized per composite per tick (D-19, D-20, D-36, T-12-12).
- *
- * <p><b>Phase 14 Plan 05</b> additions:
+ * <p><b>Authority tiers (SCHEMA §7).</b>
  * <ul>
- *   <li>Dynamic SOLO radius: 7x7 when the bot's entity has {@code SENSOR_PLUS_1}
- *       (Particle.id() or bp.id() — bot.entityId() returns the correct id by
- *       construction, cycle-9 action C.1).</li>
- *   <li>Dynamic COMPOSITE SENSOR per-member stitched radius: 7x7 for each SENSOR
- *       member that carries {@code SENSOR_PLUS_1} (cycle-4 action item #8).</li>
- *   <li>Vision-scoped OVERCROWDED bit (D-40) per bot — computed from the
- *       Moore-neighbourhood count the bot can see, compared against the LIVE
- *       {@code SimulationConfig.overcrowdingThreshold()}.</li>
- *   <li>Per-bot overcrowded-bit <b>recomposition</b> (cycle-6 MEDIUM #9): the
- *       env cache provides a cell-level cellStatus byte whose OVERCROWDED bit
- *       reflects the SERVER's global count. For each bot we MUST mask bit 0 out
- *       of the cached value and OR in the per-bot vision-scoped bit — verbatim
- *       expression: {@code cellStatus = (cached & ~BIT_OVERCROWDED) | perBotOvercrowdedBit}.</li>
- *   <li>6-arg CellView: carries {@code cellStatus} + {@code entityStatus} bytes
- *       alongside the legacy {@code flags}.</li>
+ *   <li><b>Full</b> — solo Particle, BondedPair, composite LOCOMOTOR:
+ *       sensorRadius = 2 (3 with {@code SENSOR_PLUS_1}).</li>
+ *   <li><b>Authority-lite</b> — FEEDER / ATTACKER / REPRODUCER: sensorRadius = 1.</li>
+ *   <li><b>Passive</b> — SENSOR / DEFENDER: {@link Frame.TickFrame} minimal form
+ *       (sensorRadius = 0 — alive + energy + own events only per §6.3.2).</li>
  * </ul>
+ *
+ * <p><b>Zero-trust (D-28 / T-15-03).</b> {@link CellEntry} carries no entity
+ * id; bonded-secondary type is hidden (primary kind codes {@code D/N/T} only).
+ * Composite members emit the role digit {@code 0}-{@code 5}; rocks {@code R};
+ * nutrients {@code F}.
+ *
+ * <p><b>D-40 vision-scoped OVERCROWDED (preserved VERBATIM from plan 15-07).</b>
+ * The {@code cellStatus = (cached & ~BIT_OVERCROWDED) | perBotOvercrowdedBit}
+ * mask-and-OR is lifted intact into {@link #envStateFor}; the expression is
+ * load-bearing per Phase 14 D-40 and pinned by {@code VisionScopedOvercrowdingTest}.
+ *
+ * <p><b>AlarmQueue drain (plan 15-06 producer, plan 15-08 consumer).</b>
+ * LOCOMOTOR's v block drains {@link AlarmQueue#drainAlarms(String)} and emits
+ * one {@code vN<relCoord>} event per pending alarm. Overflow past
+ * {@link PerceptionCodec#MAX_V_ENTRIES} is truncated with a warn log.
+ *
+ * <p><b>Roster send-on-change (SCHEMA §8.5).</b> The g block ships ONLY when
+ * the roster hash for this session differs from the last-sent value. A
+ * per-session {@link ConcurrentHashMap} tracks the state.
  */
 @Component
 public class TickBroadcaster {
 
     private static final Logger log = LoggerFactory.getLogger(TickBroadcaster.class);
 
-    /** Perception radius: 2 means a 5x5 grid (2 cells in each direction). */
+    /** Default full-authority solo/bonded sensor radius (5×5). */
     public static final int PERCEPTION_RADIUS = 2;
 
     /**
-     * cycle-6 MEDIUM #9: mask for the vision-scoped OVERCROWDED bit in
-     * {@code cellStatus}. The broadcaster strips bit 0 from the cached env
-     * cellStatus byte and OR's in the per-bot computed overcrowded bit so the
-     * view delivered to each bot reflects THAT bot's visible neighbourhood
-     * rather than the global server count (D-40).
+     * Phase 14 D-40: vision-scoped OVERCROWDED bit. The cached env cellStatus
+     * byte has this bit stripped and the per-bot computed value OR'd back —
+     * see {@link #envStateFor} for the load-bearing expression.
      */
     static final byte BIT_OVERCROWDED = 0x01;
+
+    // SCHEMA §8.1.3 envState bits (match EnvironmentEngine constants).
+    private static final byte BIT_TOXIN = 0x02;
+    private static final byte BIT_MUTAGEN = 0x04;
 
     private final BotRegistry botRegistry;
     private final SessionRegistry sessionRegistry;
     private final WorldGrid worldGrid;
-    private final ObjectMapper objectMapper;
     private final CompositeRegistry compositeRegistry;
+    private final EnvironmentEngine environmentEngine;
+    private final BuffRegistry buffRegistry;
+    private final SimulationConfig simulationConfig;
+    private final AlarmQueue alarmQueue;
 
     /**
-     * Phase 14 Plan 05 collaborators. Optional for pre-Phase-14 tests that
-     * construct this bean via the 5-arg ctor with no env pipeline wired.
+     * SCHEMA §8.5 g-block send-on-change: per-session last roster hash. Updated
+     * after a T frame is sent; if the roster hash for the next tick differs,
+     * the g block is included. {@code -1} sentinel = never-sent (first T
+     * after registration always carries g).
      */
-    private EnvironmentEngine environmentEngine;
-    private BuffRegistry buffRegistry;
-    private SimulationConfig simulationConfig;
+    private final Map<String, Integer> lastRosterHashBySession = new ConcurrentHashMap<>();
 
-    /**
-     * Primary {@code @Autowired} ctor for Spring production wiring (Plan 14-05).
-     * Injects the env/buff/config collaborators needed for the 6-arg CellView
-     * pipeline and vision-scoped overcrowding.
-     */
     @Autowired
     public TickBroadcaster(BotRegistry botRegistry, SessionRegistry sessionRegistry,
-                                  WorldGrid worldGrid, ObjectMapper objectMapper,
-                                  CompositeRegistry compositeRegistry,
-                                  EnvironmentEngine environmentEngine,
-                                  BuffRegistry buffRegistry,
-                                  SimulationConfig simulationConfig) {
+                           WorldGrid worldGrid, CompositeRegistry compositeRegistry,
+                           EnvironmentEngine environmentEngine, BuffRegistry buffRegistry,
+                           SimulationConfig simulationConfig, AlarmQueue alarmQueue) {
         this.botRegistry = botRegistry;
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
-        this.objectMapper = objectMapper;
         this.compositeRegistry = compositeRegistry;
         this.environmentEngine = environmentEngine;
         this.buffRegistry = buffRegistry;
         this.simulationConfig = simulationConfig;
-    }
-
-    /**
-     * Back-compat 5-arg ctor for pre-Phase-14 unit tests that don't wire the
-     * env pipeline. Wires a fresh empty {@link BuffRegistry},
-     * {@link SimulationConfig#defaults()}, and a null environmentEngine
-     * (status-cache reads treat null as "no env effects"). Every env call
-     * site is null-guarded.
-     */
-    public TickBroadcaster(BotRegistry botRegistry, SessionRegistry sessionRegistry,
-                                  WorldGrid worldGrid, ObjectMapper objectMapper,
-                                  CompositeRegistry compositeRegistry) {
-        this.botRegistry = botRegistry;
-        this.sessionRegistry = sessionRegistry;
-        this.worldGrid = worldGrid;
-        this.objectMapper = objectMapper;
-        this.compositeRegistry = compositeRegistry;
-        this.environmentEngine = null;
-        this.buffRegistry = new BuffRegistry();
-        this.simulationConfig = SimulationConfig.defaults();
+        this.alarmQueue = alarmQueue;
     }
 
     @EventListener
-    @Order(50) // After SimulationEngine(10) + ActionResolver(20) — tick-pipeline perception step
+    @Order(50) // After SimulationEngine(10) + ActionResolver(20) — tick-pipeline perception step.
     public void onTick(TickEvent event) {
         var bots = botRegistry.getAllBots();
         if (bots.isEmpty()) return;
 
-        // Memoize stitched perception per composite per tick (T-12-12)
-        Map<String, Messages.CompositePerception> compositePerceptionCache = new HashMap<>();
-
         int sent = 0;
         int failed = 0;
 
-        for (var bot : bots) {
+        for (BotRegistry.BotState bot : bots) {
             WebSocketSession session = sessionRegistry.getSession(bot.sessionId());
-            if (session == null || !session.isOpen()) {
-                continue;
-            }
+            if (session == null || !session.isOpen()) continue;
 
             try {
-                Cell cell = worldGrid.getCell(bot.position().x(), bot.position().y());
-                Messages msg;
-
-                if (cell.occupant() instanceof Entity.CompositeMember cm) {
-                    // Composite member — send stitched perception (D-19, D-36)
-                    String compositeId = cm.compositeId();
-
-                    // Build or retrieve cached stitched perception
-                    if (!compositePerceptionCache.containsKey(compositeId)) {
-                        var stitched = buildStitchedPerception(event.tickNumber(), cm, bot);
-                        compositePerceptionCache.put(compositeId, stitched);
-                    }
-
-                    var cached = compositePerceptionCache.get(compositeId);
-                    if (cached == null) {
-                        // Blind composite (no SENSOR members, D-20) — skip
-                        continue;
-                    }
-
-                    // Create per-member perception with correct self state and role
-                    msg = new Messages.CompositePerception(
-                            cached.tickNumber(),
-                            buildMemberEntityState(cm, bot.position()),
-                            cached.stitchedNeighbourhood(),
-                            cached.compositeSize(),
-                            cached.sharedPoolEnergy(),
-                            cached.maxPoolEnergy(),
-                            cm.role().name()
-                    );
-                } else {
-                    // Solo entity — existing path
-                    msg = buildPerception(event.tickNumber(), bot);
-                }
-
-                String json = objectMapper.writeValueAsString(msg);
+                Frame.TickFrame frame = buildTickFrame(bot, event.tickNumber());
+                String encoded = PerceptionCodec.encode(frame);
                 synchronized (session) {
-                    session.sendMessage(new TextMessage(json));
+                    session.sendMessage(new TextMessage(encoded));
                 }
                 sent++;
             } catch (IOException e) {
                 failed++;
-                log.warn("Failed to send perception to session {}: {}", bot.sessionId(), e.getMessage());
+                log.warn("Failed to send tick to session {}: {}", bot.sessionId(), e.getMessage());
+            } catch (RuntimeException e) {
+                failed++;
+                log.warn("Tick frame build failed for session {}: {}", bot.sessionId(), e.getMessage(), e);
             }
         }
 
         if (log.isDebugEnabled()) {
-            log.debug("Tick {} perception: sent={}, failed={}, bots={}",
+            log.debug("Tick {} broadcast: sent={} failed={} bots={}",
                     event.tickNumber(), sent, failed, bots.size());
         }
     }
 
-    /**
-     * Build a Perception message for a bot at its current position.
-     *
-     * <p>Plan 14-05 cycle-6 HIGH #3: SENSOR_PLUS_1 on a BondedPair extends this
-     * solo path too — {@code bot.entityId()} is Particle.id() for Particle-bound
-     * bots and bp.id() for BondedPair-bound bots by construction, so one code
-     * path covers both. cycle-9 action C.1: use {@code bot.entityId()} directly
-     * (no {@code bot.entity()} accessor exists on {@link BotRegistry.BotState}).
-     */
-    Messages.Perception buildPerception(long tickNumber, BotRegistry.BotState bot) {
-        var pos = bot.position();
+    // ── Frame construction ─────────────────────────────────────────────
 
-        // Build entity state from the cell at the bot's position
+    /**
+     * Build the per-bot tick frame. Package-private to allow
+     * {@code ZeroTrustFilteringTest} (in {@code com.paralife.engine}) to
+     * exercise the encoder end-to-end — the frame must never carry entity
+     * ids, so asserting that on encoded output IS the contract.
+     */
+    Frame.TickFrame buildTickFrame(BotRegistry.BotState bot, long tickId) {
+        Position pos = bot.position();
         Cell selfCell = worldGrid.getCell(pos.x(), pos.y());
-        EntityState selfState;
-        if (selfCell.occupant() instanceof Particle p) {
-            selfState = new EntityState(
-                    p.id(), p.type().name(), p.energy(), p.maxEnergy(),
-                    pos.x(), pos.y()
-            );
+        Entity occupant = selfCell.occupant();
+        AuthorityTier tier = tierOf(occupant, bot.entityId());
+
+        int curX = pos.x();
+        int curY = pos.y();
+        int energy;
+        int maxEnergy;
+        if (occupant instanceof Particle p) {
+            energy = p.energy();
+            maxEnergy = p.maxEnergy();
+        } else if (occupant instanceof BondedPair bp) {
+            energy = bp.energy();
+            maxEnergy = bp.maxEnergy();
+        } else if (occupant instanceof CompositeMember cm) {
+            energy = cm.energy();
+            maxEnergy = cm.maxEnergy();
         } else {
-            // Entity died or was displaced — send last known position with 0 energy
-            selfState = new EntityState(
-                    bot.entityId(), "UNKNOWN", 0, 0,
-                    pos.x(), pos.y()
-            );
+            // Entity died or was displaced — emit alive-check with 0 energy.
+            energy = 0;
+            maxEnergy = 0;
         }
 
-        // Plan 14-05: SENSOR_PLUS_1 expands radius 2 -> 3 (5x5 -> 7x7) for SOLO
-        // bots (Particle + BondedPair per cycle-6 HIGH #3). bot.entityId()
-        // returns Particle.id() for Particle-bound bots and bp.id() for
-        // BondedPair-bound bots (cycle-9 action C.1 — no bot.entity() API).
-        String botEntityId = bot.entityId();
-        int radius = (botEntityId != null
-                && buffRegistry.hasBuff(botEntityId, BuffRegistry.BuffType.SENSOR_PLUS_1))
-                ? 3
-                : PERCEPTION_RADIUS;
+        // Minimal (passive) form: SENSOR / DEFENDER receive alive + energy + own events only.
+        if (tier == AuthorityTier.PASSIVE) {
+            List<Event> events = buildEventsForBot(bot, occupant, tickId, tier);
+            return new Frame.TickFrame(tickId, curX, curY, energy, maxEnergy,
+                    /*sensorRadius=*/ 0,
+                    List.of(), Optional.empty(), List.of(), events,
+                    Optional.empty(), List.of());
+        }
 
-        int diameter = radius * 2 + 1;
-        List<List<CellView>> neighbourhood = new ArrayList<>(diameter);
+        int radius = sensorRadiusFor(tier, bot.entityId());
 
-        for (int dy = -radius; dy <= radius; dy++) {
-            List<CellView> row = new ArrayList<>(diameter);
-            for (int dx = -radius; dx <= radius; dx++) {
-                int cx = pos.x() + dx;
-                int cy = pos.y() + dy;
-                row.add(cellToView(cx, cy, pos, radius));
+        // s block — vision cells with kind-code mapping + env state bitmasks.
+        List<CellEntry> cells = buildCellEntries(pos, radius);
+
+        // c block — state-change transitions are currently produced by the
+        // engine via paths that don't yet surface here; leave empty. Plan 15-08
+        // scope stops at "set Optional.of when this tick triggered a transition"
+        // — the event source doesn't feed TickBroadcaster in MVP. Plans 15-09+
+        // wire brain-side transitions; meanwhile the block is correctly absent.
+        Optional<StateChange> change = Optional.empty();
+
+        // f block — active effects for this entity: buffs, infection, FLEEING.
+        List<ActiveEffect> effects = buildEffectsForBot(bot, occupant);
+
+        // v block — per-bot events; LOCOMOTOR also drains AlarmQueue here.
+        List<Event> events = buildEventsForBot(bot, occupant, tickId, tier);
+
+        // p block — shared-pool snapshot for full-authority LOCOMOTOR only.
+        Optional<PoolSnapshot> pool = buildPool(tier, occupant);
+
+        // g block — roster send-on-change for LOCOMOTOR only.
+        List<RosterMember> roster = buildRosterIfChanged(bot, tier, occupant, pos);
+
+        return new Frame.TickFrame(tickId, curX, curY, energy, maxEnergy,
+                radius, cells, change, effects, events, pool, roster);
+    }
+
+    // ── Authority tier & sensor radius ─────────────────────────────────
+
+    /** Authority tiers per SCHEMA §7. */
+    enum AuthorityTier { FULL, AUTHORITY_LITE, PASSIVE }
+
+    /**
+     * Determine authority tier from the occupant. Solo Particle / BondedPair /
+     * composite LOCOMOTOR = FULL. FEEDER / ATTACKER / REPRODUCER = AUTHORITY_LITE.
+     * SENSOR / DEFENDER = PASSIVE. Null/dead occupant defaults to FULL so the
+     * bot still receives an alive-check frame with radius 2 (empty vision).
+     */
+    private AuthorityTier tierOf(Entity occupant, String botEntityId) {
+        if (occupant instanceof CompositeMember cm) {
+            return switch (cm.role()) {
+                case LOCOMOTOR -> AuthorityTier.FULL;
+                case FEEDER, ATTACKER, REPRODUCER -> AuthorityTier.AUTHORITY_LITE;
+                case SENSOR, DEFENDER -> AuthorityTier.PASSIVE;
+            };
+        }
+        // Solo, bonded, or dead/displaced — treat as full.
+        return AuthorityTier.FULL;
+    }
+
+    private int sensorRadiusFor(AuthorityTier tier, String botEntityId) {
+        return switch (tier) {
+            case AUTHORITY_LITE -> 1;
+            case FULL -> {
+                boolean hasSensorPlus = botEntityId != null
+                        && buffRegistry != null
+                        && buffRegistry.hasBuff(botEntityId, BuffRegistry.BuffType.SENSOR_PLUS_1);
+                yield hasSensorPlus ? 3 : PERCEPTION_RADIUS;
             }
-            neighbourhood.add(row);
-        }
-
-        return new Messages.Perception(tickNumber, selfState, neighbourhood, radius);
+            case PASSIVE -> 0;
+        };
     }
 
-    /**
-     * Build stitched perception for a composite. Returns null if the composite
-     * has no SENSOR members (blind composite, D-20).
-     */
-    private Messages.CompositePerception buildStitchedPerception(long tickNumber,
-            Entity.CompositeMember member, BotRegistry.BotState bot) {
-        var compositeOpt = compositeRegistry.getComposite(member.compositeId());
-        if (compositeOpt.isEmpty()) return null;
-
-        var composite = compositeOpt.get();
-
-        // Build stitched coverage from SENSOR members (D-19)
-        Set<Position> coverage = stitchSensorCoverage(composite);
-
-        if (coverage.isEmpty()) {
-            // Blind composite (D-20) — no perception sent
-            return null;
-        }
-
-        // Convert coverage to CellView grid
-        List<List<CellView>> neighbourhood = buildNeighbourhoodFromCoverage(coverage, bot.position());
-
-        return new Messages.CompositePerception(
-                tickNumber,
-                buildMemberEntityState(member, bot.position()),
-                neighbourhood,
-                composite.getMemberIds().size(),
-                composite.getSharedPoolEnergy(),
-                composite.getMaxPoolEnergy(),
-                member.role().name()
-        );
-    }
+    // ── s block — vision cells ────────────────────────────────────────
 
     /**
-     * Build the union of all SENSOR member 5x5 perception circles.
-     * Non-SENSOR members contribute no vision (D-21).
-     * Positions are deduplicated via HashSet.
+     * Build {@link CellEntry} list for the NxN vision window centred on {@code botPos}.
+     * Self cell at (dx,dy)=(0,0) is skipped per SCHEMA §8.1.
      *
-     * <p><b>Plan 14-05 cycle-4 action item #8 (Codex MEDIUM):</b> each SENSOR
-     * member's coverage circle is sized per-member — radius 3 when that member
-     * carries {@code SENSOR_PLUS_1}, else {@link #PERCEPTION_RADIUS}. Without
-     * this the composite SENSOR buff would be dead-letter — solo bots would
-     * see 7x7 while composite SENSORs still stitched with fixed 5x5 circles.
-     *
-     * <p>Package-private for testing.
+     * <p>RLE pass: consecutive rocks along a numpad direction collapse into a
+     * single {@link KindData.RockRun} starter entry when no env-state varies
+     * along the run. When env differs, the run is split (starter entry + later
+     * env-only supplement entries per SCHEMA §8.1.4).
      */
-    Set<Position> stitchSensorCoverage(CompositeRegistry.CompositeState composite) {
-        Set<Position> coverage = new HashSet<>();
-        int gridWidth = worldGrid.getWidth();
-        int gridHeight = worldGrid.getHeight();
-
-        for (String memberId : composite.getMemberIds()) {
-            Position pos = composite.getPositionForMember(memberId);
-            if (pos == null) continue;
-
-            Cell cell = worldGrid.getCell(pos.x(), pos.y());
-            if (cell.occupant() instanceof Entity.CompositeMember cm
-                    && cm.role() == Entity.Role.SENSOR) {
-                // cycle-4 action item #8: per-member radius — SENSOR_PLUS_1 expands
-                // this SENSOR's coverage circle from 5x5 to 7x7.
-                int memberRadius = buffRegistry.hasBuff(memberId, BuffRegistry.BuffType.SENSOR_PLUS_1)
-                        ? 3
-                        : PERCEPTION_RADIUS;
-                for (int dy = -memberRadius; dy <= memberRadius; dy++) {
-                    for (int dx = -memberRadius; dx <= memberRadius; dx++) {
-                        coverage.add(Position.wrap(pos.x() + dx, pos.y() + dy,
-                                gridWidth, gridHeight));
-                    }
-                }
-            }
-        }
-        return coverage;
-    }
-
-    /**
-     * Convert a set of covered positions into a sorted grid of CellViews.
-     * Positions are sorted by (y, x) to produce a row-major rectangular grid.
-     * Only cells within coverage are resolved; gaps in the bounding box get fog-of-war views.
-     *
-     * <p>Plan 14-05: per-cell status byte needs a vision-scoped OVERCROWDED
-     * recomposition — {@code botPos} is passed through so
-     * {@link #cellToView(int, int, Position, int)} can compute the bot-scoped
-     * bit relative to the composite member that the message is addressed to.
-     */
-    private List<List<CellView>> buildNeighbourhoodFromCoverage(Set<Position> coverage, Position botPos) {
-        // Sort positions to find bounding dimensions and produce consistent output
-        List<Position> sorted = new ArrayList<>(coverage);
-        sorted.sort(Comparator.comparingInt(Position::y).thenComparingInt(Position::x));
-
-        // Group by y-coordinate to form rows
-        Map<Integer, List<Position>> byRow = new LinkedHashMap<>();
-        for (Position pos : sorted) {
-            byRow.computeIfAbsent(pos.y(), k -> new ArrayList<>()).add(pos);
-        }
-
-        List<List<CellView>> neighbourhood = new ArrayList<>();
-        for (var entry : byRow.entrySet()) {
-            List<CellView> row = new ArrayList<>();
-            for (Position pos : entry.getValue()) {
-                row.add(cellToView(pos.x(), pos.y(), botPos, PERCEPTION_RADIUS));
-            }
-            neighbourhood.add(row);
-        }
-
-        return neighbourhood;
-    }
-
-    /**
-     * Build an EntityState for a composite member.
-     */
-    private EntityState buildMemberEntityState(Entity.CompositeMember cm, Position pos) {
-        return new EntityState(cm.id(), cm.type().name(), cm.energy(), cm.maxEnergy(),
-                pos.x(), pos.y());
-    }
-
-    /**
-     * Plan 14-05: per-bot cellToView.
-     *
-     * <p>Reads {@code environmentEngine.getCellStatus(pos)} for the cached
-     * env cell-status byte, then performs the cycle-6 MEDIUM #9 verbatim
-     * mask-and-OR: {@code cellStatus = (cached & ~BIT_OVERCROWDED) | perBotOvercrowdedBit}.
-     * The per-bot overcrowded bit is computed via
-     * {@link #computeVisionScopedOvercrowded} against the LIVE
-     * {@link SimulationConfig#overcrowdingThreshold()} — yaml overrides take
-     * effect without recompile.
-     *
-     * <p>{@code entityStatus} comes unchanged from the env cache keyed by
-     * occupant id; rocks and nutrients have id {@code null} and emit 0.
-     *
-     * <p>Package-private for testing via {@link #cellToViewForTest}.
-     */
-    CellView cellToView(int x, int y, Position botPos, int radius) {
+    private List<CellEntry> buildCellEntries(Position botPos, int radius) {
         int gridW = worldGrid.getWidth();
         int gridH = worldGrid.getHeight();
-        int wrappedX = Math.floorMod(x, gridW);
-        int wrappedY = Math.floorMod(y, gridH);
-        Cell cell = worldGrid.getCell(wrappedX, wrappedY);
-        Position cellPos = new Position(wrappedX, wrappedY);
 
-        // cycle-6 MEDIUM #9: start with cached env cellStatus, STRIP the global
-        // OVERCROWDED bit, then OR in the per-bot vision-scoped value.
+        // Gather raw per-cell data first; RLE pass runs after.
+        int diameter = radius * 2 + 1;
+        CellData[][] grid = new CellData[diameter][diameter];
+        for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                if (dx == 0 && dy == 0) continue; // self skipped
+                int cx = Math.floorMod(botPos.x() + dx, gridW);
+                int cy = Math.floorMod(botPos.y() + dy, gridH);
+                Cell cell = worldGrid.getCell(cx, cy);
+                Position cellPos = new Position(cx, cy);
+                Entity occ = cell.occupant();
+                Character kind = kindCodeFor(occ);
+                int entityState = entityStateOf(occ);
+                int envState = envStateFor(cellPos, botPos, radius) & 0xFF;
+                grid[dx + radius][dy + radius] = new CellData(dx, dy, kind, entityState, envState, occ);
+            }
+        }
+
+        List<CellEntry> out = new ArrayList<>();
+        boolean[][] consumed = new boolean[diameter][diameter];
+
+        // Emission in a stable order (row-major by dy then dx) to keep encoded
+        // output deterministic for round-trip tests.
+        for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                if (dx == 0 && dy == 0) continue;
+                int gx = dx + radius;
+                int gy = dy + radius;
+                CellData d = grid[gx][gy];
+                if (d == null || consumed[gx][gy]) continue;
+
+                if (d.kind != null && d.kind == 'R') {
+                    int bestDir = 0;
+                    int bestLen = 0;
+                    // Prefer horizontal/vertical/diagonal runs starting here.
+                    // SCHEMA §8.1.4: RLE dir is a numpad digit (1..9 excluding 5).
+                    for (int[] step : RLE_STEPS) {
+                        int len = measureRockRun(grid, consumed, gx, gy, step[0], step[1], d.envState, radius);
+                        if (len > bestLen) {
+                            bestLen = len;
+                            bestDir = step[2];
+                        }
+                    }
+                    if (bestLen >= 1 && bestDir != 0) {
+                        // Run starter + bestLen additional same-env rocks.
+                        consumed[gx][gy] = true;
+                        int[] step = stepForDir(bestDir);
+                        int sx = gx;
+                        int sy = gy;
+                        for (int i = 0; i < bestLen; i++) {
+                            sx += step[0];
+                            sy += step[1];
+                            consumed[sx][sy] = true;
+                        }
+                        out.add(buildRockEntry(d, (char) ('0' + bestDir), bestLen));
+                        continue;
+                    }
+                }
+
+                // Solo entry (non-rock, or isolated rock).
+                consumed[gx][gy] = true;
+                out.add(buildCellEntry(d));
+            }
+        }
+
+        return out;
+    }
+
+    /** Numpad direction step table: [dx, dy, numpadDigit]. 5 excluded (=self). */
+    private static final int[][] RLE_STEPS = new int[][] {
+            {-1, -1, 1},
+            { 0, -1, 2},
+            { 1, -1, 3},
+            {-1,  0, 4},
+            { 1,  0, 6},
+            {-1,  1, 7},
+            { 0,  1, 8},
+            { 1,  1, 9}
+    };
+
+    private static int[] stepForDir(int dir) {
+        for (int[] s : RLE_STEPS) if (s[2] == dir) return s;
+        throw new IllegalArgumentException("No RLE step for dir: " + dir);
+    }
+
+    /**
+     * Walk grid[gx+step..][gy+step..] counting additional same-env rocks not
+     * yet consumed. Runs cap at 63 (wire limit per KindData.RockRun).
+     */
+    private int measureRockRun(CellData[][] grid, boolean[][] consumed,
+                                int gx, int gy, int stepX, int stepY,
+                                int starterEnvState, int radius) {
+        int diameter = radius * 2 + 1;
+        int count = 0;
+        int sx = gx + stepX;
+        int sy = gy + stepY;
+        while (sx >= 0 && sx < diameter && sy >= 0 && sy < diameter && count < 63) {
+            CellData n = grid[sx][sy];
+            if (n == null) break;                       // self cell or absent
+            if (consumed[sx][sy]) break;
+            if (n.kind == null || n.kind != 'R') break; // non-rock breaks
+            if (n.envState != starterEnvState) break;   // env differs — split
+            count++;
+            sx += stepX;
+            sy += stepY;
+        }
+        return count;
+    }
+
+    /** Build a starter RockRun entry (or solo rock if additionalCount == 0). */
+    private CellEntry buildRockEntry(CellData d, char numpadDir, int additionalCount) {
+        Coord coord = coordFor(d.dx, d.dy);
+        int presence = 1 | (d.envState != 0 ? 2 : 0);
+        KindData kd = (additionalCount == 0)
+                ? new KindData.RockSolo()
+                : new KindData.RockRun(numpadDir, additionalCount);
+        OptionalInt envState = d.envState != 0 ? OptionalInt.of(d.envState) : OptionalInt.empty();
+        // entityState omitted for rocks per SCHEMA §8.1.
+        return new CellEntry(coord, presence, Optional.of(kd), OptionalInt.empty(), envState);
+    }
+
+    /** Build a non-run, non-empty cell entry (solo, bonded, composite, rock, nutrient). */
+    private CellEntry buildCellEntry(CellData d) {
+        Coord coord = coordFor(d.dx, d.dy);
+        boolean hasEntity = d.kind != null;
+        boolean hasEnv = d.envState != 0;
+        if (!hasEntity && !hasEnv) {
+            // Fully default cell — shouldn't have been added in the first place;
+            // return a presence=2 env-only entry with envState 0 is illegal per
+            // SCHEMA so we return an env-only entry ONLY if env is non-zero.
+            // Guard: if both are zero this method caller already filtered — we
+            // still must return something, emit env-only with 0 (caller must
+            // prevent reaching here with all-zero; but safety: throw).
+            throw new IllegalStateException("Empty cell entry requested at (" + d.dx + "," + d.dy + ")");
+        }
+        int presence = (hasEntity ? 1 : 0) | (hasEnv ? 2 : 0);
+        Optional<KindData> kd = hasEntity
+                ? Optional.of(d.kind == 'R'
+                        ? new KindData.RockSolo()
+                        : new KindData.Simple(d.kind))
+                : Optional.empty();
+        // entityState only for non-rock kinds per SCHEMA §8.1.
+        boolean isRock = hasEntity && d.kind == 'R';
+        OptionalInt entityState = (hasEntity && !isRock && d.entityState != 0)
+                ? OptionalInt.of(d.entityState)
+                : OptionalInt.empty();
+        OptionalInt envState = hasEnv ? OptionalInt.of(d.envState) : OptionalInt.empty();
+        return new CellEntry(coord, presence, kd, entityState, envState);
+    }
+
+    /**
+     * SCHEMA §2: numpad form for single-step neighbours (|dx|<=1 && |dy|<=1),
+     * 4-char relative otherwise.
+     */
+    private static Coord coordFor(int dx, int dy) {
+        if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1) {
+            // numpad: y+1 = top row (1-3), y=0 middle (4/6), y-1 bottom (7-9)
+            // Mapping uses standard keypad:
+            //   1 = SW (dx=-1, dy=+1)   2 = S (dx=0, dy=+1)    3 = SE (dx=+1, dy=+1)
+            //   4 = W  (dx=-1, dy=0)                           6 = E  (dx=+1, dy=0)
+            //   7 = NW (dx=-1, dy=-1)   8 = N (dx=0, dy=-1)    9 = NE (dx=+1, dy=-1)
+            int digit = numpadDigit(dx, dy);
+            return new Coord.Numpad((char) ('0' + digit));
+        }
+        return new Coord.Relative(dx, dy);
+    }
+
+    private static int numpadDigit(int dx, int dy) {
+        // Caller guarantees -1 <= dx,dy <= 1 && !(dx==0 && dy==0).
+        if (dy == 1) {
+            return dx == -1 ? 1 : dx == 0 ? 2 : 3;
+        } else if (dy == 0) {
+            return dx == -1 ? 4 : 6;
+        } else {
+            return dx == -1 ? 7 : dx == 0 ? 8 : 9;
+        }
+    }
+
+    /** SCHEMA §8.1.1 kind-code mapping. Returns {@code null} for empty cells. */
+    private static Character kindCodeFor(Entity occ) {
+        if (occ == null) return null;
+        return switch (occ) {
+            case Particle p -> switch (p.type()) {
+                case CATALYST -> 'C';
+                case MEMBRANE -> 'M';
+                case SPORE    -> 'S';
+            };
+            case BondedPair bp -> switch (bp.primaryType()) {
+                case CATALYST -> 'D';
+                case MEMBRANE -> 'N';
+                case SPORE    -> 'T';
+            };
+            case CompositeMember cm -> (char) ('0' + cm.role().ordinal());
+            case Rock r -> 'R';
+            case Nutrient n -> 'F';
+        };
+    }
+
+    /**
+     * Server-side entity-status lookup (SCHEMA §8.1.2). Entity id NEVER leaves
+     * the server — the lookup happens here and the projected bitmask goes on
+     * the wire in its place.
+     */
+    private int entityStateOf(Entity occ) {
+        if (occ == null) return 0;
+        String id = switch (occ) {
+            case Particle p -> p.id();
+            case BondedPair bp -> bp.id();
+            case CompositeMember cm -> cm.id();
+            case Rock r -> null;
+            case Nutrient n -> null;
+        };
+        if (id == null) return 0;
+        byte raw = environmentEngine != null ? environmentEngine.getEntityStatus(id) : 0;
+        return raw & 0xFF;
+    }
+
+    /**
+     * <b>Phase 14 D-40 vision-scoped OVERCROWDED — PRESERVED VERBATIM.</b>
+     *
+     * <p>Cached env cellStatus byte has its global-server OVERCROWDED bit
+     * stripped; per-bot vision-scoped bit is recomputed from the Moore
+     * neighbours THIS bot can see and OR'd back in. Bits 1+ (TOXIN_PRESENT,
+     * MUTAGEN_ZONE) pass through unchanged.
+     *
+     * <p>The literal expression {@code cached & ~BIT_OVERCROWDED} is
+     * grep-anchored by the plan's verify gate and pinned by
+     * {@code VisionScopedOvercrowdingTest}. Do not refactor into a helper
+     * method that would hide it.
+     */
+    byte envStateFor(Position cellPos, Position botPos, int radius) {
         byte cached = environmentEngine != null ? environmentEngine.getCellStatus(cellPos) : (byte) 0;
         byte perBotOvercrowdedBit = computeVisionScopedOvercrowded(
                 worldGrid, cellPos, botPos, radius, simulationConfig.overcrowdingThreshold())
                 ? BIT_OVERCROWDED : 0x00;
         byte cellStatus = (byte) ((cached & ~BIT_OVERCROWDED) | perBotOvercrowdedBit);
-
-        String occupantId = EntityIds.entityIdOf(cell.occupant());
-        byte entityStatus = (occupantId == null || environmentEngine == null)
-                ? (byte) 0
-                : environmentEngine.getEntityStatus(occupantId);
-
-        int flags = cell.flags();
-        if (cell.isEmpty()) {
-            return new CellView(null, null, cell.nutrientLevel(), flags, cellStatus, entityStatus);
-        }
-        Entity occupant = cell.occupant();
-        String occupantType = typeCodeFor(occupant);
-        // Match legacy occupantId behavior (null for empty, id otherwise). Rocks + Nutrients
-        // produce null from EntityIds.entityIdOf, so the raw occupant-id-or-fallback path is used.
-        String displayId = switch (occupant) {
-            case Particle p -> p.id();
-            case Entity.Rock r -> r.id();
-            case Entity.Nutrient n -> n.id();
-            case Entity.BondedPair bp -> bp.id();
-            case Entity.CompositeMember cm -> cm.id();
-        };
-        return new CellView(occupantType, displayId, cell.nutrientLevel(), flags, cellStatus, entityStatus);
-    }
-
-    /** Test seam (package-private) — exposes the per-bot cellToView directly. */
-    CellView cellToViewForTest(int x, int y, Position botPos, int radius) {
-        return cellToView(x, y, botPos, radius);
-    }
-
-    private static String typeCodeFor(Entity occupant) {
-        return switch (occupant) {
-            case Particle p -> p.type().name();
-            case Entity.Rock r -> "ROCK";
-            case Entity.Nutrient n -> "NUTRIENT";
-            case Entity.BondedPair bp -> "BONDED_" + bp.primaryType() + "_" + bp.secondaryType();
-            case Entity.CompositeMember cm -> "COMPOSITE_" + cm.type() + "_" + cm.role();
-        };
+        return cellStatus;
     }
 
     /**
-     * Vision-scoped overcrowding (D-40).
+     * D-40 vision-scoped overcrowding predicate.
      *
-     * <p>Returns {@code true} when the {@code cellPos}'s Moore-neighbourhood
-     * count of occupied cells (Particle + BondedPair only, matching
-     * {@link SimulationEngine#processOvercrowding}) is at-or-above
-     * {@code threshold}, restricted to neighbours the bot at {@code botPos}
-     * can observe within {@code radius}. Neighbours outside the bot's
-     * vision are UNKNOWN — this is the locked incomplete-information design
-     * (cells at the vision edge may appear NOT overcrowded to the bot even
-     * when the server counts them as overcrowded globally).
+     * <p>Counts Moore neighbours occupied by Particle / BondedPair (matching
+     * {@code SimulationEngine.processOvercrowding}), restricted to neighbours
+     * the bot at {@code botPos} can observe within {@code radius}. Neighbours
+     * outside the bot's vision are UNKNOWN — intentional incomplete-information
+     * surface per Phase 14 lock.
      *
-     * <p>Package-private and {@code static} so {@link VisionScopedOvercrowdingTest}
-     * can drive the predicate directly without a full Spring context.
+     * <p>Package-private + {@code static} for direct invocation by
+     * {@code VisionScopedOvercrowdingTest} (migration pending plan 15-11).
      */
     static boolean computeVisionScopedOvercrowded(WorldGrid worldGrid, Position cellPos,
-                                                    Position botPos, int radius, int threshold) {
+                                                   Position botPos, int radius, int threshold) {
         if (threshold <= 0 || threshold > 8) return false;
         int gridW = worldGrid.getWidth();
         int gridH = worldGrid.getHeight();
@@ -466,7 +551,7 @@ public class TickBroadcaster {
                 int ny = Math.floorMod(cellPos.y() + dy, gridH);
                 if (!isPositionVisible(nx, ny, botPos, radius, gridW, gridH)) continue;
                 Entity occ = worldGrid.getCell(nx, ny).occupant();
-                if (occ instanceof Particle || occ instanceof Entity.BondedPair) {
+                if (occ instanceof Particle || occ instanceof BondedPair) {
                     neighborCount++;
                 }
             }
@@ -474,43 +559,168 @@ public class TickBroadcaster {
         return neighborCount >= threshold;
     }
 
-    /**
-     * Toroidal visibility check — is (x, y) inside the bot's vision square
-     * (Chebyshev radius) centred on {@code botPos}?
-     */
     private static boolean isPositionVisible(int x, int y, Position botPos, int radius,
                                               int gridW, int gridH) {
-        // Minimum toroidal distance along each axis
         int dx = Math.min(Math.floorMod(x - botPos.x(), gridW), Math.floorMod(botPos.x() - x, gridW));
         int dy = Math.min(Math.floorMod(y - botPos.y(), gridH), Math.floorMod(botPos.y() - y, gridH));
         return Math.max(dx, dy) <= radius;
     }
 
-    /**
-     * Convert a Cell to a compact CellView for the perception message.
-     *
-     * <p><b>Back-compat 1-arg (Cell) overload</b>: used by pre-Plan-14-05
-     * {@code TickBroadcasterProjectionTest} static calls. Emits the legacy 4-arg
-     * CellView constructor (zero statuses). New code MUST use the 4-arg
-     * {@link #cellToView(int, int, Position, int)} per-bot overload so
-     * vision-scoped overcrowding and env status bits are populated correctly.
-     */
-    static CellView cellToView(Cell cell) {
-        int flags = cell.flags();
-        if (cell.isEmpty()) {
-            return new CellView(null, null, cell.nutrientLevel(), flags);
+    // ── f block — effects ─────────────────────────────────────────────
+
+    private List<ActiveEffect> buildEffectsForBot(BotRegistry.BotState bot, Entity occupant) {
+        String id = bot.entityId();
+        if (id == null) return List.of();
+        List<ActiveEffect> out = new ArrayList<>(4);
+
+        // Active buffs → SCHEMA §8.3 codes S/A/M/U.
+        if (buffRegistry != null) {
+            for (BuffRegistry.ActiveBuff b : buffRegistry.getBuffs(id)) {
+                char code = effectCodeFor(b.type());
+                out.add(new ActiveEffect(code, b.expiryTick(), Optional.empty()));
+            }
         }
-        Entity occupant = cell.occupant();
-        return switch (occupant) {
-            case Particle p -> new CellView(p.type().name(), p.id(), cell.nutrientLevel(), flags);
-            case Entity.Rock r -> new CellView("ROCK", r.id(), cell.nutrientLevel(), flags);
-            case Entity.Nutrient n -> new CellView("NUTRIENT", n.id(), cell.nutrientLevel(), flags);
-            case Entity.BondedPair bp -> new CellView(
-                    "BONDED_" + bp.primaryType() + "_" + bp.secondaryType(),
-                    bp.id(), cell.nutrientLevel(), flags);
-            case Entity.CompositeMember cm -> new CellView(
-                    "COMPOSITE_" + cm.type() + "_" + cm.role(),
-                    cm.id(), cell.nutrientLevel(), flags);
+
+        if (environmentEngine != null) {
+            // Infection → I:<expiry>. We don't know expiry directly; infection
+            // duration is tick-driven via tickBuffsAndInfections. The v-block
+            // M<magnitude> events carry per-tick damage; the f-block I carries
+            // expiry. EnvironmentEngine does not currently expose expiry tick
+            // for an infection; we emit expiry = 0 sentinel (schema allows
+            // any non-negative long). Plan 15-09+ can wire precise expiry.
+            if (environmentEngine.isInfected(id)) {
+                out.add(new ActiveEffect('I', /*expiry=*/ 0L, Optional.empty()));
+            }
+            // FLEEING → F:<expiry>:<XXYY> abs strike coord.
+            EnvironmentEngine.Fleeing fl = environmentEngine.getFleeing(id);
+            if (fl != null) {
+                out.add(new ActiveEffect('F', fl.expiryTick(),
+                        Optional.of(new int[] { fl.strikeX(), fl.strikeY() })));
+            }
+        }
+
+        return out;
+    }
+
+    private static char effectCodeFor(BuffRegistry.BuffType type) {
+        return switch (type) {
+            case SENSOR_PLUS_1 -> 'S';
+            case ATTACK_PLUS_1 -> 'A';
+            case MOVEMENT_PLUS_1 -> 'M';
+            case UPKEEP_MINUS_1 -> 'U';
         };
     }
+
+    // ── v block — events ───────────────────────────────────────────────
+
+    /**
+     * Per-bot event list. MVP scope: drains AlarmQueue for LOCOMOTOR. Other
+     * event sources (own damage/eat/attack/lightning) flow through the
+     * engine's event queue which is not yet wired into TickBroadcaster —
+     * those events are produced but not projected onto the wire in plan 15-08.
+     * Plans 15-09+ wire the remaining event sources; this slot is ready.
+     */
+    private List<Event> buildEventsForBot(BotRegistry.BotState bot, Entity occupant,
+                                           long tickId, AuthorityTier tier) {
+        List<Event> out = new ArrayList<>();
+
+        // LOCOMOTOR-only: drain composite member alarms → vN<relCoord>.
+        if (occupant instanceof CompositeMember cm && cm.role() == Role.LOCOMOTOR && alarmQueue != null) {
+            List<AlarmQueue.AlarmEntry> alarms = alarmQueue.drainAlarms(cm.compositeId());
+            int budget = PerceptionCodec.MAX_V_ENTRIES - out.size();
+            if (alarms.size() > budget) {
+                log.warn("Alarm drain truncated: composite={} got={} budget={}",
+                        cm.compositeId(), alarms.size(), budget);
+                alarms = alarms.subList(0, Math.max(budget, 0));
+            }
+            for (AlarmQueue.AlarmEntry e : alarms) {
+                Position rel = relativeTo(bot.position(), e.alarmingCellAbs());
+                Coord coord = coordFor(rel.x(), rel.y());
+                out.add(new Event('N', Optional.of(coord), OptionalInt.empty()));
+            }
+        }
+
+        return out;
+    }
+
+    /**
+     * Minimal relative-coord helper: toroidal-aware shortest dx/dy from bot to
+     * target. Only used for alarms right now; produced values are clamped to
+     * the codec's ±63 relative range during encode (see
+     * {@link PerceptionCodec}).
+     */
+    private Position relativeTo(Position from, Position to) {
+        int gridW = worldGrid.getWidth();
+        int gridH = worldGrid.getHeight();
+        int rawDx = Math.floorMod(to.x() - from.x(), gridW);
+        int rawDy = Math.floorMod(to.y() - from.y(), gridH);
+        int dx = rawDx <= gridW / 2 ? rawDx : rawDx - gridW;
+        int dy = rawDy <= gridH / 2 ? rawDy : rawDy - gridH;
+        return new Position(dx, dy);
+    }
+
+    // ── p block — pool ────────────────────────────────────────────────
+
+    private Optional<PoolSnapshot> buildPool(AuthorityTier tier, Entity occupant) {
+        if (tier != AuthorityTier.FULL) return Optional.empty();
+        if (!(occupant instanceof CompositeMember cm)) return Optional.empty();
+        if (cm.role() != Role.LOCOMOTOR) return Optional.empty();
+        if (compositeRegistry == null) return Optional.empty();
+        var state = compositeRegistry.getComposite(cm.compositeId()).orElse(null);
+        if (state == null) return Optional.empty();
+        return Optional.of(new PoolSnapshot(state.getSharedPoolEnergy(), state.getMaxPoolEnergy()));
+    }
+
+    // ── g block — roster (send-on-change) ─────────────────────────────
+
+    private List<RosterMember> buildRosterIfChanged(BotRegistry.BotState bot, AuthorityTier tier,
+                                                     Entity occupant, Position botPos) {
+        if (tier != AuthorityTier.FULL) return List.of();
+        if (!(occupant instanceof CompositeMember cm)) return List.of();
+        if (cm.role() != Role.LOCOMOTOR) return List.of();
+        if (compositeRegistry == null) return List.of();
+
+        var state = compositeRegistry.getComposite(cm.compositeId()).orElse(null);
+        if (state == null) return List.of();
+
+        // Collect (relCoord, roleDigit) for each member — excluding the LOCO
+        // itself to match g-block semantics (rest of the roster).
+        List<RosterMember> roster = new ArrayList<>();
+        int hash = 1;
+        int gridW = worldGrid.getWidth();
+        int gridH = worldGrid.getHeight();
+        for (String memberId : state.getMemberIds()) {
+            if (memberId.equals(cm.id())) continue;
+            Position mp = state.getPositionForMember(memberId);
+            if (mp == null) continue;
+            Cell memberCell = worldGrid.getCell(mp.x(), mp.y());
+            if (!(memberCell.occupant() instanceof CompositeMember mem)) continue;
+            Position rel = relativeTo(botPos, mp);
+            // Clamp to [-63, 63] before coord creation (Coord.Relative enforces).
+            int clampedDx = Math.max(-63, Math.min(63, rel.x()));
+            int clampedDy = Math.max(-63, Math.min(63, rel.y()));
+            Coord coord = coordFor(clampedDx, clampedDy);
+            char roleDigit = (char) ('0' + mem.role().ordinal());
+            roster.add(new RosterMember(coord, roleDigit));
+            // Hash independent of grid toroid specifics — just dx/dy/role.
+            hash = 31 * hash + clampedDx;
+            hash = 31 * hash + clampedDy;
+            hash = 31 * hash + roleDigit;
+        }
+
+        Integer prior = lastRosterHashBySession.get(bot.sessionId());
+        if (prior != null && prior == hash) {
+            return List.of();                  // unchanged — suppress g block
+        }
+        lastRosterHashBySession.put(bot.sessionId(), hash);
+        return roster;
+    }
+
+    // ── Intermediate cell data ────────────────────────────────────────
+
+    /**
+     * Intermediate record used during RLE assembly. Holds per-cell data in
+     * bot-relative (dx,dy) form plus the resolved kind char / states.
+     */
+    private record CellData(int dx, int dy, Character kind, int entityState, int envState, Entity occupant) {}
 }

@@ -36,8 +36,11 @@ dependencies {
 // against the wire-bound Messages.* records deleted in the partial strip.
 // Plan 15-07 adds VisionScopedOvercrowdingTest after its package move to
 // com.paralife.websocket broke access to package-private SimulationEngine
-// constants (OVERCROWDED_THRESHOLD_DEFAULT). Plan 15-11 migrates these
-// tests and removes the exclusion.
+// constants (OVERCROWDED_THRESHOLD_DEFAULT). Plan 15-08 adds
+// TickBroadcasterProjectionTest + CompositePerceptionTest — those exercised
+// the old Jackson/Messages projection API (buildPerception/cellToView/
+// stitchSensorCoverage) which the codec rewrite removed. Plan 15-11 migrates
+// these tests and removes the exclusion.
 sourceSets {
     test {
         java {
@@ -47,6 +50,8 @@ sourceSets {
             exclude("com/paralife/engine/CompositeMovementTest.java")
             exclude("com/paralife/websocket/WebSocketIntegrationTest.java")
             exclude("com/paralife/websocket/VisionScopedOvercrowdingTest.java")
+            exclude("com/paralife/websocket/TickBroadcasterProjectionTest.java")
+            exclude("com/paralife/websocket/CompositePerceptionTest.java")
         }
     }
 }
