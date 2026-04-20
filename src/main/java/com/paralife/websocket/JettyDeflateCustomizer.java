@@ -6,16 +6,9 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Enumeration;
-import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -95,16 +88,20 @@ public class JettyDeflateCustomizer {
      * Servlet filter that enforces {@code permessage-deflate; server_no_context_takeover}
      * on WebSocket upgrade requests.
      *
-     * <p>Non-upgrade requests pass through untouched. For upgrade requests:
+     * <p>Non-upgrade requests pass through untouched. For upgrade requests the filter
+     * responds {@code HTTP 400} and short-circuits the chain if the
+     * {@code Sec-WebSocket-Extensions} header does not offer a {@code permessage-deflate}
+     * variant that includes the {@code server_no_context_takeover} parameter.
+     * Passing requests reach Jetty's {@code WebSocketUpgradeFilter} which negotiates
+     * the extension and echoes both tokens on the response (D-31, D-33, threat T-15-02).
      *
-     * <ul>
-     *   <li>If the {@code Sec-WebSocket-Extensions} header is missing or lacks
-     *       {@code permessage-deflate}, the filter responds {@code HTTP 400} and
-     *       the chain is not invoked (D-33 fail-fast).</li>
-     *   <li>Otherwise the request is wrapped so the extension header always ends with
-     *       {@code server_no_context_takeover}, forcing Jetty's negotiator to echo
-     *       that parameter in the response (D-31).</li>
-     * </ul>
+     * <p>Request mutation is intentionally avoided: Jetty 12's {@code WebSocketUpgradeFilter}
+     * unwraps the servlet request back to the underlying Jetty {@code Request} before
+     * reading headers, so an {@link jakarta.servlet.http.HttpServletRequestWrapper} would
+     * not be seen during extension negotiation. Requiring the client to advertise the
+     * parameter in its offer is the equivalent policy — Jetty always echoes the
+     * parameter that the client requested — without reaching into Jetty's internal
+     * negotiation state.
      */
     static final class DeflateEnforcementFilter implements Filter {
 
@@ -123,19 +120,16 @@ public class JettyDeflateCustomizer {
             }
 
             String extensions = httpReq.getHeader(EXTENSIONS_HEADER);
-            if (extensions == null || !containsDeflate(extensions)) {
-                log.warn("Rejecting WebSocket upgrade from {} at {} — no {}",
-                        httpReq.getRemoteAddr(), httpReq.getRequestURI(), EXTENSION);
+            if (extensions == null || !offersDeflateWithNoContextTakeover(extensions)) {
+                log.warn("Rejecting WebSocket upgrade from {} at {} — missing {} or {}",
+                        httpReq.getRemoteAddr(), httpReq.getRequestURI(),
+                        EXTENSION, NO_CONTEXT);
                 httpResp.sendError(HttpServletResponse.SC_BAD_REQUEST,
-                        EXTENSION + " extension required");
+                        EXTENSION + "; " + NO_CONTEXT + " required");
                 return;
             }
 
-            String forced = ensureNoContextTakeover(extensions);
-            HttpServletRequest wrapped = forced.equals(extensions)
-                    ? httpReq
-                    : new HeaderOverrideRequest(httpReq, EXTENSIONS_HEADER, forced);
-            chain.doFilter(wrapped, response);
+            chain.doFilter(request, response);
         }
 
         private static boolean isWebSocketUpgrade(HttpServletRequest req) {
@@ -143,7 +137,12 @@ public class JettyDeflateCustomizer {
             return upgrade != null && WEBSOCKET.equalsIgnoreCase(upgrade.trim());
         }
 
-        static boolean containsDeflate(String header) {
+        /**
+         * True iff {@code header} contains a {@code permessage-deflate} offer whose
+         * parameter list includes {@code server_no_context_takeover}. Other offers
+         * are ignored — only one matching offer is required.
+         */
+        static boolean offersDeflateWithNoContextTakeover(String header) {
             if (header == null) {
                 return false;
             }
@@ -151,95 +150,20 @@ public class JettyDeflateCustomizer {
                 String trimmed = offer.trim();
                 int semi = trimmed.indexOf(';');
                 String name = (semi < 0 ? trimmed : trimmed.substring(0, semi)).trim();
-                if (name.equalsIgnoreCase(EXTENSION)) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        /**
-         * Returns the header value with {@code server_no_context_takeover} present on
-         * the first {@code permessage-deflate} offer. Idempotent.
-         */
-        static String ensureNoContextTakeover(String header) {
-            String[] offers = header.split(",");
-            boolean mutated = false;
-            for (int i = 0; i < offers.length; i++) {
-                String trimmed = offers[i].trim();
-                int semi = trimmed.indexOf(';');
-                String name = (semi < 0 ? trimmed : trimmed.substring(0, semi)).trim();
                 if (!name.equalsIgnoreCase(EXTENSION)) {
                     continue;
                 }
-                if (trimmed.toLowerCase(Locale.ROOT).contains(NO_CONTEXT.toLowerCase(Locale.ROOT))) {
-                    return header;
+                if (semi < 0) {
+                    continue;
                 }
-                offers[i] = trimmed + "; " + NO_CONTEXT;
-                mutated = true;
-                break;
-            }
-            if (!mutated) {
-                return header;
-            }
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < offers.length; i++) {
-                if (i > 0) {
-                    sb.append(", ");
-                }
-                sb.append(offers[i].trim());
-            }
-            return sb.toString();
-        }
-    }
-
-    /**
-     * Minimal {@link HttpServletRequestWrapper} that overrides a single header's value.
-     * All other header accessors delegate to the underlying request.
-     */
-    static final class HeaderOverrideRequest extends HttpServletRequestWrapper {
-
-        private final String overrideName;
-        private final String overrideValue;
-
-        HeaderOverrideRequest(HttpServletRequest request, String name, String value) {
-            super(request);
-            this.overrideName = name;
-            this.overrideValue = value;
-        }
-
-        @Override
-        public String getHeader(String name) {
-            if (overrideName.equalsIgnoreCase(name)) {
-                return overrideValue;
-            }
-            return super.getHeader(name);
-        }
-
-        @Override
-        public Enumeration<String> getHeaders(String name) {
-            if (overrideName.equalsIgnoreCase(name)) {
-                return Collections.enumeration(List.of(overrideValue));
-            }
-            return super.getHeaders(name);
-        }
-
-        @Override
-        public Enumeration<String> getHeaderNames() {
-            Map<String, Boolean> names = new LinkedHashMap<>();
-            Enumeration<String> original = super.getHeaderNames();
-            boolean sawOverride = false;
-            while (original != null && original.hasMoreElements()) {
-                String next = original.nextElement();
-                names.put(next, Boolean.TRUE);
-                if (overrideName.equalsIgnoreCase(next)) {
-                    sawOverride = true;
+                String params = trimmed.substring(semi + 1).toLowerCase(Locale.ROOT);
+                for (String param : params.split(";")) {
+                    if (param.trim().equals(NO_CONTEXT)) {
+                        return true;
+                    }
                 }
             }
-            if (!sawOverride) {
-                names.put(overrideName, Boolean.TRUE);
-            }
-            return Collections.enumeration(new ArrayList<>(names.keySet()));
+            return false;
         }
     }
 }
