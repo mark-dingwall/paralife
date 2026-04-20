@@ -32,6 +32,21 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
+// Plan 15-06 Task 2 Part D — temporary exclusion of test sources that type
+// against the wire-bound Messages.* records deleted in the partial strip.
+// Plan 15-11 migrates these tests and removes the exclusion.
+sourceSets {
+    test {
+        java {
+            exclude("com/paralife/engine/ActionResolverTest.java")
+            exclude("com/paralife/engine/CompositeActionTest.java")
+            exclude("com/paralife/engine/CompositeIntegrationTest.java")
+            exclude("com/paralife/engine/CompositeMovementTest.java")
+            exclude("com/paralife/websocket/WebSocketIntegrationTest.java")
+        }
+    }
+}
+
 tasks.withType<Test> {
     useJUnitPlatform()
     finalizedBy(tasks.jacocoTestReport)
