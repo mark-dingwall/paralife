@@ -67,4 +67,32 @@ class EnvironmentEngineTest {
         assertThat(environmentEngine.getCellStatus(new Position(0, 0))).isEqualTo((byte) 0);
         assertThat(environmentEngine.getEntityStatus("unknown-entity")).isEqualTo((byte) 0);
     }
+
+    @Test
+    void transferFleeingMovesRecordAndKeepsLongerExpiry() {
+        environmentEngine.grantFleeingForTest("from-1", 50L, 7, 9);
+        environmentEngine.transferFleeing("from-1", "to-1");
+        assertThat(environmentEngine.getFleeing("from-1")).isNull();
+        EnvironmentEngine.Fleeing moved = environmentEngine.getFleeing("to-1");
+        assertThat(moved).isNotNull();
+        assertThat(moved.expiryTick()).isEqualTo(50L);
+        assertThat(moved.strikeX()).isEqualTo(7);
+        assertThat(moved.strikeY()).isEqualTo(9);
+
+        environmentEngine.grantFleeingForTest("from-2", 40L, 1, 2);
+        environmentEngine.transferFleeing("from-2", "to-1");
+        EnvironmentEngine.Fleeing merged = environmentEngine.getFleeing("to-1");
+        assertThat(merged.expiryTick()).isEqualTo(50L);
+        assertThat(merged.strikeX()).isEqualTo(7);
+
+        environmentEngine.grantFleeingForTest("from-3", 120L, 3, 4);
+        environmentEngine.transferFleeing("from-3", "to-1");
+        EnvironmentEngine.Fleeing upgraded = environmentEngine.getFleeing("to-1");
+        assertThat(upgraded.expiryTick()).isEqualTo(120L);
+        assertThat(upgraded.strikeX()).isEqualTo(3);
+        assertThat(upgraded.strikeY()).isEqualTo(4);
+
+        environmentEngine.transferFleeing("never-fled", "to-1");
+        assertThat(environmentEngine.getFleeing("to-1").expiryTick()).isEqualTo(120L);
+    }
 }

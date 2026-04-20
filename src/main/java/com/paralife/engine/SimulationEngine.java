@@ -532,6 +532,10 @@ public class SimulationEngine {
                 hooks.transferMutagenState(bond.prey.id(), bondedPair.id());
                 buffRegistry.transferBuffs(bond.predator.id(), bondedPair.id());
                 buffRegistry.transferBuffs(bond.prey.id(), bondedPair.id());
+                if (environmentEngine != null) {
+                    environmentEngine.transferFleeing(bond.predator.id(), bondedPair.id());
+                    environmentEngine.transferFleeing(bond.prey.id(), bondedPair.id());
+                }
                 // Defense-in-depth: member-keyed entries cleaned.
                 hooks.clearInfectionOnDeath(bond.predator.id());
                 hooks.clearInfectionOnDeath(bond.prey.id());
@@ -978,6 +982,9 @@ public class SimulationEngine {
             for (String survivingMemberId : composite.getMemberIds()) {
                 hooks.transferMutagenState(survivingMemberId, bondedPair.id());
                 buffRegistry.transferBuffs(survivingMemberId, bondedPair.id());
+                if (environmentEngine != null) {
+                    environmentEngine.transferFleeing(survivingMemberId, bondedPair.id());
+                }
                 hooks.clearInfectionOnDeath(survivingMemberId);
             }
         }

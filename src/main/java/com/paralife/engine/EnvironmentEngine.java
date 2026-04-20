@@ -1503,6 +1503,23 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         fleeing.entrySet().removeIf(e -> e.getValue().expiryTick() <= currentTick);
     }
 
+    /**
+     * Transfer any active FLEEING from {@code fromId} to {@code toId}. Mirrors
+     * {@link BuffRegistry#transferBuffs} + {@code hooks.transferMutagenState}
+     * at identity-transition sites (BondFormation, composite → BondedPair
+     * revert). Preserves the strike coord + longer expiry wins if {@code toId}
+     * already has FLEEING.
+     *
+     * <p>No-op if {@code fromId} has no active FLEEING or {@code fromId == toId}.
+     */
+    public void transferFleeing(String fromId, String toId) {
+        if (fromId == null || toId == null || fromId.equals(toId)) return;
+        Fleeing src = fleeing.remove(fromId);
+        if (src == null) return;
+        fleeing.merge(toId, src,
+                (existing, incoming) -> incoming.expiryTick() > existing.expiryTick() ? incoming : existing);
+    }
+
     /** Plan 15-08 Task 2 — test helper: directly grant FLEEING (used by ZeroTrust test). */
     void grantFleeingForTest(String entityId, long expiryTick, int strikeX, int strikeY) {
         if (entityId == null) return;
