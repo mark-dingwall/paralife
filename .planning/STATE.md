@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Combination & Emergence
 current_phase: 15
 current_phase_name: Protocol & Transport Overhaul
-current_plan: 1
+current_plan: 6
 status: executing
-stopped_at: Phase 15 context gathered; formal schema review flagged as pre-plan gate (D-50)
-last_updated: "2026-04-20T01:05:11.858Z"
+stopped_at: Phase 15 wave 2 complete (5/11 plans) — PerceptionCodec encode/decode green, 598+13 error tests, 16 deferred
+last_updated: "2026-04-20T02:50:00.000Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 29
-  completed_plans: 18
-  percent: 62
+  completed_plans: 22
+  percent: 76
 ---
 
 # Project State
