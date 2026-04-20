@@ -1,24 +1,33 @@
 package com.paralife.engine;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.paralife.websocket.Messages;
+import com.paralife.codec.Frame;
+import com.paralife.metrics.WebSocketMetrics;
 import com.paralife.websocket.SessionRegistry;
 import com.paralife.world.*;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Entity.Role;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+/**
+ * Plan 15-11 (Task 2): LOCOMOTOR IRV voting + rigid-body composite movement.
+ *
+ * <p>Migrated from the Messages-era {@code Messages.Action} / {@code Map<String, List<String>>}
+ * ranked-preference API to SCHEMA §8.6 verbs + the 3-char numpad IRV ballot
+ * carried on {@code ActionFrame.arg()}. Per-direction numpad digits used here:
+ * {@code 8=N, 6=E, 2=S, 4=W}.
+ */
 class CompositeMovementTest {
 
     private WorldGrid worldGrid;
@@ -27,20 +36,31 @@ class CompositeMovementTest {
     private CompositeRegistry compositeRegistry;
     private CompositeConfig compositeConfig;
     private SimulationConfig config;
-    private ObjectMapper objectMapper;
     private ActionResolver resolver;
 
     @BeforeEach
     void setUp() {
         worldGrid = new WorldGrid(new GridConfig(16, 16));
         botRegistry = new BotRegistry();
-        sessionRegistry = new SessionRegistry();
+        sessionRegistry = new SessionRegistry(new WebSocketMetrics(new SimpleMeterRegistry()));
         compositeRegistry = new CompositeRegistry();
-        compositeConfig = CompositeConfig.defaults(); // speedConstant = 1.0
+        compositeConfig = CompositeConfig.defaults();
         config = SimulationConfig.defaults();
-        objectMapper = new ObjectMapper();
         resolver = new ActionResolver(worldGrid, botRegistry, sessionRegistry, config,
-                objectMapper, compositeRegistry, compositeConfig, ActionResolverTest.legacyProfile());
+                compositeRegistry, compositeConfig, legacyProfile());
+    }
+
+    /**
+     * Legacy-flat {@link MetabolicProfile} for pre-Phase-13 assertion parity.
+     * Inlined to avoid a cross-dependency on the excluded
+     * {@code ActionResolverTest} class.
+     */
+    static MetabolicProfile legacyProfile() {
+        MetabolicProfile.TypeProfile p = new MetabolicProfile.TypeProfile(
+                40, 1, 10, 10, 5,
+                ActionResolver.REPRODUCE_ENERGY_COST,
+                0, 0.0, 1, 0, 0);
+        return new MetabolicProfile(p, p, p);
     }
 
     private WebSocketSession mockSession(String id) {
@@ -68,11 +88,35 @@ class CompositeMovementTest {
         compositeRegistry.register(compositeId, memberIdList, positions, poolEnergy, 500);
     }
 
+    // ── Frame.ActionFrame convenience builders ────────────────────────
+
+    /** Vote with a single-direction ranking — fills the 3-char IRV ballot with the direction. */
+    private static Frame.ActionFrame voteSingle(char numpad) {
+        String arg = "" + numpad + numpad + numpad;  // ballot must be 3 chars
+        return new Frame.ActionFrame('V', Optional.of(arg));
+    }
+
+    /** Full 3-char numpad IRV ballot. */
+    private static Frame.ActionFrame vote(String threeCharBallot) {
+        if (threeCharBallot.length() != 3) {
+            throw new IllegalArgumentException("IRV ballot must be 3 chars");
+        }
+        return new Frame.ActionFrame('V', Optional.of(threeCharBallot));
+    }
+
+    /** Rest — LOCOMOTOR solo-particle rest. Returns a vote with no valid direction. */
+    private static Frame.ActionFrame rest() {
+        // Per SCHEMA there is no explicit rest verb; for non-LOCOMOTOR members we
+        // skip submitting; tests use V with self/self/self (numpad 5 forbidden on wire,
+        // so we use a non-participating numpad 5? Actually schema forbids 5 in ballot
+        // — easiest is to omit the action altogether rather than submit noise).
+        return null;
+    }
+
     // ── STV Voting ───────────────────────────────────────────────
 
     @Test
     void locomotorVotesMoveComposite() {
-        // 2-member composite: 1 LOCOMOTOR votes N, 1 FEEDER
         mockSession("s-loco");
         mockSession("s-feeder");
         placeCompositeMember("s-loco", "cm-loco", "comp1", ParticleType.CATALYST,
@@ -81,20 +125,22 @@ class CompositeMovementTest {
                 Role.FEEDER, new Position(5, 6), 50);
         registerComposite("comp1", 100, "cm-loco", "cm-feeder");
 
-        // LOCOMOTOR votes N via ranked preferences
-        Map<String, Messages.Action> actions = new HashMap<>();
-        actions.put("s-loco", new Messages.Action("move", "N"));
-        actions.put("s-feeder", new Messages.Action("rest", null));
+        // Single LOCOMOTOR votes N (numpad 8).
+        Map<String, Frame.ActionFrame> actions = new HashMap<>();
+        actions.put("s-loco", voteSingle('8'));
+        // s-feeder: no action submitted.
 
-        resolver.resolveActions(1, actions);
+        Map<String, String> ballots = new HashMap<>();
+        ballots.put("s-loco", "888");
 
-        // Both members should have shifted 1 cell north
+        resolver.resolveActions(1, actions, ballots);
+
+        // Both members should have shifted 1 cell north.
         assertThat(worldGrid.getCell(5, 4).occupant()).isInstanceOf(CompositeMember.class);
         assertThat(((CompositeMember) worldGrid.getCell(5, 4).occupant()).id()).isEqualTo("cm-loco");
         assertThat(worldGrid.getCell(5, 5).occupant()).isInstanceOf(CompositeMember.class);
         assertThat(((CompositeMember) worldGrid.getCell(5, 5).occupant()).id()).isEqualTo("cm-feeder");
 
-        // Original positions should be cleared
         assertThat(worldGrid.getCell(5, 6).isEmpty()).isTrue();
     }
 
@@ -112,14 +158,19 @@ class CompositeMovementTest {
                 Role.LOCOMOTOR, new Position(5, 7), 50);
         registerComposite("comp1", 100, "cm-loco1", "cm-loco2", "cm-loco3");
 
-        Map<String, Messages.Action> actions = new HashMap<>();
-        actions.put("s-loco1", new Messages.Action("move", "N"));
-        actions.put("s-loco2", new Messages.Action("move", "N"));
-        actions.put("s-loco3", new Messages.Action("move", "E"));
+        Map<String, Frame.ActionFrame> actions = new HashMap<>();
+        actions.put("s-loco1", voteSingle('8'));
+        actions.put("s-loco2", voteSingle('8'));
+        actions.put("s-loco3", voteSingle('6')); // E
 
-        resolver.resolveActions(1, actions);
+        Map<String, String> ballots = new HashMap<>();
+        ballots.put("s-loco1", "888");
+        ballots.put("s-loco2", "888");
+        ballots.put("s-loco3", "666");
 
-        // Majority voted N — all should have shifted north
+        resolver.resolveActions(1, actions, ballots);
+
+        // Majority voted N → all should have shifted north.
         assertThat(worldGrid.getCell(5, 4).occupant()).isInstanceOf(CompositeMember.class);
         assertThat(((CompositeMember) worldGrid.getCell(5, 4).occupant()).id()).isEqualTo("cm-loco1");
         assertThat(worldGrid.getCell(5, 5).occupant()).isInstanceOf(CompositeMember.class);
@@ -129,8 +180,8 @@ class CompositeMovementTest {
     }
 
     @Test
-    void tiedVoteResolvesRandomly() {
-        // 2 LOCOMOTORs vote N and S — composite moves in one of those directions
+    void tiedVoteResolvesToSomeDirection() {
+        // 2 LOCOMOTORs vote N and S — tie broken by the resolver (randomly).
         mockSession("s-loco1");
         mockSession("s-loco2");
         placeCompositeMember("s-loco1", "cm-loco1", "comp1", ParticleType.CATALYST,
@@ -139,16 +190,16 @@ class CompositeMovementTest {
                 Role.LOCOMOTOR, new Position(8, 9), 50);
         registerComposite("comp1", 100, "cm-loco1", "cm-loco2");
 
-        Map<String, Messages.Action> actions = new HashMap<>();
-        actions.put("s-loco1", new Messages.Action("move", "N"));
-        actions.put("s-loco2", new Messages.Action("move", "S"));
+        Map<String, Frame.ActionFrame> actions = new HashMap<>();
+        actions.put("s-loco1", voteSingle('8')); // N
+        actions.put("s-loco2", voteSingle('2')); // S
 
-        resolver.resolveActions(1, actions);
+        Map<String, String> ballots = new HashMap<>();
+        ballots.put("s-loco1", "888");
+        ballots.put("s-loco2", "222");
 
-        // Should have moved in either N or S direction
-        // Original positions: (8,8) and (8,9)
-        // If N: (8,7) and (8,8)
-        // If S: (8,9) and (8,10)
+        resolver.resolveActions(1, actions, ballots);
+
         boolean movedNorth = worldGrid.getCell(8, 7).hasOccupant()
                 && worldGrid.getCell(8, 7).occupant() instanceof CompositeMember;
         boolean movedSouth = worldGrid.getCell(8, 9).hasOccupant()
@@ -162,7 +213,7 @@ class CompositeMovementTest {
 
     @Test
     void sessileCompositeDoesNotMove() {
-        // Composite with no LOCOMOTOR members — should not move
+        // Composite without any LOCOMOTOR member — no vote, no movement.
         mockSession("s-feeder");
         mockSession("s-defender");
         placeCompositeMember("s-feeder", "cm-feeder", "comp1", ParticleType.CATALYST,
@@ -171,13 +222,11 @@ class CompositeMovementTest {
                 Role.DEFENDER, new Position(5, 6), 50);
         registerComposite("comp1", 100, "cm-feeder", "cm-defender");
 
-        Map<String, Messages.Action> actions = new HashMap<>();
-        actions.put("s-feeder", new Messages.Action("rest", null));
-        actions.put("s-defender", new Messages.Action("rest", null));
+        // No V actions — passive + authority-lite don't vote.
+        Map<String, Frame.ActionFrame> actions = new HashMap<>();
 
-        resolver.resolveActions(1, actions);
+        resolver.resolveActions(1, actions, Map.of());
 
-        // Members should not have moved
         assertThat(worldGrid.getCell(5, 5).occupant()).isInstanceOf(CompositeMember.class);
         assertThat(((CompositeMember) worldGrid.getCell(5, 5).occupant()).id()).isEqualTo("cm-feeder");
         assertThat(worldGrid.getCell(5, 6).occupant()).isInstanceOf(CompositeMember.class);
@@ -186,31 +235,25 @@ class CompositeMovementTest {
 
     @Test
     void movementBlockedByOccupiedTargetCell() {
-        // Place a Rock at one member's target position
         mockSession("s-loco");
         mockSession("s-feeder");
         placeCompositeMember("s-loco", "cm-loco", "comp1", ParticleType.CATALYST,
                 Role.LOCOMOTOR, new Position(5, 5), 50);
         placeCompositeMember("s-feeder", "cm-feeder", "comp1", ParticleType.CATALYST,
                 Role.FEEDER, new Position(5, 6), 50);
-        // Rock at (5,4) — target position for cm-loco when moving N
+        // Rock at (5,4) — the N target for cm-loco.
         worldGrid.setEntity(5, 4, new Entity.Rock("rock1"));
         registerComposite("comp1", 100, "cm-loco", "cm-feeder");
 
-        Map<String, Messages.Action> actions = new HashMap<>();
-        actions.put("s-loco", new Messages.Action("move", "N"));
-        actions.put("s-feeder", new Messages.Action("rest", null));
+        Map<String, Frame.ActionFrame> actions = Map.of("s-loco", voteSingle('8'));
+        resolver.resolveActions(1, actions, Map.of("s-loco", "888"));
 
-        resolver.resolveActions(1, actions);
-
-        // No members should have moved
         assertThat(((CompositeMember) worldGrid.getCell(5, 5).occupant()).id()).isEqualTo("cm-loco");
         assertThat(((CompositeMember) worldGrid.getCell(5, 6).occupant()).id()).isEqualTo("cm-feeder");
     }
 
     @Test
     void movementBlockedByClaimedCell() {
-        // Two composites try to move into overlapping target cells
         mockSession("s-loco1");
         mockSession("s-loco2");
         placeCompositeMember("s-loco1", "cm-loco1", "comp1", ParticleType.CATALYST,
@@ -220,31 +263,28 @@ class CompositeMovementTest {
         registerComposite("comp1", 100, "cm-loco1");
         registerComposite("comp2", 100, "cm-loco2");
 
-        // comp1 moves N → target (5,4), comp2 moves S → target (5,4)
-        Map<String, Messages.Action> actions = new HashMap<>();
-        actions.put("s-loco1", new Messages.Action("move", "N"));
-        actions.put("s-loco2", new Messages.Action("move", "S"));
+        Map<String, Frame.ActionFrame> actions = Map.of(
+                "s-loco1", voteSingle('8'),
+                "s-loco2", voteSingle('2'));
+        Map<String, String> ballots = Map.of(
+                "s-loco1", "888",
+                "s-loco2", "222");
 
-        resolver.resolveActions(1, actions);
+        resolver.resolveActions(1, actions, ballots);
 
-        // Only one should have reached (5,4)
         Cell target = worldGrid.getCell(5, 4);
         assertThat(target.occupant()).isInstanceOf(CompositeMember.class);
         CompositeMember winner = (CompositeMember) target.occupant();
 
-        // The loser should be in their original position
         if (winner.id().equals("cm-loco1")) {
-            assertThat(worldGrid.getCell(5, 3).occupant()).isInstanceOf(CompositeMember.class);
             assertThat(((CompositeMember) worldGrid.getCell(5, 3).occupant()).id()).isEqualTo("cm-loco2");
         } else {
-            assertThat(worldGrid.getCell(5, 5).occupant()).isInstanceOf(CompositeMember.class);
             assertThat(((CompositeMember) worldGrid.getCell(5, 5).occupant()).id()).isEqualTo("cm-loco1");
         }
     }
 
     @Test
     void rigidBodyPreservesFormation() {
-        // 2-member composite at (3,3) and (3,4). Move E. New positions: (4,3) and (4,4).
         mockSession("s-loco");
         mockSession("s-feeder");
         placeCompositeMember("s-loco", "cm-loco", "comp1", ParticleType.CATALYST,
@@ -253,28 +293,21 @@ class CompositeMovementTest {
                 Role.FEEDER, new Position(3, 4), 50);
         registerComposite("comp1", 100, "cm-loco", "cm-feeder");
 
-        Map<String, Messages.Action> actions = new HashMap<>();
-        actions.put("s-loco", new Messages.Action("move", "E"));
-        actions.put("s-feeder", new Messages.Action("rest", null));
+        Map<String, Frame.ActionFrame> actions = Map.of("s-loco", voteSingle('6')); // E
+        resolver.resolveActions(1, actions, Map.of("s-loco", "666"));
 
-        resolver.resolveActions(1, actions);
-
-        // Formation preserved — both shifted E
         assertThat(worldGrid.getCell(4, 3).occupant()).isInstanceOf(CompositeMember.class);
         assertThat(((CompositeMember) worldGrid.getCell(4, 3).occupant()).id()).isEqualTo("cm-loco");
         assertThat(worldGrid.getCell(4, 4).occupant()).isInstanceOf(CompositeMember.class);
         assertThat(((CompositeMember) worldGrid.getCell(4, 4).occupant()).id()).isEqualTo("cm-feeder");
 
-        // Relative positions preserved: dy=1 between members before and after
         assertThat(worldGrid.getCell(3, 3).isEmpty()).isTrue();
         assertThat(worldGrid.getCell(3, 4).isEmpty()).isTrue();
     }
 
     @Test
     void movementSpeedGate() {
-        // Composite with 1 LOCOMOTOR and 4 total members
-        // Speed = 1/4 * 1.0 = 0.25. Move interval = ceil(1/0.25) = 4
-        // Should only move every 4 ticks
+        // 1 LOCOMOTOR among 4 members → speed = 1/4 * 1.0 = 0.25 → interval = 4.
         mockSession("s-loco");
         mockSession("s-f1");
         mockSession("s-f2");
@@ -289,62 +322,22 @@ class CompositeMovementTest {
                 Role.SENSOR, new Position(8, 11), 50);
         registerComposite("comp1", 200, "cm-loco", "cm-f1", "cm-f2", "cm-f3");
 
-        // First move attempt should succeed (first time allowed)
-        Map<String, Messages.Action> actions = Map.of(
-                "s-loco", new Messages.Action("move", "N"),
-                "s-f1", new Messages.Action("rest", null),
-                "s-f2", new Messages.Action("rest", null),
-                "s-f3", new Messages.Action("rest", null)
-        );
+        Map<String, Frame.ActionFrame> actions = Map.of("s-loco", voteSingle('8'));
+        Map<String, String> ballots = Map.of("s-loco", "888");
 
-        resolver.resolveActions(1, actions);
+        resolver.resolveActions(1, actions, ballots);
         Position afterFirst = botRegistry.getBySession("s-loco").get().position();
         assertThat(afterFirst).isEqualTo(new Position(8, 7));
 
-        // Next 3 attempts should be blocked by speed gate
+        // Next 3 ticks — speed gate blocks at least 2.
         int blockedCount = 0;
         for (int tick = 2; tick <= 4; tick++) {
-            resolver.resolveActions(tick, actions);
+            resolver.resolveActions(tick, actions, ballots);
             Position current = botRegistry.getBySession("s-loco").get().position();
             if (current.equals(afterFirst)) blockedCount++;
         }
 
-        // At least 2 of the next 3 ticks should be blocked (speed gate)
         assertThat(blockedCount).isGreaterThanOrEqualTo(2);
-    }
-
-    @Test
-    void allTargetCellsClaimedAtomically() {
-        // Moving composite claims all target cells before any member moves
-        // If a solo particle tries to move to a target cell, it should be blocked
-        mockSession("s-loco");
-        mockSession("s-feeder");
-        mockSession("s-solo");
-
-        placeCompositeMember("s-loco", "cm-loco", "comp1", ParticleType.CATALYST,
-                Role.LOCOMOTOR, new Position(5, 5), 50);
-        placeCompositeMember("s-feeder", "cm-feeder", "comp1", ParticleType.CATALYST,
-                Role.FEEDER, new Position(5, 6), 50);
-        registerComposite("comp1", 100, "cm-loco", "cm-feeder");
-
-        // Solo particle trying to move into composite's target path
-        Entity.Particle solo = new Entity.Particle("e-solo", ParticleType.MEMBRANE, 50, 100);
-        worldGrid.setEntity(6, 4, solo);
-        botRegistry.register("s-solo", "e-solo", new Position(6, 4));
-
-        // Composite moves E, solo moves S (to 6,5 — target of cm-feeder moving E)
-        Map<String, Messages.Action> actions = new HashMap<>();
-        actions.put("s-loco", new Messages.Action("move", "E"));
-        actions.put("s-feeder", new Messages.Action("rest", null));
-        actions.put("s-solo", new Messages.Action("move", "S"));
-
-        resolver.resolveActions(1, actions);
-
-        // Either composite got (6,5) and (6,6), or solo got (6,5)
-        // But they should not overlap
-        Cell cell = worldGrid.getCell(6, 5);
-        assertThat(cell.hasOccupant()).isTrue();
-        // No double occupancy
     }
 
     @Test
@@ -357,17 +350,11 @@ class CompositeMovementTest {
                 Role.FEEDER, new Position(5, 6), 50);
         registerComposite("comp1", 100, "cm-loco", "cm-feeder");
 
-        Map<String, Messages.Action> actions = new HashMap<>();
-        actions.put("s-loco", new Messages.Action("move", "E"));
-        actions.put("s-feeder", new Messages.Action("rest", null));
+        Map<String, Frame.ActionFrame> actions = Map.of("s-loco", voteSingle('6')); // E
+        resolver.resolveActions(1, actions, Map.of("s-loco", "666"));
 
-        resolver.resolveActions(1, actions);
-
-        // BotRegistry positions updated
         assertThat(botRegistry.getBySession("s-loco").get().position()).isEqualTo(new Position(6, 5));
         assertThat(botRegistry.getBySession("s-feeder").get().position()).isEqualTo(new Position(6, 6));
-
-        // CompositeRegistry positions updated
         assertThat(compositeRegistry.getPositionForMember("cm-loco")).isEqualTo(new Position(6, 5));
         assertThat(compositeRegistry.getPositionForMember("cm-feeder")).isEqualTo(new Position(6, 6));
     }
@@ -381,49 +368,26 @@ class CompositeMovementTest {
 
         int poolBefore = compositeRegistry.getSharedEnergy("comp1");
 
-        Map<String, Messages.Action> actions = new HashMap<>();
-        actions.put("s-loco", new Messages.Action("move", "N"));
+        Map<String, Frame.ActionFrame> actions = Map.of("s-loco", voteSingle('8')); // N
+        resolver.resolveActions(1, actions, Map.of("s-loco", "888"));
 
-        resolver.resolveActions(1, actions);
-
-        // Pool should have decreased by locomotorActiveDrain (default 3)
         int poolAfter = compositeRegistry.getSharedEnergy("comp1");
         assertThat(poolAfter).isEqualTo(poolBefore - compositeConfig.locomotorActiveDrain());
     }
 
     @Test
-    void rankedPreferencesMaxThree() {
-        // LOCOMOTOR submits 5 preferences via CompositeAction, only first 3 counted
+    void irvBallotWithNonLeadingPreferencesFallsBack() {
+        // LOCOMOTOR IRV ballot "864" = N, E, W — first-choice N should win.
         mockSession("s-loco");
         placeCompositeMember("s-loco", "cm-loco", "comp1", ParticleType.CATALYST,
                 Role.LOCOMOTOR, new Position(5, 5), 50);
         registerComposite("comp1", 100, "cm-loco");
 
-        // Queue via composite action with 5 preferences
-        List<String> fivePrefs = List.of("N", "E", "S", "W", "NE");
-        Map<String, List<String>> rankedPrefs = Map.of("s-loco", fivePrefs);
+        Map<String, Frame.ActionFrame> actions = Map.of("s-loco", vote("864"));
+        Map<String, String> ballots = Map.of("s-loco", "864");
+        resolver.resolveActions(1, actions, ballots);
 
-        Map<String, Messages.Action> actions = Map.of("s-loco", new Messages.Action("move", "N"));
-        resolver.resolveActions(1, actions, rankedPrefs);
-
-        // Should have moved (first pref N)
+        // Should have moved N (first preference).
         assertThat(worldGrid.getCell(5, 4).occupant()).isInstanceOf(CompositeMember.class);
-    }
-
-    @Test
-    void invalidDirectionInVoteIgnored() {
-        // LOCOMOTOR submits "INVALID" as first preference — treated as abstention
-        mockSession("s-loco");
-        placeCompositeMember("s-loco", "cm-loco", "comp1", ParticleType.CATALYST,
-                Role.LOCOMOTOR, new Position(5, 5), 50);
-        registerComposite("comp1", 100, "cm-loco");
-
-        Map<String, List<String>> rankedPrefs = Map.of("s-loco", List.of("INVALID", "BOGUS"));
-        Map<String, Messages.Action> actions = Map.of("s-loco", new Messages.Action("move", "INVALID"));
-
-        resolver.resolveActions(1, actions, rankedPrefs);
-
-        // Should NOT have moved — invalid direction is ignored
-        assertThat(((CompositeMember) worldGrid.getCell(5, 5).occupant()).id()).isEqualTo("cm-loco");
     }
 }

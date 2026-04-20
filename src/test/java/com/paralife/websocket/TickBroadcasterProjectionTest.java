@@ -1,18 +1,27 @@
 package com.paralife.websocket;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.codec.CellEntry;
+import com.paralife.codec.Coord;
+import com.paralife.codec.Frame;
+import com.paralife.codec.KindData;
+import com.paralife.engine.AlarmQueue;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.BuffRegistry;
 import com.paralife.engine.CompositeRegistry;
 import com.paralife.engine.EnvironmentEngine;
 import com.paralife.engine.SimulationConfig;
 import com.paralife.engine.TickEvent;
-import com.paralife.websocket.Messages.CellView;
-import com.paralife.world.*;
+import com.paralife.metrics.WebSocketMetrics;
+import com.paralife.world.Cell;
+import com.paralife.world.Entity;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Entity.Role;
+import com.paralife.world.GridConfig;
+import com.paralife.world.Position;
+import com.paralife.world.WorldGrid;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.TextMessage;
@@ -20,203 +29,195 @@ import org.springframework.web.socket.WebSocketSession;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+/**
+ * Plan 15-11 (Task 2): projection-layer test for the codec-driven
+ * {@link TickBroadcaster}.
+ *
+ * <p>Migrated from the Messages.Perception / CellView record fixtures to the
+ * post-plan-15-08 {@link Frame.TickFrame} + {@link CellEntry} shape (SCHEMA
+ * §6.3 / §8.1). Every assertion that previously matched an entity-id field
+ * has been replaced with a type (kind code) + position (coord) check — the
+ * zero-trust invariant (D-28 / T-15-03) removes ids from the wire.
+ */
 class TickBroadcasterProjectionTest {
 
     private BotRegistry botRegistry;
     private SessionRegistry sessionRegistry;
     private WorldGrid worldGrid;
-    private ObjectMapper objectMapper;
     private CompositeRegistry compositeRegistry;
+    private WebSocketMetrics metrics;
+    private BuffRegistry buffRegistry;
+    private SimulationConfig simConfig;
+    private AlarmQueue alarmQueue;
+    private EnvironmentEngine envEngineMock;
     private TickBroadcaster broadcaster;
 
     @BeforeEach
     void setUp() {
         worldGrid = new WorldGrid(new GridConfig(16, 16));
+        metrics = new WebSocketMetrics(new SimpleMeterRegistry());
         botRegistry = new BotRegistry();
-        sessionRegistry = new SessionRegistry();
-        objectMapper = new ObjectMapper();
+        sessionRegistry = new SessionRegistry(metrics);
         compositeRegistry = new CompositeRegistry();
-        broadcaster = new TickBroadcaster(botRegistry, sessionRegistry, worldGrid, objectMapper, compositeRegistry);
+        buffRegistry = new BuffRegistry();
+        simConfig = SimulationConfig.defaults();
+        alarmQueue = new AlarmQueue();
+        envEngineMock = mock(EnvironmentEngine.class);
+        when(envEngineMock.getCellStatus(any())).thenReturn((byte) 0);
+        when(envEngineMock.getEntityStatus(any())).thenReturn((byte) 0);
+        broadcaster = new TickBroadcaster(botRegistry, sessionRegistry, worldGrid,
+                compositeRegistry, envEngineMock, buffRegistry, simConfig, alarmQueue, metrics);
     }
 
+    // ── Frame-shape tests (formerly "self" entity state + radius) ──────
+
     @Test
-    void buildPerceptionContainsEntityState() {
+    void tickFrameCarriesPositionAndEnergyForSoloParticle() {
         Particle particle = Particle.spawn("e1", ParticleType.CATALYST);
         worldGrid.setEntity(5, 5, particle);
         botRegistry.register("s1", "e1", new Position(5, 5));
 
         var bot = botRegistry.getBySession("s1").orElseThrow();
-        var perception = broadcaster.buildPerception(42, bot);
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 42L);
 
-        assertThat(perception.tickNumber()).isEqualTo(42);
-        assertThat(perception.self().entityId()).isEqualTo("e1");
-        assertThat(perception.self().particleType()).isEqualTo("CATALYST");
-        assertThat(perception.self().energy()).isEqualTo(Particle.DEFAULT_START_ENERGY);
-        assertThat(perception.self().x()).isEqualTo(5);
-        assertThat(perception.self().y()).isEqualTo(5);
-        assertThat(perception.radius()).isEqualTo(TickBroadcaster.PERCEPTION_RADIUS);
+        assertThat(frame.tickId()).isEqualTo(42L);
+        assertThat(frame.curX()).isEqualTo(5);
+        assertThat(frame.curY()).isEqualTo(5);
+        assertThat(frame.energy()).isEqualTo(Particle.DEFAULT_START_ENERGY);
+        assertThat(frame.sensorRadius())
+                .as("FULL-tier solo Particle sees 5x5 (radius=2)")
+                .isEqualTo(TickBroadcaster.PERCEPTION_RADIUS);
     }
 
     @Test
-    void buildPerceptionNeighbourhoodSize() {
+    void tickFrameNeighbourhoodRadius() {
         Particle particle = Particle.spawn("e1", ParticleType.SPORE);
         worldGrid.setEntity(5, 5, particle);
         botRegistry.register("s1", "e1", new Position(5, 5));
 
         var bot = botRegistry.getBySession("s1").orElseThrow();
-        var perception = broadcaster.buildPerception(1, bot);
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
 
-        int expectedSize = TickBroadcaster.PERCEPTION_RADIUS * 2 + 1;
-        assertThat(perception.neighbourhood()).hasSize(expectedSize);
-        for (var row : perception.neighbourhood()) {
-            assertThat(row).hasSize(expectedSize);
-        }
+        assertThat(frame.sensorRadius()).isEqualTo(TickBroadcaster.PERCEPTION_RADIUS);
+        // No non-empty neighbours → s block empty (SCHEMA §8.1: empty cells not emitted).
+        assertThat(frame.cells()).isEmpty();
     }
 
     @Test
-    void buildPerceptionShowsNearbyEntities() {
-        // Place bot at (5,5)
+    void tickFrameShowsNearbyEntitiesWithCorrectKindCodes() {
+        // Self at (5,5), MEMBRANE east at (6,5), Rock at (4,4).
         Particle self = Particle.spawn("e1", ParticleType.CATALYST);
         worldGrid.setEntity(5, 5, self);
         botRegistry.register("s1", "e1", new Position(5, 5));
 
-        // Place a neighbor at (6,5) — one cell east
         Particle neighbor = Particle.spawn("e2", ParticleType.MEMBRANE);
         worldGrid.setEntity(6, 5, neighbor);
-
-        // Place a rock at (4,4) — one cell NW
         worldGrid.setEntity(4, 4, new Entity.Rock("rock1"));
 
         var bot = botRegistry.getBySession("s1").orElseThrow();
-        var perception = broadcaster.buildPerception(1, bot);
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
 
-        // Centre of 5x5 grid is at index [2][2]
-        int center = TickBroadcaster.PERCEPTION_RADIUS;
-        CellView selfView = perception.neighbourhood().get(center).get(center);
-        assertThat(selfView.occupantType()).isEqualTo("CATALYST");
+        // East neighbour: numpad 6 with kind 'M'.
+        CellEntry east = findNumpadEntry(frame, '6').orElseThrow();
+        assertThat(kindCodeOf(east)).isEqualTo('M');
 
-        // East neighbour: same row, one column right → [2][3]
-        CellView eastView = perception.neighbourhood().get(center).get(center + 1);
-        assertThat(eastView.occupantType()).isEqualTo("MEMBRANE");
-        assertThat(eastView.occupantId()).isEqualTo("e2");
-
-        // NW: one row up, one column left → [1][1]
-        CellView nwView = perception.neighbourhood().get(center - 1).get(center - 1);
-        assertThat(nwView.occupantType()).isEqualTo("ROCK");
+        // NW rock: numpad 7 with kind 'R'.
+        CellEntry nw = findNumpadEntry(frame, '7').orElseThrow();
+        assertThat(kindCodeOf(nw)).isEqualTo('R');
     }
 
     @Test
-    void buildPerceptionWrapsToroidally() {
-        // Place bot at (0,0) — neighbours should wrap around the grid edges
+    void tickFrameWrapsToroidally() {
         Particle self = Particle.spawn("e1", ParticleType.SPORE);
         worldGrid.setEntity(0, 0, self);
         botRegistry.register("s1", "e1", new Position(0, 0));
 
-        // Place entity at (15, 15) — wrapped to be NW of (0,0)
+        // (15,15) wraps to NW of (0,0) on a 16×16 grid — numpad 7 from centre.
         Particle wrapped = Particle.spawn("e2", ParticleType.CATALYST);
         worldGrid.setEntity(15, 15, wrapped);
 
         var bot = botRegistry.getBySession("s1").orElseThrow();
-        var perception = broadcaster.buildPerception(1, bot);
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
 
-        // NW corner of the neighbourhood should show the wrapped entity
-        // NW = row 0, col 0 (top-left of the 5x5 grid, which is offset -2,-2 from centre)
-        // (0-2, 0-2) wraps to (14, 14) — but we placed at (15,15) which is offset -1,-1
-        // So look at row 1, col 1 (offset -1, -1)
-        CellView nwView = perception.neighbourhood().get(1).get(1);
-        assertThat(nwView.occupantType()).isEqualTo("CATALYST");
-        assertThat(nwView.occupantId()).isEqualTo("e2");
+        CellEntry nw = findNumpadEntry(frame, '7').orElseThrow();
+        assertThat(kindCodeOf(nw)).isEqualTo('C');
+    }
+
+    // ── Empty-cell suppression ─────────────────────────────────────────
+
+    @Test
+    void emptyCellsOmittedFromSBlock() {
+        // Lone bot, no neighbours: presence=0 entries are NOT emitted per SCHEMA §8.1.
+        Particle self = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(5, 5, self);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
+        assertThat(frame.cells())
+                .as("Empty cells must not be emitted — self cell is skipped, all others empty")
+                .isEmpty();
+    }
+
+    // ── Kind-code mapping ──────────────────────────────────────────────
+
+    @Test
+    void rockEntryHasKindR() {
+        Particle self = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(5, 5, self);
+        worldGrid.setEntity(6, 5, new Entity.Rock("r1"));
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
+
+        CellEntry east = findNumpadEntry(frame, '6').orElseThrow();
+        assertThat(kindCodeOf(east)).isEqualTo('R');
     }
 
     @Test
-    void cellToViewEmpty() {
-        CellView view = TickBroadcaster.cellToView(Cell.EMPTY);
-        assertThat(view.occupantType()).isNull();
-        assertThat(view.occupantId()).isNull();
-        assertThat(view.nutrientLevel()).isZero();
-        assertThat(view.flags()).isZero();
-    }
+    void nutrientEntryHasKindF() {
+        Particle self = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(5, 5, self);
+        worldGrid.setEntity(6, 5, Entity.Nutrient.spawn("n1"));
+        botRegistry.register("s1", "e1", new Position(5, 5));
 
-    // ── Phase 13 Plan 02: FLAG_STARVING visible in perception ──
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
 
-    @Test
-    void cellToViewIncludesFlags() {
-        // Cell with both FLAG_OVERCROWDED (1) and FLAG_STARVING (2) → flags=3
-        Cell cell = Cell.EMPTY
-                .withOccupant(Particle.spawn("p1", ParticleType.CATALYST))
-                .withAddedFlag(Cell.FLAG_OVERCROWDED)
-                .withAddedFlag(Cell.FLAG_STARVING);
-        CellView view = TickBroadcaster.cellToView(cell);
-        assertThat(view.flags()).isEqualTo(Cell.FLAG_OVERCROWDED | Cell.FLAG_STARVING);
+        CellEntry east = findNumpadEntry(frame, '6').orElseThrow();
+        assertThat(kindCodeOf(east)).isEqualTo('F');
     }
 
     @Test
-    void cellToViewFlagStarvingVisible() {
-        Cell cell = Cell.EMPTY
-                .withOccupant(Particle.spawn("p1", ParticleType.SPORE))
-                .withAddedFlag(Cell.FLAG_STARVING);
-        CellView view = TickBroadcaster.cellToView(cell);
-        assertThat((view.flags() & Cell.FLAG_STARVING) != 0).isTrue();
-    }
-
-    @Test
-    void cellToViewParticle() {
-        Cell cell = Cell.EMPTY.withOccupant(Particle.spawn("p1", ParticleType.MEMBRANE));
-        CellView view = TickBroadcaster.cellToView(cell);
-        assertThat(view.occupantType()).isEqualTo("MEMBRANE");
-        assertThat(view.occupantId()).isEqualTo("p1");
-    }
-
-    @Test
-    void cellToViewRock() {
-        Cell cell = Cell.EMPTY.withOccupant(new Entity.Rock("r1"));
-        CellView view = TickBroadcaster.cellToView(cell);
-        assertThat(view.occupantType()).isEqualTo("ROCK");
-        assertThat(view.occupantId()).isEqualTo("r1");
-    }
-
-    @Test
-    void cellToViewNutrient() {
-        Cell cell = Cell.EMPTY.withOccupant(Entity.Nutrient.spawn("n1"));
-        CellView view = TickBroadcaster.cellToView(cell);
-        assertThat(view.occupantType()).isEqualTo("NUTRIENT");
-        assertThat(view.occupantId()).isEqualTo("n1");
-    }
-
-    @Test
-    void cellToViewBondedPair() {
+    void bondedPairEntryUsesPrimaryKindCode() {
+        // BondedPair primary=CATALYST → kind 'D' per SCHEMA §8.1.1.
+        Particle self = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(5, 5, self);
         Entity.BondedPair bp = new Entity.BondedPair(
                 "bond-1", ParticleType.CATALYST, ParticleType.SPORE, 80, 200);
-        Cell cell = Cell.EMPTY.withOccupant(bp);
+        worldGrid.setEntity(6, 5, bp);
+        botRegistry.register("s1", "e1", new Position(5, 5));
 
-        CellView view = TickBroadcaster.cellToView(cell);
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
 
-        assertThat(view.occupantType()).isEqualTo("BONDED_CATALYST_SPORE");
-        assertThat(view.occupantId()).isEqualTo("bond-1");
+        CellEntry east = findNumpadEntry(frame, '6').orElseThrow();
+        assertThat(kindCodeOf(east))
+                .as("Bonded primary=CATALYST projects as 'D'")
+                .isEqualTo('D');
     }
 
-    @Test
-    void cellToViewBondedPairReflectsTypes() {
-        // Verify different type combinations produce correct strings
-        Entity.BondedPair bp = new Entity.BondedPair(
-                "bond-2", ParticleType.MEMBRANE, ParticleType.CATALYST, 60, 200);
-        Cell cell = Cell.EMPTY.withOccupant(bp);
-
-        CellView view = TickBroadcaster.cellToView(cell);
-
-        assertThat(view.occupantType()).isEqualTo("BONDED_MEMBRANE_CATALYST");
-        assertThat(view.occupantId()).isEqualTo("bond-2");
-    }
+    // ── onTick end-to-end (mocked session) ─────────────────────────────
 
     @Test
-    void onTickSendsPerceptionToRegisteredBots() throws Exception {
-        // Set up a mock session
+    void onTickSendsFrameToRegisteredBots() throws Exception {
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getId()).thenReturn("s1");
         when(session.isOpen()).thenReturn(true);
@@ -226,10 +227,8 @@ class TickBroadcasterProjectionTest {
         worldGrid.setEntity(5, 5, particle);
         botRegistry.register("s1", "e1", new Position(5, 5));
 
-        // Fire tick event
         broadcaster.onTick(new TickEvent(1));
 
-        // Verify a message was sent
         verify(session).sendMessage(any(TextMessage.class));
     }
 
@@ -249,158 +248,163 @@ class TickBroadcasterProjectionTest {
 
     @Test
     void onTickNoBots() {
-        // Should not throw when no bots registered
         broadcaster.onTick(new TickEvent(1));
     }
 
+    // ── Authority tiers (LOCOMOTOR / PASSIVE / AUTHORITY_LITE) ─────────
+
     @Test
-    void compositeMemberGetsCompositePerception() throws Exception {
-        // Place a CompositeMember bot — should receive CompositePerception, not regular Perception
+    void compositeSensorMemberReceivesMinimalForm() {
         var sensor = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.SENSOR, 50, 100);
         worldGrid.setEntity(5, 5, sensor);
-
         compositeRegistry.register("c1", List.of("m1"),
                 Map.of("m1", new Position(5, 5)), 100, 200);
-
         botRegistry.register("s1", "m1", new Position(5, 5));
 
-        WebSocketSession session = mock(WebSocketSession.class);
-        when(session.getId()).thenReturn("s1");
-        when(session.isOpen()).thenReturn(true);
-        sessionRegistry.register(session);
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
 
-        broadcaster.onTick(new TickEvent(1));
-
-        var captor = org.mockito.ArgumentCaptor.forClass(TextMessage.class);
-        verify(session).sendMessage(captor.capture());
-
-        var msg = objectMapper.readValue(captor.getValue().getPayload(), Messages.class);
-        assertThat(msg).isInstanceOf(Messages.CompositePerception.class);
+        assertThat(frame.isMinimal())
+                .as("SENSOR = passive → minimal form per SCHEMA §6.3.2")
+                .isTrue();
+        assertThat(frame.cells()).isEmpty();
+        assertThat(frame.effects()).isEmpty();
+        assertThat(frame.pool()).isEmpty();
+        assertThat(frame.roster()).isEmpty();
     }
 
     @Test
-    void regularParticleBotGetsRegularPerception() throws Exception {
-        // Particle bot should still get regular Perception (not CompositePerception)
-        Particle particle = Particle.spawn("e1", ParticleType.CATALYST);
-        worldGrid.setEntity(5, 5, particle);
-        botRegistry.register("s1", "e1", new Position(5, 5));
+    void authorityLiteFeederHasSensorRadius1() {
+        var feeder = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.FEEDER, 50, 100);
+        worldGrid.setEntity(5, 5, feeder);
+        compositeRegistry.register("c1", List.of("m1"),
+                Map.of("m1", new Position(5, 5)), 100, 200);
+        botRegistry.register("s1", "m1", new Position(5, 5));
 
-        WebSocketSession session = mock(WebSocketSession.class);
-        when(session.getId()).thenReturn("s1");
-        when(session.isOpen()).thenReturn(true);
-        sessionRegistry.register(session);
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
 
-        broadcaster.onTick(new TickEvent(1));
-
-        var captor = org.mockito.ArgumentCaptor.forClass(TextMessage.class);
-        verify(session).sendMessage(captor.capture());
-
-        var msg = objectMapper.readValue(captor.getValue().getPayload(), Messages.class);
-        assertThat(msg).isInstanceOf(Messages.Perception.class);
+        assertThat(frame.sensorRadius())
+                .as("FEEDER = authority-lite → radius 1 (3x3) per SCHEMA §7")
+                .isEqualTo(1);
     }
 
-    // ── Phase 14 Plan 05: cellStatus + entityStatus + SENSOR_PLUS_1 + overcrowded recomposition ──
+    @Test
+    void locomotorReceivesPoolSnapshotAndRoster() {
+        var loco = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.LOCOMOTOR, 50, 100);
+        var feeder = new CompositeMember("m2", "c1", ParticleType.MEMBRANE, Role.FEEDER, 50, 100);
+        worldGrid.setEntity(5, 5, loco);
+        worldGrid.setEntity(6, 5, feeder);
+        compositeRegistry.register("c1", List.of("m1", "m2"),
+                Map.of("m1", new Position(5, 5), "m2", new Position(6, 5)), 100, 200);
+        botRegistry.register("s1", "m1", new Position(5, 5));
+
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
+
+        assertThat(frame.sensorRadius())
+                .as("LOCOMOTOR = FULL tier → radius 2 default")
+                .isEqualTo(TickBroadcaster.PERCEPTION_RADIUS);
+        assertThat(frame.pool())
+                .as("LOCOMOTOR carries pool snapshot")
+                .isPresent();
+        assertThat(frame.pool().get().pool()).isEqualTo(100);
+        assertThat(frame.pool().get().maxPool()).isEqualTo(200);
+        assertThat(frame.roster())
+                .as("LOCOMOTOR carries roster of other members")
+                .isNotEmpty();
+        assertThat(frame.roster().get(0).role())
+                .as("FEEDER roster entry has role digit '1'")
+                .isEqualTo('1');
+    }
+
+    // ── Phase 14 Plan 05: cellStatus / entityStatus projection ─────────
 
     @Test
-    void perceptionIncludesCellStatusAndEntityStatus() {
-        // Build a Plan-14-05-wired broadcaster with a mock EnvironmentEngine
-        // that reports non-zero cellStatus + entityStatus. Drive buildPerception
-        // and assert the 6-arg CellView contains the projected values.
-        //
-        // Note: cycle-6 MEDIUM #9 strips bit 0 from cellStatus (OVERCROWDED is
-        // per-bot recomputed). We use MUTAGEN_ZONE (bit 2) for the cellStatus
-        // projection test to avoid colliding with the OVERCROWDED bit.
-        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
-        BuffRegistry buffRegistry = new BuffRegistry();
-        SimulationConfig simCfg = SimulationConfig.defaults();
-        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
-                worldGrid, objectMapper, compositeRegistry, envMock, buffRegistry, simCfg);
-
-        Particle bot = Particle.spawn("e1", ParticleType.CATALYST);
-        worldGrid.setEntity(5, 5, bot);
+    void envStateProjectedOnNeighbourCells() {
+        // Mutagen (bit 2) projected on the east neighbour's envState.
+        Particle self = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(5, 5, self);
+        // Place a rock so a cell entry is emitted at (6,5). Otherwise empty
+        // cells with non-zero env DO still emit (presence=2), so a rock isn't
+        // strictly required — but a rock gives a stable kind to find by.
+        worldGrid.setEntity(6, 5, new Entity.Rock("r1"));
         botRegistry.register("s1", "e1", new Position(5, 5));
-        // Use different positions so we can see bit propagation separately.
-        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
-        when(envMock.getCellStatus(new Position(6, 5)))
+
+        when(envEngineMock.getCellStatus(new Position(6, 5)))
                 .thenReturn(EnvironmentEngine.CELL_STATUS_MUTAGEN_ZONE);
-        when(envMock.getEntityStatus("e1"))
-                .thenReturn(EnvironmentEngine.ENTITY_STATUS_BUFFED);
 
-        var perception = wired.buildPerception(1, botRegistry.getBySession("s1").orElseThrow());
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
 
-        // centre is at (radius, radius) = (2, 2); east neighbour at [2][3]
-        CellView centerView = perception.neighbourhood().get(2).get(2);
-        assertThat((int) centerView.entityStatus()).isEqualTo((int) EnvironmentEngine.ENTITY_STATUS_BUFFED);
-        CellView eastView = perception.neighbourhood().get(2).get(3);
-        assertThat((int) eastView.cellStatus() & EnvironmentEngine.CELL_STATUS_MUTAGEN_ZONE)
+        CellEntry east = findNumpadEntry(frame, '6').orElseThrow();
+        assertThat(east.envState()).isPresent();
+        assertThat(east.envState().getAsInt() & EnvironmentEngine.CELL_STATUS_MUTAGEN_ZONE)
+                .as("MUTAGEN_ZONE bit projected from cache")
                 .isEqualTo(EnvironmentEngine.CELL_STATUS_MUTAGEN_ZONE);
     }
 
     @Test
-    void soloSensorBuffExpandsRadiusToSeven() {
-        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
-        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
-        when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
-        BuffRegistry buffs = new BuffRegistry();
-        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
-                worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
+    void entityStateProjectedForNeighbourEntity() {
+        // BUFFED bit on a neighbour entity flows into its entityState on the wire.
+        Particle self = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(5, 5, self);
+        Particle neighbour = Particle.spawn("e2", ParticleType.SPORE);
+        worldGrid.setEntity(6, 5, neighbour);
+        botRegistry.register("s1", "e1", new Position(5, 5));
 
+        when(envEngineMock.getEntityStatus("e2"))
+                .thenReturn(EnvironmentEngine.ENTITY_STATUS_BUFFED);
+
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
+
+        CellEntry east = findNumpadEntry(frame, '6').orElseThrow();
+        assertThat(east.entityState()).isPresent();
+        assertThat(east.entityState().getAsInt() & EnvironmentEngine.ENTITY_STATUS_BUFFED)
+                .isEqualTo(EnvironmentEngine.ENTITY_STATUS_BUFFED);
+    }
+
+    @Test
+    void soloSensorBuffExpandsRadiusToSeven() {
         Particle bot = Particle.spawn("e1", ParticleType.SPORE);
         worldGrid.setEntity(5, 5, bot);
         botRegistry.register("s1", "e1", new Position(5, 5));
 
-        // No buff → radius 2 → 5x5 grid
-        var baseline = wired.buildPerception(1, botRegistry.getBySession("s1").orElseThrow());
-        assertThat(baseline.neighbourhood()).hasSize(5);
-        assertThat(baseline.neighbourhood().get(0)).hasSize(5);
+        // Baseline — no buff → radius 2 (PERCEPTION_RADIUS).
+        var b = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame baseline = broadcaster.buildTickFrame(b, 1L);
+        assertThat(baseline.sensorRadius()).isEqualTo(TickBroadcaster.PERCEPTION_RADIUS);
 
-        // Grant SENSOR_PLUS_1 → radius 3 → 7x7 grid
-        buffs.grant("e1", BuffRegistry.BuffType.SENSOR_PLUS_1, 1_000L);
-        var expanded = wired.buildPerception(2, botRegistry.getBySession("s1").orElseThrow());
-        assertThat(expanded.neighbourhood()).hasSize(7);
-        assertThat(expanded.neighbourhood().get(0)).hasSize(7);
-        assertThat(expanded.radius()).isEqualTo(3);
+        // SENSOR_PLUS_1 → radius 3 (7×7).
+        buffRegistry.grant("e1", BuffRegistry.BuffType.SENSOR_PLUS_1, 1_000L);
+        Frame.TickFrame expanded = broadcaster.buildTickFrame(b, 2L);
+        assertThat(expanded.sensorRadius()).isEqualTo(3);
     }
 
     @Test
-    void bondedPairWithSensorBuffExpandsSoloBotRadiusTo7() {
-        // cycle-6 HIGH #3: a bot whose entityId is a BondedPair's bp.id() must
-        // also see 7x7 when SENSOR_PLUS_1 is granted against bp.id(). The wire
-        // site is uniform — bot.entityId() returns Particle.id() OR bp.id() by
-        // construction.
-        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
-        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
-        when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
-        BuffRegistry buffs = new BuffRegistry();
-        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
-                worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
-
+    void bondedPairWithSensorBuffExpandsToRadius3() {
         Entity.BondedPair bp = new Entity.BondedPair("bp1", ParticleType.CATALYST,
                 ParticleType.MEMBRANE, 80, 200);
         worldGrid.setEntity(5, 5, bp);
         botRegistry.register("s1", bp.id(), new Position(5, 5));
 
-        // No buff → 5x5
-        var baseline = wired.buildPerception(1, botRegistry.getBySession("s1").orElseThrow());
-        assertThat(baseline.neighbourhood()).hasSize(5);
+        var b = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame baseline = broadcaster.buildTickFrame(b, 1L);
+        assertThat(baseline.sensorRadius()).isEqualTo(TickBroadcaster.PERCEPTION_RADIUS);
 
-        buffs.grant(bp.id(), BuffRegistry.BuffType.SENSOR_PLUS_1, 1_000L);
-        var expanded = wired.buildPerception(2, botRegistry.getBySession("s1").orElseThrow());
-        assertThat(expanded.neighbourhood())
-                .as("cycle-6 HIGH #3: BondedPair with SENSOR_PLUS_1 sees 7x7 (radius=3)")
-                .hasSize(7);
+        buffRegistry.grant(bp.id(), BuffRegistry.BuffType.SENSOR_PLUS_1, 1_000L);
+        Frame.TickFrame expanded = broadcaster.buildTickFrame(b, 2L);
+        assertThat(expanded.sensorRadius()).isEqualTo(3);
     }
 
     @Test
-    void visionScopedOvercrowdingBitSetWhenVisibleNeighborsDense() {
-        // Without SENSOR_PLUS_1: radius 2. Place 6 neighbours around (10, 10).
-        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
-        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
-        when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
-        BuffRegistry buffs = new BuffRegistry();
-        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
-                worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
-
+    void visionScopedOvercrowdingPredicateCountsVisibleMooreNeighbours() {
+        // D-40 predicate: for a cell to carry the per-bot OVERCROWDED bit, its
+        // Moore neighbours visible to the bot must meet the threshold. Pack six
+        // Particles around (10,10), then query the predicate at (10,10) — all
+        // eight Moore neighbours of (10,10) are within the bot's r=2 vision, so
+        // the threshold-6 count triggers.
         Particle self = Particle.spawn("e1", ParticleType.CATALYST);
         worldGrid.setEntity(10, 10, self);
         botRegistry.register("s1", "e1", new Position(10, 10));
@@ -412,66 +416,64 @@ class TickBroadcasterProjectionTest {
         worldGrid.setEntity(9, 9, Particle.spawn("n5", ParticleType.CATALYST));
         worldGrid.setEntity(11, 11, Particle.spawn("n6", ParticleType.CATALYST));
 
-        var perception = wired.buildPerception(1, botRegistry.getBySession("s1").orElseThrow());
-        // Centre cell at [2][2]
-        CellView centerView = perception.neighbourhood().get(2).get(2);
-        assertThat(centerView.cellStatus() & 0x01).isEqualTo(0x01);
+        int threshold = simConfig.overcrowdingThreshold();
+        boolean ovc = TickBroadcaster.computeVisionScopedOvercrowded(
+                worldGrid, new Position(10, 10), new Position(10, 10),
+                /*radius*/ 2, threshold);
+        assertThat(ovc)
+                .as("6 visible neighbours meets threshold=6 → OVERCROWDED (D-40 predicate)")
+                .isTrue();
+
+        // Guard: a cell far from the bot's vision window should NOT be overcrowded
+        // even if it has dense global neighbours — the predicate only counts
+        // neighbours WITHIN vision. Here we use a radius-0 bot to force that.
+        boolean ovcInvisible = TickBroadcaster.computeVisionScopedOvercrowded(
+                worldGrid, new Position(10, 10), new Position(10, 10),
+                /*radius*/ 0, threshold);
+        assertThat(ovcInvisible)
+                .as("Zero-radius vision → no neighbours visible → predicate false")
+                .isFalse();
     }
 
     @Test
     void overcrowdedBitIsPerBotNotGlobalFromCache() {
-        // cycle-6 MEDIUM #9: env cache reports OVERCROWDED globally (bit 0 set);
-        // bot vision sees NO dense neighbours. Per-bot bit 0 MUST be 0.
-        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
-        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
-        // Global cache says "overcrowded" for the target cell.
-        Position targetCell = new Position(6, 5);
-        when(envMock.getCellStatus(targetCell)).thenReturn((byte) 0x01);
-        when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
-        BuffRegistry buffs = new BuffRegistry();
-        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
-                worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
-
+        // cycle-6 MEDIUM #9: global cache says bit-0 set, but bot vision sees
+        // no dense neighbours → per-bot bit 0 MUST be 0.
         Particle self = Particle.spawn("e1", ParticleType.CATALYST);
         worldGrid.setEntity(5, 5, self);
+        // Rock at (6,5) so the cell is emitted.
+        worldGrid.setEntity(6, 5, new Entity.Rock("r1"));
         botRegistry.register("s1", "e1", new Position(5, 5));
-        // No filler particles → no visible neighbours → per-bot bit 0 = 0.
 
-        var perception = wired.buildPerception(1, botRegistry.getBySession("s1").orElseThrow());
-        CellView eastView = perception.neighbourhood().get(2).get(3);
-        assertThat(eastView.cellStatus() & 0x01)
+        Position target = new Position(6, 5);
+        when(envEngineMock.getCellStatus(target)).thenReturn((byte) 0x01);
+
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
+
+        CellEntry east = findNumpadEntry(frame, '6').orElseThrow();
+        // envState may be empty if the mask + stripped global == 0. Either absent
+        // or present-with-bit-0-clear is acceptable — the invariant is bit 0 = 0
+        // in the projected byte.
+        int envBits = east.envState().orElse(0);
+        assertThat(envBits & 0x01)
                 .as("cycle-6 MEDIUM #9: bit 0 recomputed per-bot; globally-overcrowded cell presents as 0")
                 .isEqualTo(0);
     }
 
-    @Test
-    void compositeSensorMemberWithSensorBuffExpandsStitchedCoverageRadius() {
-        // cycle-4 action item #8: each SENSOR member's stitched coverage circle
-        // sized per-member. Baseline: one SENSOR member with no buff → 25 cells
-        // (5x5). With SENSOR_PLUS_1 on that SENSOR → 49 cells (7x7).
-        BuffRegistry buffs = new BuffRegistry();
-        EnvironmentEngine envMock = mock(EnvironmentEngine.class);
-        when(envMock.getCellStatus(any())).thenReturn((byte) 0);
-        when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
-        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
-                worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
+    // ── Helpers ────────────────────────────────────────────────────────
 
-        var sensor = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.SENSOR, 50, 100);
-        worldGrid.setEntity(8, 8, sensor);
-        compositeRegistry.register("c1", List.of("m1"),
-                Map.of("m1", new Position(8, 8)), 100, 200);
+    private static Optional<CellEntry> findNumpadEntry(Frame.TickFrame frame, char digit) {
+        return frame.cells().stream()
+                .filter(ce -> ce.coord() instanceof Coord.Numpad n && n.digit() == digit)
+                .findFirst();
+    }
 
-        var composite = compositeRegistry.getComposite("c1").orElseThrow();
-
-        Set<Position> baseline = wired.stitchSensorCoverage(composite);
-        assertThat(baseline)
-                .as("SENSOR member without SENSOR_PLUS_1 → 5x5 = 25 cells")
-                .hasSize(25);
-
-        buffs.grant("m1", BuffRegistry.BuffType.SENSOR_PLUS_1, 1_000L);
-        Set<Position> expanded = wired.stitchSensorCoverage(composite);
-        assertThat(expanded)
-                .as("cycle-4 action item #8: SENSOR_PLUS_1 on SENSOR member → 7x7 = 49 cells")
-                .hasSize(49);
+    private static Character kindCodeOf(CellEntry ce) {
+        return ce.kind().map(kd -> switch (kd) {
+            case KindData.Simple s -> s.code();
+            case KindData.RockSolo ignored -> 'R';
+            case KindData.RockRun run -> 'R';
+        }).orElse(null);
     }
 }

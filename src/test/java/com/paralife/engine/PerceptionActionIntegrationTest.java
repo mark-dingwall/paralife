@@ -1,9 +1,20 @@
 package com.paralife.engine;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.codec.CellEntry;
+import com.paralife.codec.Coord;
+import com.paralife.codec.Frame;
+import com.paralife.codec.KindData;
+import com.paralife.codec.PerceptionCodec;
 import com.paralife.world.Entity;
+import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
+import org.eclipse.jetty.websocket.api.Callback;
+import org.eclipse.jetty.websocket.api.Session;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketOpen;
+import org.eclipse.jetty.websocket.api.annotations.WebSocket;
+import org.eclipse.jetty.websocket.client.ClientUpgradeRequest;
+import org.eclipse.jetty.websocket.client.WebSocketClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,21 +24,36 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketHttpHeaders;
-import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
-
-import com.paralife.world.Position;
 
 import java.net.URI;
-import java.util.concurrent.*;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Integration test: full perception→action→perception round trip over WebSocket.
+ * Plan 15-11 (Task 2): end-to-end perception→action→perception over the codec
+ * wire.
+ *
+ * <p>Migrated from the Messages-era JSON channel ({@code perception} +
+ * {@code action} + {@code action_result}) to SCHEMA §6.3 / §8.6 frames:
+ * <ul>
+ *   <li>Register: {@code r|<species>} → server responds {@code S|<entityId>}.</li>
+ *   <li>Perception: server emits {@code T|<tickId>|...} each tick per bot.</li>
+ *   <li>Action: client sends {@code a|<verb>[|<arg>]} (M/E/A/R/V/L).</li>
+ *   <li>No action_result frames — the next tick's state IS the acknowledgement.
+ *       Assertions switched from "action succeeded"/"action failed" to
+ *       observable world-state changes (position, energy, occupancy).</li>
+ * </ul>
+ *
+ * <p>Uses Jetty-native {@link WebSocketClient} so the
+ * {@code permessage-deflate; server_no_context_takeover} extension header is
+ * sent on the upgrade — Spring's {@code StandardWebSocketClient} has no public
+ * API for this and the server filter rejects upgrades without it (D-33).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {
@@ -35,7 +61,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         "paralife.tick.auto-start=true",
         "paralife.world.width=32",
         "paralife.world.height=32",
-        "paralife.simulation.enabled=false"  // Disable physics so tests control state precisely
+        "paralife.simulation.enabled=false"  // disable physics so tests control state precisely
 })
 class PerceptionActionIntegrationTest {
 
@@ -50,8 +76,7 @@ class PerceptionActionIntegrationTest {
     @Autowired
     private BotRegistry botRegistry;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
-    private WebSocketSession session;
+    private final List<BotConn> connections = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setUp() {
@@ -61,284 +86,284 @@ class PerceptionActionIntegrationTest {
 
     @AfterEach
     void tearDown() {
-        if (session != null && session.isOpen()) {
-            try { session.close(); } catch (Exception ignored) {}
-        }
-    }
-
-    /**
-     * Connect a bot and return a handler that captures messages by type.
-     */
-    private record BotConnection(WebSocketSession session, MessageCapture capture) {}
-
-    private static class MessageCapture extends TextWebSocketHandler {
-        private final ObjectMapper objectMapper = new ObjectMapper();
-        final BlockingQueue<JsonNode> welcomes = new LinkedBlockingQueue<>();
-        final BlockingQueue<JsonNode> registered = new LinkedBlockingQueue<>();
-        final BlockingQueue<JsonNode> perceptions = new LinkedBlockingQueue<>();
-        final BlockingQueue<JsonNode> actionResults = new LinkedBlockingQueue<>();
-        final BlockingQueue<JsonNode> ticks = new LinkedBlockingQueue<>();
-        final BlockingQueue<JsonNode> errors = new LinkedBlockingQueue<>();
-
-        @Override
-        protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-            JsonNode node = objectMapper.readTree(message.getPayload());
-            String type = node.get("type").asText();
-            switch (type) {
-                case "welcome" -> welcomes.add(node);
-                case "registered" -> registered.add(node);
-                case "perception" -> perceptions.add(node);
-                case "action_result" -> actionResults.add(node);
-                case "tick" -> ticks.add(node);
-                case "error" -> errors.add(node);
-                default -> log.warn("Unknown message type: {}", type);
-            }
-        }
-    }
-
-    private BotConnection connectBot(String entityType) throws Exception {
-        var capture = new MessageCapture();
-        var client = new StandardWebSocketClient();
-        session = client.execute(capture, new WebSocketHttpHeaders(),
-                URI.create("ws://localhost:" + port + "/ws/world")).get(5, TimeUnit.SECONDS);
-
-        // Wait for welcome
-        JsonNode welcome = capture.welcomes.poll(5, TimeUnit.SECONDS);
-        assertThat(welcome).as("Should receive welcome").isNotNull();
-
-        // Register
-        String registerJson = objectMapper.writeValueAsString(
-                new java.util.LinkedHashMap<>() {{
-                    put("type", "register");
-                    put("entityType", entityType);
-                }});
-        session.sendMessage(new TextMessage(registerJson));
-
-        // Wait for registered
-        JsonNode reg = capture.registered.poll(5, TimeUnit.SECONDS);
-        assertThat(reg).as("Should receive registered").isNotNull();
-
-        return new BotConnection(session, capture);
-    }
-
-    private void sendAction(WebSocketSession session, String actionType, String direction) throws Exception {
-        var actionMap = new java.util.LinkedHashMap<String, Object>();
-        actionMap.put("type", "action");
-        actionMap.put("actionType", actionType);
-        if (direction != null) actionMap.put("direction", direction);
-        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(actionMap)));
+        for (BotConn bc : connections) bc.close();
+        connections.clear();
     }
 
     // ── Tests ─────────────────────────────────────────────────────
 
     @Test
-    void botReceivesPerceptionAfterRegister() throws Exception {
-        var bot = connectBot("CATALYST");
+    void botReceivesTickFrameAfterRegister() throws Exception {
+        BotConn bot = connectAndRegister('C');
 
-        // Should receive a perception on the next tick
-        JsonNode perception = bot.capture.perceptions.poll(5, TimeUnit.SECONDS);
-        assertThat(perception).as("Should receive perception").isNotNull();
-        assertThat(perception.get("type").asText()).isEqualTo("perception");
-        assertThat(perception.has("self")).isTrue();
-        assertThat(perception.get("self").get("particleType").asText()).isEqualTo("CATALYST");
-        assertThat(perception.has("neighbourhood")).isTrue();
-        assertThat(perception.get("radius").asInt()).isEqualTo(2);
-
-        // Neighbourhood should be 5x5
-        JsonNode neighbourhood = perception.get("neighbourhood");
-        assertThat(neighbourhood.size()).isEqualTo(5);
-        for (int i = 0; i < 5; i++) {
-            assertThat(neighbourhood.get(i).size()).isEqualTo(5);
-        }
-
-        log.info("Perception received: self={}", perception.get("self"));
+        Frame.TickFrame tick = waitForTickFrame(bot, 5);
+        assertThat(tick).as("Should receive TickFrame after register").isNotNull();
+        assertThat(tick.sensorRadius())
+                .as("Solo Particle → FULL tier, radius 2")
+                .isEqualTo(2);
     }
 
     @Test
-    void moveActionChangesPositionInNextPerception() throws Exception {
-        var bot = connectBot("CATALYST");
+    void moveActionChangesPosition() throws Exception {
+        BotConn bot = connectAndRegister('C');
 
-        // Wait for first perception
-        JsonNode p1 = bot.capture.perceptions.poll(5, TimeUnit.SECONDS);
-        assertThat(p1).isNotNull();
-        int startX = p1.get("self").get("x").asInt();
-        int startY = p1.get("self").get("y").asInt();
+        // Wait for first tick to learn starting position.
+        Frame.TickFrame first = waitForTickFrame(bot, 5);
+        int startX = first.curX();
+        int startY = first.curY();
 
-        // Submit move east
-        sendAction(bot.session, "move", "E");
+        // Submit M|6 (move East).
+        bot.send(new Frame.ActionFrame('M', Optional.of("6")));
 
-        // Wait for action result
-        JsonNode result = bot.capture.actionResults.poll(5, TimeUnit.SECONDS);
-        assertThat(result).as("Should receive action result").isNotNull();
-        assertThat(result.get("success").asBoolean()).isTrue();
-        assertThat(result.get("actionType").asText()).isEqualTo("move");
-
-        // Wait for next perception — position should have changed
-        JsonNode p2 = bot.capture.perceptions.poll(5, TimeUnit.SECONDS);
-        assertThat(p2).isNotNull();
-        int newX = p2.get("self").get("x").asInt();
-        int newY = p2.get("self").get("y").asInt();
-
-        // x should be one east (with toroidal wrapping)
+        // Poll ticks until position changes (max ~5 ticks at 200ms each = 1s).
+        Frame.TickFrame after = waitForTickWithNewPosition(bot, startX, startY, 10);
+        assertThat(after).as("Should observe position change after move").isNotNull();
         int expectedX = (startX + 1) % worldGrid.getWidth();
-        assertThat(newX).isEqualTo(expectedX);
-        assertThat(newY).isEqualTo(startY);
-
-        log.info("Move verified: ({},{}) → ({},{})", startX, startY, newX, newY);
+        assertThat(after.curX()).isEqualTo(expectedX);
+        assertThat(after.curY()).isEqualTo(startY);
+        log.info("Move verified: ({},{}) → ({},{})", startX, startY, after.curX(), after.curY());
     }
 
     @Test
     void consumeActionGainsEnergy() throws Exception {
-        var bot = connectBot("CATALYST");
+        BotConn bot = connectAndRegister('C');
 
-        // Wait for first perception to know position
-        JsonNode p1 = bot.capture.perceptions.poll(5, TimeUnit.SECONDS);
-        assertThat(p1).isNotNull();
-        int x = p1.get("self").get("x").asInt();
-        int y = p1.get("self").get("y").asInt();
-        int startEnergy = p1.get("self").get("energy").asInt();
+        Frame.TickFrame first = waitForTickFrame(bot, 5);
+        int x = first.curX();
+        int y = first.curY();
+        int startEnergy = first.energy();
 
-        // Place a nutrient adjacent (east)
+        // Place a nutrient adjacent east.
         int nx = (x + 1) % worldGrid.getWidth();
         worldGrid.setEntity(nx, y, Entity.Nutrient.spawn("test-nutrient"));
 
-        // Submit consume
-        sendAction(bot.session, "consume", null);
+        // Submit E (consume, no arg per SCHEMA §8.6).
+        bot.send(new Frame.ActionFrame('E', Optional.of("5")));
 
-        // Wait for action result
-        JsonNode result = bot.capture.actionResults.poll(5, TimeUnit.SECONDS);
-        assertThat(result).isNotNull();
-        assertThat(result.get("success").asBoolean()).isTrue();
-        assertThat(result.get("actionType").asText()).isEqualTo("consume");
-
-        // Next perception should show increased energy
-        JsonNode p2 = bot.capture.perceptions.poll(5, TimeUnit.SECONDS);
-        assertThat(p2).isNotNull();
-        int newEnergy = p2.get("self").get("energy").asInt();
-        assertThat(newEnergy).isGreaterThan(startEnergy);
-
-        log.info("Consume verified: energy {} → {}", startEnergy, newEnergy);
+        Frame.TickFrame after = waitForTickWithEnergyGreaterThan(bot, startEnergy, 10);
+        assertThat(after).as("Should observe energy gain after consume").isNotNull();
+        assertThat(after.energy()).isGreaterThan(startEnergy);
+        log.info("Consume verified: energy {} → {}", startEnergy, after.energy());
     }
 
     @Test
     void moveIntoRockFails() throws Exception {
-        var bot = connectBot("CATALYST");
+        BotConn bot = connectAndRegister('C');
 
-        // Wait for first perception
-        JsonNode p1 = bot.capture.perceptions.poll(5, TimeUnit.SECONDS);
-        assertThat(p1).isNotNull();
-        int x = p1.get("self").get("x").asInt();
-        int y = p1.get("self").get("y").asInt();
+        Frame.TickFrame first = waitForTickFrame(bot, 5);
+        int x = first.curX();
+        int y = first.curY();
 
-        // Place rock to the east
+        // Place rock east.
         int rx = (x + 1) % worldGrid.getWidth();
         worldGrid.setEntity(rx, y, new Entity.Rock("test-rock"));
 
-        // Try to move east
-        sendAction(bot.session, "move", "E");
+        // Try to move east.
+        bot.send(new Frame.ActionFrame('M', Optional.of("6")));
 
-        // Wait for action result — should fail
-        JsonNode result = bot.capture.actionResults.poll(5, TimeUnit.SECONDS);
-        assertThat(result).isNotNull();
-        assertThat(result.get("success").asBoolean()).isFalse();
-        assertThat(result.get("reason").asText()).contains("rock");
+        // After 5 ticks, position must be unchanged AND the rock must be visible
+        // in the east numpad 6 slot.
+        Thread.sleep(1200);  // ~6 ticks
+        drainTicks(bot);
+        Frame.TickFrame latest = waitForTickFrame(bot, 5);
+        assertThat(latest.curX()).isEqualTo(x);
+        assertThat(latest.curY()).isEqualTo(y);
 
-        // Position should not have changed
-        JsonNode p2 = bot.capture.perceptions.poll(5, TimeUnit.SECONDS);
-        assertThat(p2).isNotNull();
-        assertThat(p2.get("self").get("x").asInt()).isEqualTo(x);
-        assertThat(p2.get("self").get("y").asInt()).isEqualTo(y);
-
-        log.info("Move into rock correctly rejected");
+        CellEntry east = latest.cells().stream()
+                .filter(ce -> ce.coord() instanceof Coord.Numpad n && n.digit() == '6')
+                .findFirst()
+                .orElseThrow();
+        assertThat(kindCodeOf(east))
+                .as("Rock should be visible at numpad 6 (east)")
+                .isEqualTo('R');
+        log.info("Move into rock correctly blocked — rock visible at east slot");
     }
 
     @Test
     void twoBotsConflictOnSameCell() throws Exception {
-        // Clear grid and set up two bots manually for precise positioning
         worldGrid.clear();
         botRegistry.clear();
 
-        var bot1 = connectBot("CATALYST");
-        JsonNode p1 = bot1.capture.perceptions.poll(5, TimeUnit.SECONDS);
-        assertThat(p1).isNotNull();
-        int x1 = p1.get("self").get("x").asInt();
-        int y1 = p1.get("self").get("y").asInt();
+        BotConn bot1 = connectAndRegister('C');
+        Frame.TickFrame p1 = waitForTickFrame(bot1, 5);
+        int x1 = p1.curX();
+        int y1 = p1.curY();
 
-        // Connect second bot
-        var capture2 = new MessageCapture();
-        var client2 = new StandardWebSocketClient();
-        var session2 = client2.execute(capture2, new WebSocketHttpHeaders(),
-                URI.create("ws://localhost:" + port + "/ws/world")).get(5, TimeUnit.SECONDS);
+        BotConn bot2 = connectAndRegister('M');
+        Frame.TickFrame p2 = waitForTickFrame(bot2, 5);
+        String bot2EntityId = bot2.entityId;
 
-        JsonNode w2 = capture2.welcomes.poll(5, TimeUnit.SECONDS);
-        assertThat(w2).isNotNull();
-
-        // Register second bot
-        session2.sendMessage(new TextMessage(objectMapper.writeValueAsString(
-                new java.util.LinkedHashMap<>() {{
-                    put("type", "register");
-                    put("entityType", "MEMBRANE");
-                }})));
-        JsonNode r2 = capture2.registered.poll(5, TimeUnit.SECONDS);
-        assertThat(r2).isNotNull();
-        String bot2EntityId = r2.get("entityId").asText();
-
-        // Wait for bot2 perception
-        JsonNode p2 = capture2.perceptions.poll(5, TimeUnit.SECONDS);
-        assertThat(p2).isNotNull();
-
-        // Reposition bot2 two cells east of bot1 so both target the same cell:
-        // bot1 at (x1, y1) moves E → target (x1+1, y1)
-        // bot2 at (x1+2, y1) moves W → target (x1+1, y1)
+        // Reposition bot2 two cells east of bot1 so both target the same cell.
         int bot2X = (x1 + 2) % worldGrid.getWidth();
         String bot2SessionId = botRegistry.getSessionForEntity(bot2EntityId).orElseThrow();
         Position bot2OldPos = botRegistry.getBySession(bot2SessionId).orElseThrow().position();
-        worldGrid.setEntity(bot2OldPos.x(), bot2OldPos.y(), null); // clear old position
+        worldGrid.setEntity(bot2OldPos.x(), bot2OldPos.y(), null);
         Entity.Particle bot2Entity = Entity.Particle.spawn(bot2EntityId, Entity.ParticleType.MEMBRANE);
         worldGrid.setEntity(bot2X, y1, bot2Entity);
         botRegistry.updatePosition(bot2SessionId, new Position(bot2X, y1));
 
-        // Both bots move toward the same target cell
-        sendAction(bot1.session, "move", "E");
-        sendAction(session2, "move", "W");
+        // Both target (x1+1, y1): bot1 moves E (6), bot2 moves W (4).
+        bot1.send(new Frame.ActionFrame('M', Optional.of("6")));
+        bot2.send(new Frame.ActionFrame('M', Optional.of("4")));
 
-        // Both should get results — exactly one succeeds, one fails
-        JsonNode result1 = bot1.capture.actionResults.poll(5, TimeUnit.SECONDS);
-        JsonNode result2 = capture2.actionResults.poll(5, TimeUnit.SECONDS);
-        assertThat(result1).as("Bot1 should receive action result").isNotNull();
-        assertThat(result2).as("Bot2 should receive action result").isNotNull();
+        // Wait for resolution ticks, then assert exactly one bot landed on (x1+1, y1).
+        Thread.sleep(1200);
+        int targetX = (x1 + 1) % worldGrid.getWidth();
+        var occupant = worldGrid.getCell(targetX, y1).occupant();
+        assertThat(occupant)
+                .as("Exactly one bot should occupy the contested cell")
+                .isInstanceOf(Entity.Particle.class);
 
-        boolean bot1Won = result1.get("success").asBoolean();
-        boolean bot2Won = result2.get("success").asBoolean();
+        // The non-winning bot should still have a living entity somewhere.
+        boolean bot1Won = occupant instanceof Entity.Particle p && p.id().equals(bot1.entityId);
+        boolean bot2Won = occupant instanceof Entity.Particle p && p.id().equals(bot2EntityId);
         assertThat(bot1Won ^ bot2Won)
-                .as("Exactly one bot should succeed when both target the same cell (bot1=%s, bot2=%s)",
-                        bot1Won, bot2Won)
+                .as("Exactly one bot should win the conflict")
                 .isTrue();
-
-        log.info("Conflict test: bot1={} bot2={} — winner: {}",
-                bot1Won, bot2Won, bot1Won ? "bot1" : "bot2");
-
-        try { session2.close(); } catch (Exception ignored) {}
+        log.info("Conflict test: bot1Won={} bot2Won={}", bot1Won, bot2Won);
     }
 
     @Test
     void restActionKeepsPosition() throws Exception {
-        var bot = connectBot("SPORE");
+        BotConn bot = connectAndRegister('S');
 
-        JsonNode p1 = bot.capture.perceptions.poll(5, TimeUnit.SECONDS);
-        assertThat(p1).isNotNull();
-        int x = p1.get("self").get("x").asInt();
-        int y = p1.get("self").get("y").asInt();
+        Frame.TickFrame first = waitForTickFrame(bot, 5);
+        int x = first.curX();
+        int y = first.curY();
 
-        sendAction(bot.session, "rest", null);
+        // "Rest" in the new protocol: submit an illegal move direction (no-op).
+        // Verb A with numpad digit 5 is rejected as invalid; V with self-vote
+        // ballot is the IRV equivalent of abstention. We simply do nothing —
+        // the tick loop keeps firing; position should not change.
+        Thread.sleep(600);  // ~3 ticks, no action submitted
+        drainTicks(bot);
 
-        JsonNode result = bot.capture.actionResults.poll(5, TimeUnit.SECONDS);
-        assertThat(result).isNotNull();
-        assertThat(result.get("success").asBoolean()).isTrue();
+        Frame.TickFrame after = waitForTickFrame(bot, 5);
+        assertThat(after.curX()).isEqualTo(x);
+        assertThat(after.curY()).isEqualTo(y);
+    }
 
-        JsonNode p2 = bot.capture.perceptions.poll(5, TimeUnit.SECONDS);
-        assertThat(p2).isNotNull();
-        assertThat(p2.get("self").get("x").asInt()).isEqualTo(x);
-        assertThat(p2.get("self").get("y").asInt()).isEqualTo(y);
+    // ── Connection harness ────────────────────────────────────────
+
+    private BotConn connectAndRegister(char species) throws Exception {
+        BotConn conn = new BotConn(port);
+        conn.connect();
+        // send r|<species>; wait for S|<entityId>
+        conn.send(new Frame.RegisterFrame(species));
+        Frame.SyncFrame sync = conn.waitForSync(5_000);
+        assertThat(sync).as("Register should elicit S sync frame").isNotNull();
+        conn.entityId = sync.entityId();
+        connections.add(conn);
+        return conn;
+    }
+
+    private static Frame.TickFrame waitForTickFrame(BotConn bot, int maxPoll) throws Exception {
+        for (int i = 0; i < maxPoll; i++) {
+            Frame.TickFrame tf = bot.tickQueue.poll(5_000, TimeUnit.MILLISECONDS);
+            if (tf != null) return tf;
+        }
+        return null;
+    }
+
+    private static Frame.TickFrame waitForTickWithNewPosition(BotConn bot, int oldX, int oldY, int maxPoll) throws Exception {
+        for (int i = 0; i < maxPoll; i++) {
+            Frame.TickFrame tf = bot.tickQueue.poll(5_000, TimeUnit.MILLISECONDS);
+            if (tf == null) return null;
+            if (tf.curX() != oldX || tf.curY() != oldY) return tf;
+        }
+        return null;
+    }
+
+    private static Frame.TickFrame waitForTickWithEnergyGreaterThan(BotConn bot, int threshold, int maxPoll) throws Exception {
+        for (int i = 0; i < maxPoll; i++) {
+            Frame.TickFrame tf = bot.tickQueue.poll(5_000, TimeUnit.MILLISECONDS);
+            if (tf == null) return null;
+            if (tf.energy() > threshold) return tf;
+        }
+        return null;
+    }
+
+    private static void drainTicks(BotConn bot) {
+        bot.tickQueue.clear();
+    }
+
+    private static Character kindCodeOf(CellEntry ce) {
+        return ce.kind().map(kd -> switch (kd) {
+            case KindData.Simple s -> s.code();
+            case KindData.RockSolo ignored -> 'R';
+            case KindData.RockRun run -> 'R';
+        }).orElse(null);
+    }
+
+    /** Per-bot Jetty connection + captured frame queues. */
+    static final class BotConn {
+        final int port;
+        WebSocketClient client;
+        Session session;
+        volatile String entityId;
+        final BlockingQueue<Frame.TickFrame> tickQueue = new LinkedBlockingQueue<>();
+        final BlockingQueue<Frame.SyncFrame> syncQueue = new LinkedBlockingQueue<>();
+        final BlockingQueue<Frame.ErrorFrame> errorQueue = new LinkedBlockingQueue<>();
+
+        BotConn(int port) {
+            this.port = port;
+        }
+
+        void connect() throws Exception {
+            client = new WebSocketClient();
+            client.start();
+            ClientUpgradeRequest req = new ClientUpgradeRequest();
+            req.addExtensions("permessage-deflate; server_no_context_takeover");
+            this.session = client.connect(new Endpoint(this),
+                            URI.create("ws://localhost:" + port + "/ws/world"), req)
+                    .get(10, TimeUnit.SECONDS);
+        }
+
+        void send(Frame frame) {
+            session.sendText(PerceptionCodec.encode(frame), Callback.NOOP);
+        }
+
+        Frame.SyncFrame waitForSync(long millis) throws InterruptedException {
+            return syncQueue.poll(millis, TimeUnit.MILLISECONDS);
+        }
+
+        void close() {
+            try {
+                if (session != null && session.isOpen()) {
+                    session.close(1000, "done", Callback.NOOP);
+                }
+            } catch (Exception ignored) { /* best-effort */ }
+            try {
+                if (client != null) client.stop();
+            } catch (Exception ignored) { /* best-effort */ }
+        }
+    }
+
+    @WebSocket
+    public static class Endpoint {
+        private final BotConn bot;
+
+        public Endpoint(BotConn bot) {
+            this.bot = bot;
+        }
+
+        @OnWebSocketOpen
+        public void onOpen(Session s) { /* captured by caller */ }
+
+        @OnWebSocketMessage
+        public void onMessage(String payload) {
+            try {
+                Frame f = PerceptionCodec.decode(payload);
+                switch (f) {
+                    case Frame.TickFrame t -> bot.tickQueue.add(t);
+                    case Frame.SyncFrame s -> bot.syncQueue.add(s);
+                    case Frame.ErrorFrame e -> bot.errorQueue.add(e);
+                    case Frame.RegisterFrame ignored -> { /* server never sends r */ }
+                    case Frame.ActionFrame ignored -> { /* server never sends a */ }
+                }
+            } catch (Exception e) {
+                log.warn("Frame decode failure: {}", e.getMessage());
+            }
+        }
     }
 }
