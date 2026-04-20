@@ -109,6 +109,13 @@ public class TickBroadcaster {
     private final SimulationConfig simulationConfig;
     private final AlarmQueue alarmQueue;
     private final WebSocketMetrics metrics;
+    /**
+     * Phase 15.2: injected lazily to avoid a bean cycle (Handler already
+     * depends on TickBroadcaster indirectly via bean graph). Nullable in
+     * mock-only unit tests that construct TickBroadcaster via the legacy
+     * ctor; guarded before use.
+     */
+    private WorldWebSocketHandler worldWebSocketHandler;
 
     /**
      * SCHEMA §8.5 g-block send-on-change: per-session last roster hash. Updated
@@ -135,9 +142,29 @@ public class TickBroadcaster {
         this.metrics = metrics;
     }
 
+    /**
+     * Phase 15.2: setter-injected to avoid the constructor cycle with
+     * {@link WorldWebSocketHandler} (the handler is a high-level bean, the
+     * broadcaster is low-level; setter on the low-level side is the standard
+     * Spring break-cycle pattern). {@code required = false} keeps the legacy
+     * mock-only unit tests working — they construct via the ctor and skip
+     * this setter.
+     */
+    @Autowired(required = false)
+    public void setWorldWebSocketHandler(@org.springframework.context.annotation.Lazy
+                                          WorldWebSocketHandler handler) {
+        this.worldWebSocketHandler = handler;
+    }
+
     @EventListener
     @Order(50) // After SimulationEngine(10) + ActionResolver(20) — tick-pipeline perception step.
     public void onTick(TickEvent event) {
+        // Phase 15.2: drain death notices BEFORE iterating live bots — sessions
+        // for bots that died this tick are no longer in getAllBots(), but are
+        // still open. Each gets a terminal vD frame (SCHEMA §8.4 Died) so the
+        // client's respawn FSM kicks off.
+        drainAndBroadcastDeaths(event.tickNumber());
+
         var bots = botRegistry.getAllBots();
         if (bots.isEmpty()) return;
 
@@ -172,6 +199,59 @@ public class TickBroadcaster {
             log.debug("Tick {} broadcast: sent={} failed={} bots={}",
                     event.tickNumber(), sent, failed, bots.size());
         }
+    }
+
+    // ── Death frame drain (Phase 15.2) ─────────────────────────────────
+
+    /**
+     * Phase 15.2: send a terminal {@code vD} frame to each session whose bot
+     * died this tick. The death notice queue is populated inside
+     * {@link BotRegistry#unregisterByEntity} — by the time this runs the
+     * bot is no longer in {@code getAllBots()}, so without this path the
+     * client would never see the own-death event and the respawn FSM
+     * would never fire (Phase 15 UAT Test 7 gap).
+     */
+    private void drainAndBroadcastDeaths(long tickId) {
+        var deaths = botRegistry.drainDeaths();
+        if (deaths.isEmpty()) return;
+        for (BotRegistry.DeathNotice dn : deaths) {
+            WebSocketSession session = sessionRegistry.getSession(dn.sessionId());
+            if (session == null || !session.isOpen()) continue;
+            // Clear the session's ATTR_ENTITY_ID so the next r| from this
+            // session is accepted as a respawn (not rejected E|409). In
+            // production DI this is always available; null only in legacy
+            // unit-test constructions that don't exercise the respawn path.
+            if (worldWebSocketHandler != null) {
+                worldWebSocketHandler.markDead(session);
+            }
+            try {
+                Frame.TickFrame frame = buildDeathFrame(tickId, dn.position());
+                String encoded = PerceptionCodec.encode(frame);
+                synchronized (session) {
+                    session.sendMessage(new TextMessage(encoded));
+                }
+                metrics.recordFrameSize(encoded.getBytes(StandardCharsets.UTF_8).length);
+            } catch (IOException e) {
+                log.warn("Failed to send death frame to session {}: {}", dn.sessionId(), e.getMessage());
+            } catch (RuntimeException e) {
+                log.warn("Death frame build failed for session {}: {}", dn.sessionId(), e.getMessage(), e);
+            }
+        }
+    }
+
+    /**
+     * Build a minimal-form terminal tick frame carrying a single {@code v|D}
+     * event (SCHEMA §8.4). Uses the dead entity's last known position, zero
+     * energy, and radius 0 — the client ignores everything but the event
+     * once it sees {@code D} (see {@code BotClient.onTick}).
+     */
+    Frame.TickFrame buildDeathFrame(long tickId, Position lastPos) {
+        List<Event> events = List.of(new Event('D', Optional.empty(), OptionalInt.empty()));
+        return new Frame.TickFrame(tickId, lastPos.x(), lastPos.y(),
+                /*energy=*/ 0, /*maxEnergy=*/ 0,
+                /*sensorRadius=*/ 0,
+                List.of(), Optional.empty(), List.of(), events,
+                Optional.empty(), List.of());
     }
 
     // ── Frame construction ─────────────────────────────────────────────
@@ -628,11 +708,12 @@ public class TickBroadcaster {
     // ── v block — events ───────────────────────────────────────────────
 
     /**
-     * Per-bot event list. MVP scope: drains AlarmQueue for LOCOMOTOR. Other
-     * event sources (own damage/eat/attack/lightning) flow through the
-     * engine's event queue which is not yet wired into TickBroadcaster —
-     * those events are produced but not projected onto the wire in plan 15-08.
-     * Plans 15-09+ wire the remaining event sources; this slot is ready.
+     * Per-bot event list for live bots. Own-death {@code vD} is NOT emitted
+     * here — by the time a bot dies, its registry entry is gone and this
+     * method is not called for it; {@link #drainAndBroadcastDeaths} handles
+     * the terminal frame instead (Phase 15.2). Other event sources (damage,
+     * eat, attack, lightning) flow through the engine's event queue which
+     * is not yet wired into TickBroadcaster — produced but not projected.
      */
     private List<Event> buildEventsForBot(BotRegistry.BotState bot, Entity occupant,
                                            long tickId, AuthorityTier tier) {

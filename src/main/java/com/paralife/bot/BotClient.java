@@ -61,6 +61,8 @@ public class BotClient {
     private final Random rng;
     private final AtomicInteger actionCount = new AtomicInteger();
     private final AtomicInteger perceptionCount = new AtomicInteger();
+    private final AtomicInteger syncCount = new AtomicInteger();
+    private final AtomicInteger respawnCount = new AtomicInteger();
     private final CountDownLatch connectedLatch = new CountDownLatch(1);
     private final CountDownLatch registeredLatch = new CountDownLatch(1);
     private final AtomicBoolean alive = new AtomicBoolean(false);
@@ -194,6 +196,15 @@ public class BotClient {
         return perceptionCount.get();
     }
 
+    /**
+     * Phase 15.2: count of successful re-registrations after a death event.
+     * Zero on the initial sync; increments once per server S frame received
+     * after a {@code vD} respawn cycle.
+     */
+    public int getRespawnCount() {
+        return respawnCount.get();
+    }
+
     /** Encode + send a frame. Silently no-ops if the session is not open. */
     private synchronized void sendFrame(Frame f) {
         Session s = this.session;
@@ -229,7 +240,11 @@ public class BotClient {
         // On re-sync after respawn, reset BotState to a fresh SOLO of the
         // original species — any prior bonded/composite state is gone on death.
         state.set(BotState.initial(species));
-        registeredLatch.countDown();
+        if (syncCount.getAndIncrement() == 0) {
+            registeredLatch.countDown();
+        } else {
+            respawnCount.incrementAndGet();
+        }
         log.info("Bot registered: entity={} species={}", entityId, species);
     }
 

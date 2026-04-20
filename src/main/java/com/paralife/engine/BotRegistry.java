@@ -5,7 +5,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,8 +33,18 @@ public class BotRegistry {
      */
     public record BotState(String sessionId, String entityId, Position position) {}
 
+    /**
+     * Phase 15.2: death notice captured at the moment a bot-controlled entity
+     * is unregistered due to death. Drained by {@code TickBroadcaster.onTick}
+     * so each dead bot's session receives a terminal {@code vD} (SCHEMA §8.4
+     * Died) frame before its entry is gone. Session stays open; client's
+     * respawn FSM kicks off on receipt.
+     */
+    public record DeathNotice(String sessionId, String entityId, Position position) {}
+
     private final ConcurrentHashMap<String, BotState> bySession = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> entityToSession = new ConcurrentHashMap<>();
+    private final List<DeathNotice> deathsThisTick = Collections.synchronizedList(new ArrayList<>());
 
     /**
      * Register a bot — associate a session with an entity at a position.
@@ -70,8 +83,28 @@ public class BotRegistry {
     public void unregisterByEntity(String entityId) {
         var sessionId = entityToSession.remove(entityId);
         if (sessionId != null) {
-            bySession.remove(sessionId);
+            var prior = bySession.remove(sessionId);
+            if (prior != null) {
+                // Phase 15.2: queue death notice so TickBroadcaster can emit the
+                // terminal vD frame on the next tick. Keeps the session open;
+                // only the entity-binding is gone.
+                deathsThisTick.add(new DeathNotice(sessionId, entityId, prior.position()));
+            }
             log.debug("Bot unregistered (entity death): entity={} session={}", entityId, sessionId);
+        }
+    }
+
+    /**
+     * Phase 15.2: drain death notices captured since the last call. Called by
+     * {@code TickBroadcaster.onTick} at the top of the broadcast step. Returns
+     * an empty list when no deaths occurred.
+     */
+    public List<DeathNotice> drainDeaths() {
+        synchronized (deathsThisTick) {
+            if (deathsThisTick.isEmpty()) return List.of();
+            var copy = new ArrayList<>(deathsThisTick);
+            deathsThisTick.clear();
+            return copy;
         }
     }
 

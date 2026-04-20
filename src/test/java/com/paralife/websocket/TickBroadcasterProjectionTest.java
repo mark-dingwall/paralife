@@ -461,6 +461,63 @@ class TickBroadcasterProjectionTest {
                 .isEqualTo(0);
     }
 
+    // ── Phase 15.2: death frame (vD) ───────────────────────────────────
+
+    @Test
+    void deathNoticeEmitsTerminalVDFrame() throws Exception {
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.getId()).thenReturn("s1");
+        when(session.isOpen()).thenReturn(true);
+        sessionRegistry.register(session);
+
+        // Register then unregister — unregisterByEntity queues a DeathNotice.
+        botRegistry.register("s1", "e1", new Position(5, 5));
+        botRegistry.unregisterByEntity("e1");
+
+        org.mockito.ArgumentCaptor<TextMessage> captor =
+                org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        broadcaster.onTick(new TickEvent(42));
+
+        verify(session).sendMessage(captor.capture());
+        String payload = captor.getValue().getPayload();
+        // SCHEMA §8.4 "Died" event: lone D in the v block. The v-block marker
+        // `v` is followed immediately by the event code (no separator); the
+        // block itself is preceded by a `|`. So the wire substring is `|vD`.
+        assertThat(payload).contains("|vD");
+        assertThat(payload).startsWith("T|");
+    }
+
+    @Test
+    void deathFrameBuildsMinimalFormWithSingleDEvent() {
+        Frame.TickFrame frame = broadcaster.buildDeathFrame(7L, new Position(3, 4));
+
+        assertThat(frame.tickId()).isEqualTo(7L);
+        assertThat(frame.curX()).isEqualTo(3);
+        assertThat(frame.curY()).isEqualTo(4);
+        assertThat(frame.energy()).isZero();
+        assertThat(frame.maxEnergy()).isZero();
+        assertThat(frame.sensorRadius()).isZero();
+        assertThat(frame.cells()).isEmpty();
+        assertThat(frame.events()).hasSize(1);
+        assertThat(frame.events().get(0).code()).isEqualTo('D');
+    }
+
+    @Test
+    void onTickWithNoDeathsDoesNotBlockLiveBots() throws Exception {
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.getId()).thenReturn("s1");
+        when(session.isOpen()).thenReturn(true);
+        sessionRegistry.register(session);
+
+        Particle particle = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(5, 5, particle);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        broadcaster.onTick(new TickEvent(1));
+        // One message for the live bot, zero death frames (no notices queued).
+        verify(session, times(1)).sendMessage(any(TextMessage.class));
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────
 
     private static Optional<CellEntry> findNumpadEntry(Frame.TickFrame frame, char digit) {

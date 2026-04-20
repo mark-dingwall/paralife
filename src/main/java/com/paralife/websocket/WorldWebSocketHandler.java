@@ -268,6 +268,9 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
      */
     public void markDead(WebSocketSession session) {
         if (session == null) return;
-        session.getAttributes().put(ATTR_ENTITY_ID, null);
+        // Jetty's session attributes is a ConcurrentHashMap — put(k, null) NPEs.
+        // Removing the entry has the same effect: handleRegister reads with
+        // get(), null return means "no active entity" → accept as respawn.
+        session.getAttributes().remove(ATTR_ENTITY_ID);
     }
 }
