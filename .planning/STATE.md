@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Combination & Emergence
 current_phase: 15
 current_phase_name: Protocol & Transport Overhaul
-current_plan: 7
+current_plan: 8
 status: executing
-stopped_at: Phase 15 wave 3 plan 06 complete (6/11 plans) — codec-driven handler + Frame.ActionFrame verb dispatch + IRV + AlarmQueue; Messages.java partial strip; IRVVoteResolverTest + WorldWebSocketHandlerTest green; 13 pre-existing failures (deferred-registry / 15-11)
-last_updated: "2026-04-20T04:11:00.000Z"
+stopped_at: Phase 15 wave 4 plan 07 complete (7/11 plans) — rename engine/PerceptionBroadcaster → websocket/TickBroadcaster with verbatim D-40 mask-and-OR; old heartbeat broadcaster + test + LegacyTickHeartbeat shim deleted; three perception tests moved to com.paralife.websocket package; VisionScopedOvercrowdingTest added to build.gradle.kts exclusion (15-11 migrates body); 532/13/3 tests, 13 pre-existing failures unchanged
+last_updated: "2026-04-20T04:35:00.000Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 29
-  completed_plans: 23
-  percent: 79
+  completed_plans: 24
+  percent: 83
 ---
 
 # Project State
@@ -31,17 +31,17 @@ See: .planning/PROJECT.md
 **Current Phase:** 15
 **Current Phase Name:** Protocol & Transport Overhaul
 **Total Phases:** 16
-**Current Plan:** 7
+**Current Plan:** 8
 **Total Plans in Phase:** 11
-**Progress:** [███████░░░] 54%
+**Progress:** [████████░░] 83%
 **Last Activity:** 2026-04-20
 
 ## Current Position
 
 Phase: 15 (Protocol & Transport Overhaul) — EXECUTING
-Plan: 7 of 11 (plan 6 complete; wave 3 in flight)
+Plan: 8 of 11 (plans 1–7 complete; wave 4 complete; wave 5 up next)
 Status: Executing
-Last activity: 2026-04-20 -- Plan 15-06 complete (codec-driven handler + IRV + AlarmQueue; Messages partial strip)
+Last activity: 2026-04-20 -- Plan 15-07 complete (rename engine/PerceptionBroadcaster → websocket/TickBroadcaster with verbatim D-40 mask-and-OR; heartbeat broadcaster + test + LegacyTickHeartbeat shim deleted)
 
 ## Accumulated Context
 
@@ -49,6 +49,7 @@ Last activity: 2026-04-20 -- Plan 15-06 complete (codec-driven handler + IRV + A
 
 7 decisions made during v1.0 (D001-D007). See PROJECT.md Key Decisions table.
 Phase 14: 48 decisions captured in 14-CONTEXT.md.
+Phase 15 plan 07: Test package alignment chosen over widening package-private seams — CompositePerceptionTest, VisionScopedOvercrowdingTest, TickBroadcasterProjectionTest moved to com.paralife.websocket to preserve encapsulation.
 
 ### Blockers/Concerns
 
@@ -56,20 +57,29 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-20T04:11:00.000Z
-Stopped at: Plan 15-06 complete. Wave 3 began. Codec-driven WorldWebSocketHandler
-with session FSM + respawn cap; ActionResolver rewritten around Frame.ActionFrame
-verb dispatch M/E/A/R/V/L per SCHEMA §8.6; IRV replaces plurality for LOCOMOTOR
-votes (static package-private for same-package test access); AlarmQueue bean
-created as verb-L sink (drain wiring lands in plan 15-08). Messages.java partial
-strip: deleted Welcome/Registered/Heartbeat/Register/Action/ActionResult/Tick/
-CompositeAction/CompositeJoined; retained CellView/Perception/EntityState/
-CompositePerception (consumers migrate in 15-08/09/11).
-Deviations: TickBroadcaster got a local LegacyTickHeartbeat DTO (Rule 3) to
-keep compileJava green and the narrowed Messages.* strip grep passing until
-plan 15-07 rewrites it around Frame.TickFrame. 5 orphaned test classes
-excluded via build.gradle.kts (plan 15-11 migrates them).
-Test state: 547 tests, 13 failures (all pre-existing deferred-registry bucket).
-New tests IRVVoteResolverTest + WorldWebSocketHandlerTest all green (7 tests).
-Resume file: .planning/phases/15-protocol-transport-overhaul/15-07-PLAN.md
+Last session: 2026-04-20T04:35:00.000Z
+Stopped at: Plan 15-07 complete. Wave 4 complete (solo plan).
+Task 1: deleted src/main/java/com/paralife/websocket/TickBroadcaster.java
+(95-line heartbeat + LegacyTickHeartbeat shim) + its test per D-02 — no
+@Autowired/@MockBean references existed, only Javadoc.
+Task 2: git mv src/main/java/com/paralife/engine/PerceptionBroadcaster.java
+→ src/main/java/com/paralife/websocket/TickBroadcaster.java (96% similar,
+git log --follow intact back to 2025). Package+class renamed, 7 cross-
+package imports added (BotRegistry/BuffRegistry/CompositeRegistry/
+EntityIds/EnvironmentEngine/SimulationConfig/TickEvent). Phase-14 D-40
+vision-scoped OVERCROWDED mask-and-OR at line 400 preserved VERBATIM
+per threat T-15-03 mitigation. @Component + @EventListener @Order(50)
+intact. Test migrations: PerceptionBroadcasterTest → TickBroadcaster-
+ProjectionTest + CompositePerceptionTest + VisionScopedOvercrowdingTest
+moved to com.paralife.websocket (package-private seam access). Vision-
+ScopedOvercrowdingTest added to build.gradle.kts exclusion block —
+SimulationEngine.OVERCROWDED_THRESHOLD_DEFAULT is package-private in
+com.paralife.engine; 15-11 migrates the test body.
+Commits: 5be9a70 (Task 1 delete heartbeat), fe1f5cb (Task 2 rename).
+Test state: 532 tests, 13 failures, 3 skipped. Failure count unchanged
+from 547/13/3 baseline (−9 deleted heartbeat tests, −6 excluded
+VisionScopedOvercrowdingTest). 13 pre-existing deferred-registry bucket.
+Wire path temporarily incoherent (handler on codec, TickBroadcaster on
+Jackson/Messages) — by design until plan 15-08 rewrites the projection.
+Resume file: .planning/phases/15-protocol-transport-overhaul/15-08-PLAN.md
 Next command: /gsd-execute-phase 15
