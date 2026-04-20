@@ -57,8 +57,17 @@ public record EnvironmentConfig(
             int innerRadius,
             int outerRadius,
             int damage,
-            int fertilityBoost
+            int fertilityBoost,
+            int fleeingTicks
     ) {
+        /**
+         * Plan 15-08 Task 2 (SCHEMA §9 D-50 #9): default FLEEING duration.
+         * Survivors in the outer damage radius flee for this many ticks after
+         * the strike. Bots consume the f{@code F:<expiry>:<XXYY>} effect via
+         * the codec and steer away from the stored strike coord.
+         */
+        public static final int DEFAULT_FLEEING_TICKS = 8;
+
         public Lightning {
             if (peakSeason == null)
                 throw new IllegalArgumentException("lightning.peakSeason required");
@@ -76,10 +85,23 @@ public record EnvironmentConfig(
                 throw new IllegalArgumentException("lightning.damage must be >= 0: " + damage);
             if (fertilityBoost < 0)
                 throw new IllegalArgumentException("lightning.fertilityBoost must be >= 0: " + fertilityBoost);
+            if (fleeingTicks < 0)
+                throw new IllegalArgumentException("lightning.fleeingTicks must be >= 0: " + fleeingTicks);
+        }
+
+        /**
+         * 7-arg back-compat constructor: any pre-15-08 call site that did not
+         * pass {@code fleeingTicks} gets {@link #DEFAULT_FLEEING_TICKS}. Keeps
+         * existing tests compiling without a touch.
+         */
+        public Lightning(Season peakSeason, double peakLambda, double offSeasonLambda,
+                         int innerRadius, int outerRadius, int damage, int fertilityBoost) {
+            this(peakSeason, peakLambda, offSeasonLambda, innerRadius, outerRadius, damage,
+                    fertilityBoost, DEFAULT_FLEEING_TICKS);
         }
 
         public static Lightning defaults() {
-            return new Lightning(Season.SUMMER, 0.04, 0.005, 2, 4, 40, 25);
+            return new Lightning(Season.SUMMER, 0.04, 0.005, 2, 4, 40, 25, DEFAULT_FLEEING_TICKS);
         }
     }
 

@@ -107,6 +107,9 @@ paralife:
         outer-radius: 4
         damage: 40
         fertility-boost: 25
+        # Plan 15-08 Task 2 (SCHEMA §8.3 D-50 #9): FLEEING effect duration in ticks.
+        # Survivors in the outer damage radius flee for this many ticks after a strike.
+        fleeing-ticks: 8
       toxin:
         peak-season: AUTUMN
         peak-lambda: 0.03

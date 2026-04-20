@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Phase 14 environmental-rules tick-pipeline component (D-45, D-46).
@@ -160,6 +161,41 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     private final Map<String, Byte> entityStatusCache = new HashMap<>();
 
     /**
+     * Plan 15-08 Task 2 (SCHEMA §8.3 D-50 #9): active FLEEING effect per entity.
+     *
+     * <p>Sibling registry rather than a {@link BuffType#FLEEING} extension —
+     * FLEEING carries 2 extra ints (abs strike coord) that do not fit the flat
+     * {@link BuffRegistry.ActiveBuff} record. Extending {@code ActiveBuff} with a
+     * nullable {@code int[] ctx} would touch every callsite of
+     * {@code BuffRegistry} for a single effect type; a sibling map is a smaller
+     * diff and keeps FLEEING lifetime isolated from mutagen buff dedup /
+     * transfer semantics. See 15-08-SUMMARY.md "FLEEING storage decision".
+     *
+     * <p>Read path: {@link com.paralife.websocket.TickBroadcaster} calls
+     * {@link #getFleeing(String)} during f-block projection. Expiry sweep runs
+     * each tick in {@link #onTick} alongside {@link BuffRegistry#expireBuffs}.
+     */
+    private final Map<String, Fleeing> fleeing = new ConcurrentHashMap<>();
+
+    /**
+     * Active FLEEING state: when it expires and which abs strike coord the
+     * entity is fleeing from. Immutable — callers never mutate the instance.
+     *
+     * @param expiryTick absolute world tick at which the effect drops
+     * @param strikeX    abs x of the lightning centre that triggered the flee
+     * @param strikeY    abs y of the lightning centre that triggered the flee
+     */
+    public record Fleeing(long expiryTick, int strikeX, int strikeY) {
+        public Fleeing {
+            if (expiryTick < 0) throw new IllegalArgumentException("expiryTick negative: " + expiryTick);
+            if (strikeX < 0 || strikeX > 4095)
+                throw new IllegalArgumentException("strikeX out of range: " + strikeX);
+            if (strikeY < 0 || strikeY > 4095)
+                throw new IllegalArgumentException("strikeY out of range: " + strikeY);
+        }
+    }
+
+    /**
      * Short-circuit flag (cycle-5 contract). Env damage sites in plans 02/03/04
      * call {@link #markEnvDamageApplied()} when a write may have reached zero
      * energy. {@link #processEnvDeaths()} skips the full-grid scan when this
@@ -242,6 +278,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             cellStatusCache.clear();
             entityStatusCache.clear();
             buffRegistry.expireBuffs(event.tickNumber());
+            // Plan 15-08 Task 2: sweep expired FLEEING records each tick so
+            // TickBroadcaster's f-block projection never emits stale entries.
+            expireFleeing(event.tickNumber());
 
             if (!config.enabled()) {
                 envDamageAppliedThisTick = false;
@@ -862,11 +901,14 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
 
         // Increment BEFORE apply (attempted-strike semantics).
         lightningStrikeCount++;
-        applyLightningAt(cx, cy, config.lightning());
-        log.info("Lightning strike: tick={} center=({},{}) inner={} outer={} damage={} fertility={}",
+        // Plan 15-08 Task 2: production lightning path grants FLEEING to outer-ring
+        // survivors so TickBroadcaster emits fF:<expiry>:<XXYY> next tick.
+        applyLightningAtInternal(cx, cy, config.lightning(), tickNumber);
+        log.info("Lightning strike: tick={} center=({},{}) inner={} outer={} damage={} fertility={} fleeing={}",
                 tickNumber, cx, cy,
                 config.lightning().innerRadius(), config.lightning().outerRadius(),
-                config.lightning().damage(), config.lightning().fertilityBoost());
+                config.lightning().damage(), config.lightning().fertilityBoost(),
+                config.lightning().fleeingTicks());
     }
 
     /**
@@ -907,14 +949,30 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
      * before addressing the grid.
      */
     void applyLightningAt(int cx, int cy, EnvironmentConfig.Lightning cfg) {
+        applyLightningAtInternal(cx, cy, cfg, -1L);
+    }
+
+    /**
+     * Plan 15-08 Task 2 — version of {@link #applyLightningAt} that also
+     * populates the FLEEING map with abs strike coord for any alive occupant in
+     * the outer damage ring (and the inner-radius survivors with {@code energy > 0}
+     * after damage). Called by {@link #spawnLightning} which passes the current
+     * tick number; test helpers call the public {@code applyLightningAt} and
+     * {@code applyLightningAtForTest} which do NOT populate FLEEING (tick number
+     * unknown at those sites).
+     */
+    private void applyLightningAtInternal(int cx, int cy, EnvironmentConfig.Lightning cfg, long tickNumber) {
         int w = worldGrid.getWidth();
         int h = worldGrid.getHeight();
         int inner = cfg.innerRadius();
         int outer = cfg.outerRadius();
         int damage = cfg.damage();
         int boost = cfg.fertilityBoost();
+        int fleeTicks = cfg.fleeingTicks();
         int maxNutrient = fertilityConfig.maxLevel();
         boolean anyDamage = false;
+        boolean fleeEnabled = tickNumber >= 0 && fleeTicks > 0;
+        long fleeExpiry = fleeEnabled ? tickNumber + fleeTicks : -1L;
 
         for (int dx = -outer; dx <= outer; dx++) {
             for (int dy = -outer; dy <= outer; dy++) {
@@ -927,11 +985,22 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 if (dist <= inner) {
                     if (damageEntityAt(x, y, cell, damage)) {
                         anyDamage = true;
+                        // Post-damage survivor still flees. applyLightningAt-style
+                        // damage writes a new occupant via withEnergy; re-read the
+                        // cell to see the post-write energy.
+                        if (fleeEnabled) {
+                            Cell postCell = worldGrid.getCell(x, y);
+                            recordFleeingAt(postCell.occupant(), fleeExpiry, cx, cy);
+                        }
                     }
                 } else {
-                    // Outer ring (inner < dist <= outer): fertility boost.
+                    // Outer ring (inner < dist <= outer): fertility boost +
+                    // FLEEING for any live occupant in the ring (no damage).
                     int bumped = Math.min(cell.nutrientLevel() + boost, maxNutrient);
                     worldGrid.setCell(x, y, cell.withNutrientLevel(bumped));
+                    if (fleeEnabled) {
+                        recordFleeingAt(cell.occupant(), fleeExpiry, cx, cy);
+                    }
                 }
             }
         }
@@ -939,6 +1008,19 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         if (anyDamage) {
             markEnvDamageApplied();
         }
+    }
+
+    /**
+     * Grant FLEEING to {@code occ} if it is a live active entity. Rocks and
+     * nutrients are skipped (no id, no bot consuming f-block).
+     */
+    private void recordFleeingAt(Entity occ, long expiryTick, int strikeX, int strikeY) {
+        if (!isAliveEntity(occ)) return;
+        String id = EntityIds.entityIdOf(occ);
+        if (id == null) return;
+        // Longer expiry wins — matches BuffRegistry.grant dedup (D-06 semantics).
+        fleeing.merge(id, new Fleeing(expiryTick, strikeX, strikeY),
+                (existing, incoming) -> incoming.expiryTick() > existing.expiryTick() ? incoming : existing);
     }
 
     /**
@@ -1072,6 +1154,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         }
         cellStatusCache.clear();
         entityStatusCache.clear();
+        fleeing.clear();
         envDamageAppliedThisTick = false;
         lightningStrikeCount = 0L;
         toxinEventCount = 0L;
@@ -1137,6 +1220,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             cellStatusCache.clear();
             entityStatusCache.clear();
             buffRegistry.expireBuffs(tickNumber);
+            expireFleeing(tickNumber);
 
             if (!config.enabled()) {
                 envDamageAppliedThisTick = false;
@@ -1400,5 +1484,28 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     public byte getEntityStatus(String entityId) {
         Byte b = entityStatusCache.get(entityId);
         return b == null ? (byte) 0 : b;
+    }
+
+    /**
+     * Plan 15-08 Task 2 — return the active {@link Fleeing} record for an
+     * entity, or {@code null} if none is active. Consumer is
+     * {@link com.paralife.websocket.TickBroadcaster}'s f-block projection:
+     * {@code fF:<expiry>:<XXYY>} per SCHEMA §8.3. Returns immutable record —
+     * safe to read concurrently.
+     */
+    public Fleeing getFleeing(String entityId) {
+        if (entityId == null) return null;
+        return fleeing.get(entityId);
+    }
+
+    /** Plan 15-08 Task 2 — drop any FLEEING entries at/past {@code currentTick}. */
+    void expireFleeing(long currentTick) {
+        fleeing.entrySet().removeIf(e -> e.getValue().expiryTick() <= currentTick);
+    }
+
+    /** Plan 15-08 Task 2 — test helper: directly grant FLEEING (used by ZeroTrust test). */
+    void grantFleeingForTest(String entityId, long expiryTick, int strikeX, int strikeY) {
+        if (entityId == null) return;
+        fleeing.put(entityId, new Fleeing(expiryTick, strikeX, strikeY));
     }
 }
