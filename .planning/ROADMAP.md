@@ -127,9 +127,9 @@ Plans:
 **Goal:** Replace JSON per-tick messaging with compact text perception protocol; switch container Tomcat→Jetty; enable permessage-deflate with server_no_context_takeover on both sides; redesign bots as stateless reactive agents; zero-trust vision filtering
 **Depends on:** Phase 14 (env effects provide diverse message types to exercise codec)
 **Requirements:** R20, R21, R22, R23, R24, R25, R26, R27, R28, R29
-**Plans:** 11 plans
+**Plans:** 1/11 plans executed
 Plans:
-- [ ] 15-01-PLAN.md — Housekeeping: ROADMAP fan-out-criterion removal + REQUIREMENTS R20-R29 add (R15-R19 remap to Phase 16)
+- [x] 15-01-PLAN.md — Housekeeping: ROADMAP fan-out-criterion removal + REQUIREMENTS R20-R29 add (R15-R19 remap to Phase 16)
 - [ ] 15-02-PLAN.md — Codec package scaffolding (Frame/Coord/KindData sealed hierarchies, Base64Codec, ParseCursor, CodecException, stub PerceptionCodec, RED 13-vector test)
 - [ ] 15-03-PLAN.md — Container swap + Jetty deflate customizer + handshake + refusal integration tests
 - [ ] 15-04-PLAN.md — PNG-based rock generation (RockConfig + RockGenerator + 5 perlin PNGs + determinism test)
