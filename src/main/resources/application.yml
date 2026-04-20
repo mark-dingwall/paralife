@@ -33,6 +33,13 @@ paralife:
   tick:
     interval-ms: 500
     auto-start: true
+  websocket:
+    # Phase 15 UAT Test 7 follow-up: RFC 6455 server→client PING cadence (ticks).
+    # 30 ticks × 500ms = 15s — comfortably under the idle-timeout cap below.
+    keepalive-ticks: 30
+    # Jetty server-side read-idle close, defensive fallback if pings fail.
+    # Must be > 2 × (keepaliveTicks × tick.interval-ms).
+    idle-timeout-ms: 60000
   simulation:
     energy-decay-per-tick: 1
     combat-energy-transfer: 10

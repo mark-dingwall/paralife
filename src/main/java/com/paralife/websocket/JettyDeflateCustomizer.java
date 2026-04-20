@@ -8,9 +8,11 @@ import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -58,15 +60,25 @@ public class JettyDeflateCustomizer {
 
     /**
      * The {@link JettyRequestUpgradeStrategy} Spring uses to drive Jetty's native
-     * upgrade. Kept at Jetty default configuration — Jetty 12 already registers
-     * {@code permessage-deflate} in its extension factory registry, so extension
-     * negotiation happens automatically when the (wrapped) request advertises it.
-     * The deflate-specific policy (refusal + forced {@code server_no_context_takeover})
-     * is applied earlier in the pipeline by {@link #deflateEnforcementFilter()}.
+     * upgrade. Jetty 12 already registers {@code permessage-deflate} in its extension
+     * factory registry, so extension negotiation happens automatically when the
+     * (wrapped) request advertises it. The deflate-specific policy (refusal + forced
+     * {@code server_no_context_takeover}) is applied earlier in the pipeline by
+     * {@link #deflateEnforcementFilter()}.
+     *
+     * <p>Idle timeout is raised from Jetty's 30s default to {@code idleTimeoutMs}
+     * (default 60s) via {@link JettyRequestUpgradeStrategy#addWebSocketConfigurer}.
+     * This is the defensive belt to the keepaliveservice's braces — if server-side
+     * pings somehow fail (peer vanishes, socket stuck), the connection still closes
+     * within the configured window. Keepalive ping cadence must stay well under this.
      */
     @Bean
-    public JettyRequestUpgradeStrategy jettyRequestUpgradeStrategy() {
-        return new JettyRequestUpgradeStrategy();
+    public JettyRequestUpgradeStrategy jettyRequestUpgradeStrategy(
+            @Value("${paralife.websocket.idle-timeout-ms:60000}") long idleTimeoutMs) {
+        JettyRequestUpgradeStrategy strategy = new JettyRequestUpgradeStrategy();
+        Duration idleTimeout = Duration.ofMillis(idleTimeoutMs);
+        strategy.addWebSocketConfigurer(c -> c.setIdleTimeout(idleTimeout));
+        return strategy;
     }
 
     @Bean
