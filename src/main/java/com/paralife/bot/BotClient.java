@@ -3,99 +3,187 @@
 // module split while the protocol is still evolving.
 package com.paralife.bot;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.paralife.websocket.Messages;
+import com.paralife.codec.Frame;
+import com.paralife.codec.PerceptionCodec;
+import org.eclipse.jetty.websocket.api.Callback;
+import org.eclipse.jetty.websocket.api.Session;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketError;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketOpen;
+import org.eclipse.jetty.websocket.api.annotations.WebSocket;
+import org.eclipse.jetty.websocket.client.ClientUpgradeRequest;
+import org.eclipse.jetty.websocket.client.WebSocketClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketHttpHeaders;
-import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.client.standard.StandardWebSocketClient;
-import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Random;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * A bot client that connects to the paralife server via WebSocket,
- * receives perception messages, and submits actions using a {@link HeuristicBrain}.
+ * Paralife bot WebSocket client. Connects via Jetty 12's native
+ * {@link WebSocketClient}, negotiates {@code permessage-deflate} and enforces
+ * D-33 (fails fast if the server doesn't echo the extension), and drives a
+ * pure-function {@link HeuristicBrain} over decoded {@link Frame.TickFrame}s.
+ *
+ * <p><b>Phase 15 (plan 15-09) refactor:</b>
+ * <ul>
+ *   <li>Transport swapped from Spring's {@code StandardWebSocketClient} (no
+ *       public extension API) to Jetty-native {@link WebSocketClient}, which
+ *       accepts {@code permessage-deflate; server_no_context_takeover} via
+ *       {@link ClientUpgradeRequest#addExtensions(String...)}.</li>
+ *   <li>Jackson removed. All wire I/O goes through
+ *       {@link PerceptionCodec#encode} / {@link PerceptionCodec#decode}.</li>
+ *   <li>{@link BotState} replaces the overloaded {@code currentType} char —
+ *       species, embodiment, and compositeRole are orthogonal per SCHEMA §8.2.</li>
+ *   <li>Respawn FSM: on receiving a {@code v<...>D} (died) event, the client
+ *       does NOT close the session — it waits a randomised cooldown, then
+ *       sends {@code r|<species>} again. Server resolves with {@code S} or
+ *       {@code E|429}.</li>
+ * </ul>
  */
 public class BotClient {
 
     private static final Logger log = LoggerFactory.getLogger(BotClient.class);
 
     private final String serverUri;
-    private final String entityType;
+    private final char species;                  // invariant across bot lifetime (C/M/S)
     private final HeuristicBrain brain;
-    private final ObjectMapper objectMapper;
-
-    private volatile WebSocketSession session;
-    private volatile String entityId;
-    private volatile boolean registered = false;
-    private final AtomicInteger actionCount = new AtomicInteger(0);
-    private final AtomicInteger perceptionCount = new AtomicInteger(0);
+    private final long respawnCooldownMs;
+    private final long respawnJitterMs;
+    private final Random rng;
+    private final AtomicInteger actionCount = new AtomicInteger();
+    private final AtomicInteger perceptionCount = new AtomicInteger();
     private final CountDownLatch connectedLatch = new CountDownLatch(1);
     private final CountDownLatch registeredLatch = new CountDownLatch(1);
+    private final AtomicBoolean alive = new AtomicBoolean(false);
+    private final AtomicReference<BotState> state;
 
-    public BotClient(String serverUri, String entityType) {
+    private WebSocketClient client;
+    private volatile Session session;
+    private volatile String entityId;
+
+    public BotClient(String serverUri, char species, HeuristicBrain brain) {
+        this(serverUri, species, brain, 100L, 50L, ThreadLocalRandom.current());
+    }
+
+    public BotClient(String serverUri, char species, HeuristicBrain brain,
+                     long respawnCooldownMs, long respawnJitterMs) {
+        this(serverUri, species, brain, respawnCooldownMs, respawnJitterMs,
+                ThreadLocalRandom.current());
+    }
+
+    public BotClient(String serverUri, char species, HeuristicBrain brain,
+                     long respawnCooldownMs, long respawnJitterMs, Random rng) {
+        if (species != 'C' && species != 'M' && species != 'S') {
+            throw new IllegalArgumentException("species must be C/M/S: " + species);
+        }
         this.serverUri = serverUri;
-        this.entityType = entityType;
-        this.brain = new HeuristicBrain();
-        this.objectMapper = new ObjectMapper();
+        this.species = species;
+        this.brain = brain;
+        this.respawnCooldownMs = respawnCooldownMs;
+        this.respawnJitterMs = respawnJitterMs;
+        this.rng = rng;
+        this.state = new AtomicReference<>(BotState.initial(species));
     }
 
     /**
-     * Connect to the server and start the bot loop.
-     * Returns immediately — perception handling runs asynchronously.
+     * Connect to the server. After the upgrade resolves, enforce D-33
+     * client-side by inspecting the response's {@code Sec-WebSocket-Extensions}
+     * header. If the server omitted {@code permessage-deflate}, close the
+     * session and throw {@link IllegalStateException}.
+     *
+     * <p>Immediately after the D-33 gate passes, sends the initial
+     * {@code r|<species>} register frame.
      */
     public void connect() throws Exception {
-        var client = new StandardWebSocketClient();
-        var handler = new BotWebSocketHandler();
+        client = new WebSocketClient();
+        client.start();
 
-        session = client.execute(handler, new WebSocketHttpHeaders(),
-                URI.create(serverUri)).get(10, TimeUnit.SECONDS);
+        ClientUpgradeRequest req = new ClientUpgradeRequest();
+        req.addExtensions("permessage-deflate; server_no_context_takeover");
+
+        Endpoint endpoint = new Endpoint();
+        Session connected = client.connect(endpoint, URI.create(serverUri), req)
+                .get(10, TimeUnit.SECONDS);
+        this.session = connected;
+
+        // D-33 client-side enforcement — reject any upgrade response that lacks
+        // permessage-deflate. Mitigation for threat T-15-02 (extension downgrade).
+        String serverExt = connected.getUpgradeResponse().getHeader("Sec-WebSocket-Extensions");
+        if (serverExt == null || !serverExt.contains("permessage-deflate")) {
+            connected.close(1002, "Server did not negotiate permessage-deflate",
+                    Callback.NOOP);
+            throw new IllegalStateException(
+                    "permessage-deflate not negotiated by server: " + serverExt);
+        }
 
         connectedLatch.countDown();
-        log.info("Bot connected: type={} uri={}", entityType, serverUri);
+        log.info("Bot connected: species={} uri={}", species, serverUri);
+
+        // Send initial register frame immediately; server responds with S|<id>.
+        sendFrame(new Frame.RegisterFrame(species));
     }
 
-    /**
-     * Wait until the bot has registered with the server.
-     */
-    public boolean waitForRegistered(long timeout, TimeUnit unit) throws InterruptedException {
-        return registeredLatch.await(timeout, unit);
-    }
-
-    /**
-     * Disconnect the bot from the server.
-     */
+    /** Disconnect the bot and stop the underlying Jetty client. */
     public void disconnect() {
-        if (session != null && session.isOpen()) {
-            try {
-                session.close();
+        try {
+            Session s = this.session;
+            if (s != null && s.isOpen()) {
+                s.close(1000, "client disconnect", Callback.NOOP);
                 log.info("Bot disconnected: entity={}", entityId);
-            } catch (Exception e) {
-                log.warn("Error disconnecting bot: {}", e.getMessage());
             }
+        } catch (Exception e) {
+            log.warn("Error closing session: {}", e.getMessage());
+        }
+        try {
+            if (client != null) {
+                client.stop();
+            }
+        } catch (Exception e) {
+            log.warn("Error stopping client: {}", e.getMessage());
         }
     }
 
     public boolean isConnected() {
-        return session != null && session.isOpen();
+        Session s = this.session;
+        return s != null && s.isOpen();
     }
 
     public boolean isRegistered() {
-        return registered;
+        return entityId != null;
     }
 
     public String getEntityId() {
         return entityId;
+    }
+
+    /** The bot's current {@link BotState} — live projection of SCHEMA §8.2 c-block transitions. */
+    public BotState state() {
+        return state.get();
+    }
+
+    public boolean awaitConnected(long timeoutMs) throws InterruptedException {
+        return connectedLatch.await(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    public boolean awaitRegistered(long timeoutMs) throws InterruptedException {
+        return registeredLatch.await(timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Back-compat alias for {@link #awaitRegistered(long)}. Preserved so {@code
+     * BotLauncher}'s virtual-thread bootstrap can keep its existing call site.
+     */
+    public boolean waitForRegistered(long timeout, TimeUnit unit) throws InterruptedException {
+        return registeredLatch.await(timeout, unit);
     }
 
     public int getActionCount() {
@@ -106,88 +194,128 @@ public class BotClient {
         return perceptionCount.get();
     }
 
+    /** Encode + send a frame. Silently no-ops if the session is not open. */
+    private synchronized void sendFrame(Frame f) {
+        Session s = this.session;
+        if (s == null || !s.isOpen()) return;
+        try {
+            s.sendText(PerceptionCodec.encode(f), Callback.NOOP);
+        } catch (Exception e) {
+            log.warn("Failed to send frame: {}", e.getMessage());
+        }
+    }
+
+    private void handlePayload(String payload) {
+        Frame frame;
+        try {
+            frame = PerceptionCodec.decode(payload);
+        } catch (Exception e) {
+            log.warn("Failed to decode frame: {}", e.getMessage());
+            return;
+        }
+        switch (frame) {
+            case Frame.SyncFrame s -> onSync(s);
+            case Frame.TickFrame t -> onTick(t);
+            case Frame.ErrorFrame e -> onError(e);
+            // Server never sends r or a; ignore defensively.
+            case Frame.RegisterFrame ignored -> {}
+            case Frame.ActionFrame ignored -> {}
+        }
+    }
+
+    private void onSync(Frame.SyncFrame s) {
+        entityId = s.entityId();
+        alive.set(true);
+        // On re-sync after respawn, reset BotState to a fresh SOLO of the
+        // original species — any prior bonded/composite state is gone on death.
+        state.set(BotState.initial(species));
+        registeredLatch.countDown();
+        log.info("Bot registered: entity={} species={}", entityId, species);
+    }
+
+    private void onTick(Frame.TickFrame t) {
+        perceptionCount.incrementAndGet();
+
+        // Apply state-change code FIRST — HeuristicBrain needs an up-to-date BotState.
+        t.change().ifPresent(c -> state.updateAndGet(prev -> prev.withChangeCode(c.code())));
+
+        // Death check: any v-block D event (SCHEMA §8.4 "Died") triggers respawn flow.
+        boolean died = t.events().stream().anyMatch(ev -> ev.code() == 'D');
+        if (died) {
+            handleDeath();
+            return;
+        }
+
+        // Minimal-form frames (passive composite members) carry no vision/effects/pool,
+        // but the brain's null-return path already covers passive roles via BotState.
+        Frame.ActionFrame decision = brain.decide(t, state.get(), rng);
+        if (decision != null) {
+            sendFrame(decision);
+            actionCount.incrementAndGet();
+            if (log.isDebugEnabled()) {
+                log.debug("Bot {} tick {} → {}{}", entityId, t.tickId(),
+                        decision.verb(), decision.arg().map(a -> "|" + a).orElse(""));
+            }
+        }
+    }
+
+    private void onError(Frame.ErrorFrame e) {
+        log.warn("Server error {}: {}", e.code(), e.message().orElse(""));
+        if (e.code() == 429) {
+            // Threat T-15-04: respawn cap exceeded. Disconnect instead of hammering.
+            disconnect();
+        }
+    }
+
     /**
-     * Internal WebSocket handler for the bot.
+     * Respawn FSM. Keeps the session open; waits a randomised cooldown; sends
+     * a fresh {@code r|<species>}. Server answers with {@code S|<newEntityId>}
+     * or {@code E|429}.
      */
-    private class BotWebSocketHandler extends TextWebSocketHandler {
-
-        @Override
-        protected void handleTextMessage(WebSocketSession wsSession, TextMessage message) {
-            try {
-                JsonNode node = objectMapper.readTree(message.getPayload());
-                String type = node.get("type").asText();
-
-                switch (type) {
-                    case "welcome" -> handleWelcome(wsSession, node);
-                    case "registered" -> handleRegistered(node);
-                    case "perception" -> handlePerception(wsSession, node);
-                    case "action_result" -> handleActionResult(node);
-                    case "tick" -> {} // Ignore tick broadcasts
-                    case "error" -> log.warn("Bot {} error: {}", entityId, node.get("message").asText());
-                    default -> log.debug("Bot {} unknown message: {}", entityId, type);
-                }
-            } catch (Exception e) {
-                log.warn("Bot {} message error: {}", entityId, e.getMessage());
+    private void handleDeath() {
+        alive.set(false);
+        entityId = null;
+        long jitter = respawnJitterMs > 0
+                ? ThreadLocalRandom.current().nextLong(respawnJitterMs)
+                : 0L;
+        long waitMs = respawnCooldownMs + jitter;
+        CompletableFuture.delayedExecutor(waitMs, TimeUnit.MILLISECONDS).execute(() -> {
+            Session s = this.session;
+            if (s != null && s.isOpen()) {
+                sendFrame(new Frame.RegisterFrame(species));
+                log.debug("Bot sent respawn r|{} after {}ms", species, waitMs);
             }
+        });
+    }
+
+    /**
+     * Jetty-annotated endpoint. Jetty 12 supports either {@link Session.Listener}
+     * or the {@code @WebSocket}-annotated class style; we use annotations here
+     * because the callbacks we care about are the simple text/open/close/error
+     * set.
+     */
+    @WebSocket
+    public class Endpoint {
+
+        @OnWebSocketOpen
+        public void onOpen(Session s) {
+            // session reference is already captured by connect(); log only.
+            log.debug("WS open: {}", s.getRemoteSocketAddress());
         }
 
-        private void handleWelcome(WebSocketSession wsSession, JsonNode node) throws Exception {
-            // Send register message using the session from the callback
-            var registerMap = new java.util.LinkedHashMap<String, Object>();
-            registerMap.put("type", "register");
-            registerMap.put("entityType", entityType);
-            wsSession.sendMessage(new TextMessage(objectMapper.writeValueAsString(registerMap)));
-            log.debug("Bot sent register: type={}", entityType);
+        @OnWebSocketMessage
+        public void onMessage(String message) {
+            handlePayload(message);
         }
 
-        private void handleRegistered(JsonNode node) {
-            entityId = node.get("entityId").asText();
-            registered = true;
-            registeredLatch.countDown();
-            log.info("Bot registered: entity={} at ({},{})", entityId,
-                    node.get("x").asInt(), node.get("y").asInt());
+        @OnWebSocketClose
+        public void onClose(int statusCode, String reason) {
+            log.info("WS closed: {} {}", statusCode, reason);
         }
 
-        private void handlePerception(WebSocketSession wsSession, JsonNode node) {
-            perceptionCount.incrementAndGet();
-            try {
-                // Phase 14 (cycle-4 action item #11): CellView status fields
-                // (cellStatus, entityStatus) are deserialised natively by
-                // Jackson from the expanded 6-field record. No manual parsing
-                // needed here. Any residual raw-map / JsonNode path is
-                // pre-existing Phase 09 tech debt and is NOT modified by this
-                // phase.
-                Messages.Perception perception = objectMapper.treeToValue(node, Messages.Perception.class);
-
-                // Let brain decide
-                HeuristicBrain.Decision decision = brain.decide(perception);
-
-                // Send action using the session from the callback
-                var actionMap = new java.util.LinkedHashMap<String, Object>();
-                actionMap.put("type", "action");
-                actionMap.put("actionType", decision.actionType());
-                if (decision.direction() != null) {
-                    actionMap.put("direction", decision.direction());
-                }
-                wsSession.sendMessage(new TextMessage(objectMapper.writeValueAsString(actionMap)));
-                actionCount.incrementAndGet();
-
-                if (log.isDebugEnabled()) {
-                    log.debug("Bot {} tick {} → {} {}",
-                            entityId, perception.tickNumber(),
-                            decision.actionType(), decision.direction() != null ? decision.direction() : "");
-                }
-            } catch (Exception e) {
-                log.warn("Bot {} failed to process perception: {}", entityId, e.getMessage());
-            }
-        }
-
-        private void handleActionResult(JsonNode node) {
-            if (log.isTraceEnabled()) {
-                log.trace("Bot {} action result: success={} type={} reason={}",
-                        entityId, node.get("success").asBoolean(),
-                        node.get("actionType").asText(), node.get("reason").asText());
-            }
+        @OnWebSocketError
+        public void onError(Throwable cause) {
+            log.warn("WS error: {}", cause.getMessage());
         }
     }
 }

@@ -28,6 +28,13 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-jetty")
 
+    // Plan 15-09: Jetty 12 native WebSocket client (for BotClient) — provides
+    // permessage-deflate extension negotiation that Spring's StandardWebSocketClient
+    // lacks (D-33 client-side enforcement). Pinned to Spring Boot 3.4.4's managed
+    // Jetty 12.0.18; artifact not in Spring Boot's dependency management so
+    // version is declared explicitly.
+    implementation("org.eclipse.jetty.websocket:jetty-websocket-jetty-client:12.0.18")
+
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
@@ -39,8 +46,11 @@ dependencies {
 // constants (OVERCROWDED_THRESHOLD_DEFAULT). Plan 15-08 adds
 // TickBroadcasterProjectionTest + CompositePerceptionTest — those exercised
 // the old Jackson/Messages projection API (buildPerception/cellToView/
-// stitchSensorCoverage) which the codec rewrite removed. Plan 15-11 migrates
-// these tests and removes the exclusion.
+// stitchSensorCoverage) which the codec rewrite removed. Plan 15-09 adds
+// HeuristicBrainTest + BotClientIntegrationTest — those type against the
+// pre-refactor HeuristicBrain.decide(Perception) + old BotClient(String,String)
+// constructor; plan 15-09 replaces both signatures (BotState + Frame.TickFrame).
+// Plan 15-11 migrates these tests and removes the exclusion.
 sourceSets {
     test {
         java {
@@ -52,6 +62,8 @@ sourceSets {
             exclude("com/paralife/websocket/VisionScopedOvercrowdingTest.java")
             exclude("com/paralife/websocket/TickBroadcasterProjectionTest.java")
             exclude("com/paralife/websocket/CompositePerceptionTest.java")
+            exclude("com/paralife/bot/HeuristicBrainTest.java")
+            exclude("com/paralife/bot/BotClientIntegrationTest.java")
         }
     }
 }

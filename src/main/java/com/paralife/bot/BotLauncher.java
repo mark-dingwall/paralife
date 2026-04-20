@@ -38,7 +38,14 @@ public class BotLauncher {
 
         for (int i = 0; i < count; i++) {
             ParticleType type = types[i % types.length];
-            BotClient bot = new BotClient(serverUri, type.name());
+            // Map the ParticleType enum to SCHEMA §6.1 species char (C/M/S).
+            char species = switch (type) {
+                case CATALYST -> 'C';
+                case MEMBRANE -> 'M';
+                case SPORE -> 'S';
+            };
+            BotClient bot = new BotClient(serverUri, species,
+                    new HeuristicBrain(HeuristicBrain.REPRODUCE_THRESHOLD));
             launched.add(bot);
             bots.add(bot);
 
