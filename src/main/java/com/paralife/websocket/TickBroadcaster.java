@@ -1,10 +1,15 @@
-package com.paralife.engine;
+package com.paralife.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.paralife.websocket.Messages;
+import com.paralife.engine.BotRegistry;
+import com.paralife.engine.BuffRegistry;
+import com.paralife.engine.CompositeRegistry;
+import com.paralife.engine.EntityIds;
+import com.paralife.engine.EnvironmentEngine;
+import com.paralife.engine.SimulationConfig;
+import com.paralife.engine.TickEvent;
 import com.paralife.websocket.Messages.CellView;
 import com.paralife.websocket.Messages.EntityState;
-import com.paralife.websocket.SessionRegistry;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
 import com.paralife.world.Entity.Particle;
@@ -51,9 +56,9 @@ import java.util.*;
  * </ul>
  */
 @Component
-public class PerceptionBroadcaster {
+public class TickBroadcaster {
 
-    private static final Logger log = LoggerFactory.getLogger(PerceptionBroadcaster.class);
+    private static final Logger log = LoggerFactory.getLogger(TickBroadcaster.class);
 
     /** Perception radius: 2 means a 5x5 grid (2 cells in each direction). */
     public static final int PERCEPTION_RADIUS = 2;
@@ -87,7 +92,7 @@ public class PerceptionBroadcaster {
      * pipeline and vision-scoped overcrowding.
      */
     @Autowired
-    public PerceptionBroadcaster(BotRegistry botRegistry, SessionRegistry sessionRegistry,
+    public TickBroadcaster(BotRegistry botRegistry, SessionRegistry sessionRegistry,
                                   WorldGrid worldGrid, ObjectMapper objectMapper,
                                   CompositeRegistry compositeRegistry,
                                   EnvironmentEngine environmentEngine,
@@ -110,7 +115,7 @@ public class PerceptionBroadcaster {
      * (status-cache reads treat null as "no env effects"). Every env call
      * site is null-guarded.
      */
-    public PerceptionBroadcaster(BotRegistry botRegistry, SessionRegistry sessionRegistry,
+    public TickBroadcaster(BotRegistry botRegistry, SessionRegistry sessionRegistry,
                                   WorldGrid worldGrid, ObjectMapper objectMapper,
                                   CompositeRegistry compositeRegistry) {
         this.botRegistry = botRegistry;
@@ -124,7 +129,7 @@ public class PerceptionBroadcaster {
     }
 
     @EventListener
-    @Order(50) // After SimulationEngine(10) + ActionResolver(20), before TickBroadcaster(100)
+    @Order(50) // After SimulationEngine(10) + ActionResolver(20) — tick-pipeline perception step
     public void onTick(TickEvent event) {
         var bots = botRegistry.getAllBots();
         if (bots.isEmpty()) return;
@@ -485,7 +490,7 @@ public class PerceptionBroadcaster {
      * Convert a Cell to a compact CellView for the perception message.
      *
      * <p><b>Back-compat 1-arg (Cell) overload</b>: used by pre-Plan-14-05
-     * {@link PerceptionBroadcasterTest} static calls. Emits the legacy 4-arg
+     * {@code TickBroadcasterProjectionTest} static calls. Emits the legacy 4-arg
      * CellView constructor (zero statuses). New code MUST use the 4-arg
      * {@link #cellToView(int, int, Position, int)} per-bot overload so
      * vision-scoped overcrowding and env status bits are populated correctly.

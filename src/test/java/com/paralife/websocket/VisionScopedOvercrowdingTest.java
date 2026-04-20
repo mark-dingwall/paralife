@@ -1,8 +1,13 @@
-package com.paralife.engine;
+package com.paralife.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.paralife.engine.BotRegistry;
+import com.paralife.engine.BuffRegistry;
+import com.paralife.engine.CompositeRegistry;
+import com.paralife.engine.EnvironmentEngine;
+import com.paralife.engine.SimulationConfig;
+import com.paralife.engine.SimulationEngine;
 import com.paralife.websocket.Messages.CellView;
-import com.paralife.websocket.SessionRegistry;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
@@ -19,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Plan 14-05 Task 1: vision-scoped overcrowding (D-40) + cycle-6 MEDIUM #9
  * per-bot OVERCROWDED-bit recomposition.
  *
- * <p>Drives the static helper {@link PerceptionBroadcaster#computeVisionScopedOvercrowded}
+ * <p>Drives the static helper {@link TickBroadcaster#computeVisionScopedOvercrowded}
  * directly (no Spring context) and the per-bot {@code cellToViewForTest} seam.
  *
  * <p>Reads the threshold value from {@code SimulationConfig.defaults().overcrowdingThreshold()}
@@ -30,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class VisionScopedOvercrowdingTest {
 
     private WorldGrid worldGrid;
-    private PerceptionBroadcaster broadcaster;
+    private TickBroadcaster broadcaster;
     private EnvironmentEngine envEngineMock;
     private BuffRegistry buffRegistry;
     private SimulationConfig simulationConfig;
@@ -44,7 +49,7 @@ class VisionScopedOvercrowdingTest {
         // Default env reads — 0 for any cell / entity. Individual tests override.
         Mockito.when(envEngineMock.getCellStatus(Mockito.any())).thenReturn((byte) 0);
         Mockito.when(envEngineMock.getEntityStatus(Mockito.anyString())).thenReturn((byte) 0);
-        broadcaster = new PerceptionBroadcaster(new BotRegistry(), new SessionRegistry(),
+        broadcaster = new TickBroadcaster(new BotRegistry(), new SessionRegistry(),
                 worldGrid, new ObjectMapper(), new CompositeRegistry(),
                 envEngineMock, buffRegistry, simulationConfig);
     }
@@ -69,7 +74,7 @@ class VisionScopedOvercrowdingTest {
         placeFiller(9, 9);
         placeFiller(11, 11);
         int threshold = SimulationConfig.defaults().overcrowdingThreshold();
-        boolean result = PerceptionBroadcaster.computeVisionScopedOvercrowded(
+        boolean result = TickBroadcaster.computeVisionScopedOvercrowded(
                 worldGrid, new Position(10, 10), new Position(10, 10), /*radius*/ 2, threshold);
         assertThat(result).as("6 visible neighbours equals threshold=6 → overcrowded").isTrue();
     }
@@ -80,7 +85,7 @@ class VisionScopedOvercrowdingTest {
         placeFiller(10, 9);
         placeFiller(10, 11);
         int threshold = SimulationConfig.defaults().overcrowdingThreshold();
-        boolean result = PerceptionBroadcaster.computeVisionScopedOvercrowded(
+        boolean result = TickBroadcaster.computeVisionScopedOvercrowded(
                 worldGrid, new Position(10, 10), new Position(10, 10), /*radius*/ 2, threshold);
         assertThat(result).isFalse();
     }
@@ -94,9 +99,9 @@ class VisionScopedOvercrowdingTest {
         placeFiller(10, 11);
         placeFiller(9, 10);
         // 3 neighbours — overcrowded at threshold 3, not at threshold 6.
-        assertThat(PerceptionBroadcaster.computeVisionScopedOvercrowded(
+        assertThat(TickBroadcaster.computeVisionScopedOvercrowded(
                 worldGrid, new Position(10, 10), new Position(10, 10), 2, 3)).isTrue();
-        assertThat(PerceptionBroadcaster.computeVisionScopedOvercrowded(
+        assertThat(TickBroadcaster.computeVisionScopedOvercrowded(
                 worldGrid, new Position(10, 10), new Position(10, 10), 2,
                 SimulationConfig.defaults().overcrowdingThreshold())).isFalse();
     }

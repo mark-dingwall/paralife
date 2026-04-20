@@ -1,9 +1,10 @@
-package com.paralife.engine;
+package com.paralife.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.paralife.websocket.Messages;
+import com.paralife.engine.BotRegistry;
+import com.paralife.engine.CompositeRegistry;
+import com.paralife.engine.TickEvent;
 import com.paralife.websocket.Messages.CellView;
-import com.paralife.websocket.SessionRegistry;
 import com.paralife.world.*;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.ParticleType;
@@ -27,7 +28,7 @@ class CompositePerceptionTest {
     private SessionRegistry sessionRegistry;
     private CompositeRegistry compositeRegistry;
     private ObjectMapper objectMapper;
-    private PerceptionBroadcaster broadcaster;
+    private TickBroadcaster broadcaster;
 
     @BeforeEach
     void setUp() {
@@ -36,7 +37,7 @@ class CompositePerceptionTest {
         sessionRegistry = new SessionRegistry();
         compositeRegistry = new CompositeRegistry();
         objectMapper = new ObjectMapper();
-        broadcaster = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+        broadcaster = new TickBroadcaster(botRegistry, sessionRegistry,
                 worldGrid, objectMapper, compositeRegistry);
     }
 

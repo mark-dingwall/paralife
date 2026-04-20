@@ -1,9 +1,13 @@
-package com.paralife.engine;
+package com.paralife.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.paralife.websocket.Messages;
+import com.paralife.engine.BotRegistry;
+import com.paralife.engine.BuffRegistry;
+import com.paralife.engine.CompositeRegistry;
+import com.paralife.engine.EnvironmentEngine;
+import com.paralife.engine.SimulationConfig;
+import com.paralife.engine.TickEvent;
 import com.paralife.websocket.Messages.CellView;
-import com.paralife.websocket.SessionRegistry;
 import com.paralife.world.*;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
@@ -22,14 +26,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
-class PerceptionBroadcasterTest {
+class TickBroadcasterProjectionTest {
 
     private BotRegistry botRegistry;
     private SessionRegistry sessionRegistry;
     private WorldGrid worldGrid;
     private ObjectMapper objectMapper;
     private CompositeRegistry compositeRegistry;
-    private PerceptionBroadcaster broadcaster;
+    private TickBroadcaster broadcaster;
 
     @BeforeEach
     void setUp() {
@@ -38,7 +42,7 @@ class PerceptionBroadcasterTest {
         sessionRegistry = new SessionRegistry();
         objectMapper = new ObjectMapper();
         compositeRegistry = new CompositeRegistry();
-        broadcaster = new PerceptionBroadcaster(botRegistry, sessionRegistry, worldGrid, objectMapper, compositeRegistry);
+        broadcaster = new TickBroadcaster(botRegistry, sessionRegistry, worldGrid, objectMapper, compositeRegistry);
     }
 
     @Test
@@ -56,7 +60,7 @@ class PerceptionBroadcasterTest {
         assertThat(perception.self().energy()).isEqualTo(Particle.DEFAULT_START_ENERGY);
         assertThat(perception.self().x()).isEqualTo(5);
         assertThat(perception.self().y()).isEqualTo(5);
-        assertThat(perception.radius()).isEqualTo(PerceptionBroadcaster.PERCEPTION_RADIUS);
+        assertThat(perception.radius()).isEqualTo(TickBroadcaster.PERCEPTION_RADIUS);
     }
 
     @Test
@@ -68,7 +72,7 @@ class PerceptionBroadcasterTest {
         var bot = botRegistry.getBySession("s1").orElseThrow();
         var perception = broadcaster.buildPerception(1, bot);
 
-        int expectedSize = PerceptionBroadcaster.PERCEPTION_RADIUS * 2 + 1;
+        int expectedSize = TickBroadcaster.PERCEPTION_RADIUS * 2 + 1;
         assertThat(perception.neighbourhood()).hasSize(expectedSize);
         for (var row : perception.neighbourhood()) {
             assertThat(row).hasSize(expectedSize);
@@ -93,7 +97,7 @@ class PerceptionBroadcasterTest {
         var perception = broadcaster.buildPerception(1, bot);
 
         // Centre of 5x5 grid is at index [2][2]
-        int center = PerceptionBroadcaster.PERCEPTION_RADIUS;
+        int center = TickBroadcaster.PERCEPTION_RADIUS;
         CellView selfView = perception.neighbourhood().get(center).get(center);
         assertThat(selfView.occupantType()).isEqualTo("CATALYST");
 
@@ -132,7 +136,7 @@ class PerceptionBroadcasterTest {
 
     @Test
     void cellToViewEmpty() {
-        CellView view = PerceptionBroadcaster.cellToView(Cell.EMPTY);
+        CellView view = TickBroadcaster.cellToView(Cell.EMPTY);
         assertThat(view.occupantType()).isNull();
         assertThat(view.occupantId()).isNull();
         assertThat(view.nutrientLevel()).isZero();
@@ -148,7 +152,7 @@ class PerceptionBroadcasterTest {
                 .withOccupant(Particle.spawn("p1", ParticleType.CATALYST))
                 .withAddedFlag(Cell.FLAG_OVERCROWDED)
                 .withAddedFlag(Cell.FLAG_STARVING);
-        CellView view = PerceptionBroadcaster.cellToView(cell);
+        CellView view = TickBroadcaster.cellToView(cell);
         assertThat(view.flags()).isEqualTo(Cell.FLAG_OVERCROWDED | Cell.FLAG_STARVING);
     }
 
@@ -157,14 +161,14 @@ class PerceptionBroadcasterTest {
         Cell cell = Cell.EMPTY
                 .withOccupant(Particle.spawn("p1", ParticleType.SPORE))
                 .withAddedFlag(Cell.FLAG_STARVING);
-        CellView view = PerceptionBroadcaster.cellToView(cell);
+        CellView view = TickBroadcaster.cellToView(cell);
         assertThat((view.flags() & Cell.FLAG_STARVING) != 0).isTrue();
     }
 
     @Test
     void cellToViewParticle() {
         Cell cell = Cell.EMPTY.withOccupant(Particle.spawn("p1", ParticleType.MEMBRANE));
-        CellView view = PerceptionBroadcaster.cellToView(cell);
+        CellView view = TickBroadcaster.cellToView(cell);
         assertThat(view.occupantType()).isEqualTo("MEMBRANE");
         assertThat(view.occupantId()).isEqualTo("p1");
     }
@@ -172,7 +176,7 @@ class PerceptionBroadcasterTest {
     @Test
     void cellToViewRock() {
         Cell cell = Cell.EMPTY.withOccupant(new Entity.Rock("r1"));
-        CellView view = PerceptionBroadcaster.cellToView(cell);
+        CellView view = TickBroadcaster.cellToView(cell);
         assertThat(view.occupantType()).isEqualTo("ROCK");
         assertThat(view.occupantId()).isEqualTo("r1");
     }
@@ -180,7 +184,7 @@ class PerceptionBroadcasterTest {
     @Test
     void cellToViewNutrient() {
         Cell cell = Cell.EMPTY.withOccupant(Entity.Nutrient.spawn("n1"));
-        CellView view = PerceptionBroadcaster.cellToView(cell);
+        CellView view = TickBroadcaster.cellToView(cell);
         assertThat(view.occupantType()).isEqualTo("NUTRIENT");
         assertThat(view.occupantId()).isEqualTo("n1");
     }
@@ -191,7 +195,7 @@ class PerceptionBroadcasterTest {
                 "bond-1", ParticleType.CATALYST, ParticleType.SPORE, 80, 200);
         Cell cell = Cell.EMPTY.withOccupant(bp);
 
-        CellView view = PerceptionBroadcaster.cellToView(cell);
+        CellView view = TickBroadcaster.cellToView(cell);
 
         assertThat(view.occupantType()).isEqualTo("BONDED_CATALYST_SPORE");
         assertThat(view.occupantId()).isEqualTo("bond-1");
@@ -204,7 +208,7 @@ class PerceptionBroadcasterTest {
                 "bond-2", ParticleType.MEMBRANE, ParticleType.CATALYST, 60, 200);
         Cell cell = Cell.EMPTY.withOccupant(bp);
 
-        CellView view = PerceptionBroadcaster.cellToView(cell);
+        CellView view = TickBroadcaster.cellToView(cell);
 
         assertThat(view.occupantType()).isEqualTo("BONDED_MEMBRANE_CATALYST");
         assertThat(view.occupantId()).isEqualTo("bond-2");
@@ -309,7 +313,7 @@ class PerceptionBroadcasterTest {
         EnvironmentEngine envMock = mock(EnvironmentEngine.class);
         BuffRegistry buffRegistry = new BuffRegistry();
         SimulationConfig simCfg = SimulationConfig.defaults();
-        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
                 worldGrid, objectMapper, compositeRegistry, envMock, buffRegistry, simCfg);
 
         Particle bot = Particle.spawn("e1", ParticleType.CATALYST);
@@ -338,7 +342,7 @@ class PerceptionBroadcasterTest {
         when(envMock.getCellStatus(any())).thenReturn((byte) 0);
         when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
         BuffRegistry buffs = new BuffRegistry();
-        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
                 worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
 
         Particle bot = Particle.spawn("e1", ParticleType.SPORE);
@@ -368,7 +372,7 @@ class PerceptionBroadcasterTest {
         when(envMock.getCellStatus(any())).thenReturn((byte) 0);
         when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
         BuffRegistry buffs = new BuffRegistry();
-        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
                 worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
 
         Entity.BondedPair bp = new Entity.BondedPair("bp1", ParticleType.CATALYST,
@@ -394,7 +398,7 @@ class PerceptionBroadcasterTest {
         when(envMock.getCellStatus(any())).thenReturn((byte) 0);
         when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
         BuffRegistry buffs = new BuffRegistry();
-        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
                 worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
 
         Particle self = Particle.spawn("e1", ParticleType.CATALYST);
@@ -425,7 +429,7 @@ class PerceptionBroadcasterTest {
         when(envMock.getCellStatus(targetCell)).thenReturn((byte) 0x01);
         when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
         BuffRegistry buffs = new BuffRegistry();
-        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
                 worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
 
         Particle self = Particle.spawn("e1", ParticleType.CATALYST);
@@ -449,7 +453,7 @@ class PerceptionBroadcasterTest {
         EnvironmentEngine envMock = mock(EnvironmentEngine.class);
         when(envMock.getCellStatus(any())).thenReturn((byte) 0);
         when(envMock.getEntityStatus(any())).thenReturn((byte) 0);
-        PerceptionBroadcaster wired = new PerceptionBroadcaster(botRegistry, sessionRegistry,
+        TickBroadcaster wired = new TickBroadcaster(botRegistry, sessionRegistry,
                 worldGrid, objectMapper, compositeRegistry, envMock, buffs, SimulationConfig.defaults());
 
         var sensor = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.SENSOR, 50, 100);
