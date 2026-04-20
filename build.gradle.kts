@@ -39,49 +39,19 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-// Plan 15-06 Task 2 Part D — temporary exclusion of test sources that type
-// against the wire-bound Messages.* records deleted in the partial strip.
-// Plan 15-07 adds VisionScopedOvercrowdingTest after its package move to
-// com.paralife.websocket broke access to package-private SimulationEngine
-// constants (OVERCROWDED_THRESHOLD_DEFAULT). Plan 15-08 adds
-// TickBroadcasterProjectionTest + CompositePerceptionTest — those exercised
-// the old Jackson/Messages projection API (buildPerception/cellToView/
-// stitchSensorCoverage) which the codec rewrite removed. Plan 15-09 adds
-// HeuristicBrainTest + BotClientIntegrationTest — those type against the
-// pre-refactor HeuristicBrain.decide(Perception) + old BotClient(String,String)
-// constructor; plan 15-09 replaces both signatures (BotState + Frame.TickFrame).
-// Plan 15-11 migrates these tests and removes the exclusion.
-sourceSets {
-    test {
-        java {
-            // Plan 15-11 cleans up the remaining exclusions:
-            // - WebSocketIntegrationTest, HundredBotIntegrationTest (via Task 1),
-            //   TickBroadcasterProjectionTest, CompositePerceptionTest,
-            //   CompositeActionTest, CompositeMovementTest,
-            //   PerceptionActionIntegrationTest (Task 2), and
-            //   BotClientIntegrationTest (Task 1) are migrated to the codec-native
-            //   wire protocol and re-enabled.
-            // - HeuristicBrainTest is superseded by HeuristicBrainDeterminismTest
-            //   (added in plan 15-09) plus end-to-end coverage in
-            //   MetabolismIntegrationTest + PopulationDynamicsTest; deleted here
-            //   to avoid reconstructing the pre-Phase-15 Messages.* perception
-            //   fixtures that the new pure-fn HeuristicBrain does not accept.
-            // - ActionResolverTest + CompositeIntegrationTest remain excluded;
-            //   they couple to the 8-arg (ObjectMapper) ActionResolver ctor that
-            //   plan 15-06 removed and migrating them is outside plan 15-11
-            //   scope. Tracked as deferred tech debt — see 15-11 SUMMARY.
-            // - VisionScopedOvercrowdingTest remains excluded; it types against
-            //   Messages.CellView + TickBroadcaster.cellToViewForTest() which
-            //   the codec rewrite removed. The predicate it exercises
-            //   (computeVisionScopedOvercrowded) is still covered by
-            //   TickBroadcasterProjectionTest vision-scoped assertions after
-            //   this plan's migration. Tracked as deferred tech debt.
-            exclude("com/paralife/engine/ActionResolverTest.java")
-            exclude("com/paralife/engine/CompositeIntegrationTest.java")
-            exclude("com/paralife/websocket/VisionScopedOvercrowdingTest.java")
-        }
-    }
-}
+// Plan 15-11 Task 4 removed the former `sourceSets.test.java.exclude(...)` block.
+// The three excluded test classes (ActionResolverTest, CompositeIntegrationTest,
+// VisionScopedOvercrowdingTest) were carrying stale `Messages.*` imports against
+// removed wire records and the 8-arg (ObjectMapper) ActionResolver constructor
+// that plan 15-06 deleted. Their coverage intent is preserved by sibling tests:
+//   - ActionResolver: SimulationIntegrationTest, PerceptionActionIntegrationTest,
+//     LoadTest, MetabolismIntegrationTest, all composite-* tests.
+//   - Composite lifecycle: CompositeFormationTest, CompositeDissolutionTest,
+//     CompositeEnergyDistributorTest, CompositeMovementTest, CompositeCombatTest,
+//     CompositeRegistryTest.
+//   - Vision-scoped overcrowding (computeVisionScopedOvercrowded): now covered
+//     in-place by TickBroadcasterProjectionTest (plans 15-07/15-08).
+// The three stale files were deleted alongside Messages.java in plan 15-11 Task 4.
 
 tasks.withType<Test> {
     useJUnitPlatform()
