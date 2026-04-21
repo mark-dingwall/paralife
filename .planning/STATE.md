@@ -4,10 +4,10 @@ milestone: v2.0
 milestone_name: Combination & Emergence
 current_phase: 16
 current_phase_name: Emergent Behavior Tests
-current_plan: 0
-status: ready-to-execute
+current_plan: 2
+status: in-progress
 stopped_at: Phase 16 REPLANNED --reviews 2026-04-21 (incorporated cross-AI REVIEWS.md feedback: gemini LOW, opencode MEDIUM, claude MEDIUM, codex HIGH). All 10 HIGH consensus concerns + 12 MEDIUM recurring items addressed across the 7 existing plans (no restructuring). Checker PASSED iteration 2/3 after surgical revision round (2 blockers + 4 warnings + 1 info fixed). Key fixes — R15 3-run reset via explicit resetSeed() hooks (drops @DirtiesContext), master-seed end-to-end via @DynamicPropertySource + SplittableRandom.split, buffs.granted counter relocated BuffRegistry→EnvironmentEngine.grantSurvivorBuffs (atomic on new-buff only), D-19 scoping dropped (Entity.id exists on all permits), fertility yaml prefix corrected paralife.simulation.fertility.*, tick-interval bumped to 20ms (p99 margin 1.5×), heap window raised 250→300 + gc hint, autocorrelation lag∈[20,100] scan, SoftAssertions hybrid with try-finally, SpawnConfig promoted to @ConfigurationProperties, CompositeEnergyDistributor XOR magic replaced with SplittableRandom.split, ActionResolver lines 330/361 no-arg shuffles seeded. Prior CLEAN-SLATE round history preserved in git f37659b/9218af2. Wave 1 — 16-01 RNG injection refactor (10 hot-path sites + BotClient:294 fix + BondedPair.formBond → RandomGenerator), 16-03 TickEngine tick-work DistributionSummary inline + fixtures .gitignore + build.gradle.kts -PincludeLong wiring, 16-04 five test helpers (TriggerWatcher / PopulationHistory / RunFixtureWriter / TestLogCapture / SeededBotLauncher). Wave 2 — 16-02 EmergenceMetrics bean + 4 counter increments + EMERGENCE log markers + wiring test (real BondingConfig binding). Wave 3 — 16-05 R15 CompositeFormationDeterminismTest (engine-direct, @DirtiesContext BEFORE_EACH_TEST_METHOD, 3-run HashSet.hasSize(1) + @Nested DifferentSeedControl negative-control class per D-23). Wave 4 — 16-06 R16/R17/R18 EmergenceStabilityLoadTest (full-stack @SpringBootTest RANDOM_PORT, 100 bots, 1000 ticks, D-07 × 3 + D-04 × 5 + D-11 × 7 assertions, fail-fast + try-finally fixture dump per D-22, @Value master-seed override per D-20). Wave 5 — 16-07 16-EMERGENCE.md narrative + R19 full-suite gate (checkpoint:human-verify). CONTEXT addenda D-19..D-24 appended this round: D-19 TriggerWatcher signal #5 scoped to entities with stable IDs, D-20 @Value master-seed override, D-21 autocorrelation for D-04 signal #4, D-22 fail-fast try-finally, D-23 live @Nested mutation control, D-24 buff-granted log gated on wasNewBuff. Coverage — R15→01/04/05, R16→02/04/06, R17→02/04/06/07, R18→03/04/06, R19→07. Checker PASSED iteration 3/3 after 2 revision rounds (iter 1 — 8 blockers + 11 warnings + 1 info closed; iter 2 — 2 blockers + 3 warnings closed). Next — /clear then /gsd-execute-phase 16.
-last_updated: "2026-04-21T14:30:00.000Z"
+last_updated: "2026-04-21T09:15:00.000Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 7
@@ -31,17 +31,17 @@ See: .planning/PROJECT.md
 **Current Phase:** 16 — Emergent Behavior Tests
 **Current Phase Name:** Emergent Behavior Tests
 **Total Phases:** 16 (+ 15.1, 15.2 decimals)
-**Current Plan:** 0 of 7 (awaiting /gsd-execute-phase 16)
+**Current Plan:** 4 of 7 complete (16-01, 16-02, 16-03, 16-04 landed; next: 16-05)
 **Total Plans in Phase:** 7
-**Progress:** [███░░░░░░░] ready to execute
+**Progress:** [████░░░░░░] 4 of 7 plans complete
 **Last Activity:** 2026-04-21
 
 ## Current Position
 
-Phase: 16 (Emergent Behavior Tests) — ready to execute
-Plan: 0 of 7 (awaiting /gsd-execute-phase 16)
-Status: ready-to-execute — CONTEXT (+ D-19..D-24 addenda) + DISCUSSION-LOG + RESEARCH + PATTERNS + VALIDATION + 7 PLAN.md committed
-Last activity: 2026-04-21 — /gsd-plan-phase 16 REPLANNED clean-slate (prior 8-plan round discarded, poisoned LLM output). 7 plans across 5 waves; checker PASSED iteration 3/3 after 2 revision rounds (iter 1 closed 8 blockers + 11 warnings + 1 info; iter 2 closed 2 blockers + 3 warnings). CONTEXT addenda D-19..D-24: TriggerWatcher signal #5 ID-scoped, @Value master-seed override, autocorrelation for D-04 #4, fail-fast try-finally, @Nested DifferentSeedControl live negative control, buff-granted log gated on wasNewBuff. Coverage R15→01/04/05, R16→02/04/06, R17→02/04/06/07, R18→03/04/06, R19→07. Earlier — /gsd-discuss-phase 16 walked all 6 gray areas interactively. Key decisions: hybrid test layout (R15 engine-direct + R16/17/18 full-stack long-run, 1000 ticks); 5 tracked emergent signals with trigger-watcher rolling-average pattern for behavioural ones; component-seeded statistical assertions (byte-stable rejected as too fragile); R18 reframed from wire-parity regression to capacity-headroom stability (feature-agnostic ratios); Phase 16 JUnit-only, subjective operator UAT deferred to M5 visualiser phase; `paralife.emergence.*` Micrometer counters + `EMERGENCE` log markers added as cheap M5-seed instrumentation; in-JVM full-stack only (real cross-host deployment = M6).
+Phase: 16 (Emergent Behavior Tests) — in-progress, wave 2 complete
+Plan: 4 of 7 complete; next 16-05 (CompositeFormationDeterminismTest)
+Status: in-progress — Wave 1 (16-01 RNG injection, 16-03 tick-work metrics, 16-04 test helpers) + Wave 2 (16-02 EmergenceMetrics bean/wiring/test) landed. Full suite 571/571 green. Remaining: wave 3 (16-05), wave 4 (16-06), wave 5 (16-07).
+Last activity: 2026-04-21 — Plan 16-02 executed (sequential mode). 3 tasks committed atomically: 00ab101 (EmergenceMetrics bean), 33792c7 (counter wiring + EMERGENCE log markers + size-diff buff-granted detection in grantSurvivorBuffs per REVIEWS HIGH #3), 2fd59db (EmergenceMetricsWiringTest with explicit transferBuffs regression assertion). Added 3 public test-hook passthroughs on EnvironmentEngine so wiring test can live in com.paralife.metrics per plan spec. Back-compat 13-arg SimulationEngine ctor preserved for SimulationEngineTest.engineWithBuffs. 17 min duration, 4 files (2 created + 2 modified), 571/571 tests pass.
 
 ## Accumulated Context
 
