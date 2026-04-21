@@ -54,7 +54,14 @@ dependencies {
 // The three stale files were deleted alongside Messages.java in plan 15-11 Task 4.
 
 tasks.withType<Test> {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        // Phase 16 Plan 03: @Tag("slow") tests are opt-in via -PincludeLong=true.
+        // Default `./gradlew test` excludes slow tests (16-06 long-run emergence
+        // stability). `./gradlew test -PincludeLong=true` includes all tags.
+        if (project.findProperty("includeLong") != "true") {
+            excludeTags("slow")
+        }
+    }
     finalizedBy(tasks.jacocoTestReport)
 }
 
