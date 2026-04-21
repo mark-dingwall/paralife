@@ -6,8 +6,8 @@ current_phase: 16
 current_phase_name: Emergent Behavior Tests
 current_plan: 0
 status: ready-to-execute
-stopped_at: Phase 16 planned 2026-04-21. 8 plans across 6 waves. Wave 1 — 16-01 EmergenceMetrics + 4 counter sites, 16-03 TickWorkTimer bookend @Order(0)/@Order(101) + fixtures .gitignore. Wave 2 — 16-02 RandomSource + refactor 9 hot-path RNG sites (nullable-Random pattern), 16-04 test helpers (TriggerWatcher, PopulationHistory, RunFixtureWriter, TestLogCapture, SeededBotLauncher). Wave 3 — 16-05 R15 CompositeFormationDeterminismTest (engine-direct, @DirtiesContext BEFORE_EACH_TEST_METHOD, 3-run counter-equality). Wave 4 — 16-06 R16/R17/R18 full-stack harness @SpringBootTest(RANDOM_PORT) 100 bots 1000 ticks. Wave 5 — 16-07 assertions (D-07 stability 3 rows + D-04 five emergence signals + D-11 load-stability 7 rows distinct + fixture JSON dump). Wave 6 — 16-08 16-EMERGENCE.md narrative + R19 full-suite gate (checkpoint). Coverage — R15→01/02/04/05, R16→02/04/06/07, R17→01/04/06/07/08, R18→03/04/06/07, R19→08. Checker passed rev 1/3 after blocker + 3 warnings revised. Next — /gsd-execute-phase 16 (or /clear first).
-last_updated: "2026-04-21T11:00:00.000Z"
+stopped_at: Phase 16 REPLANNED clean-slate 2026-04-21 (prior 8-plan round discarded due to LLM quality issue — RESEARCH/PATTERNS/VALIDATION/REVIEWS + 8 prior PLAN.md deleted in commit f37659b; ROADMAP plan sub-list scrubbed in 9218af2). Fresh round (CONTEXT.md + DISCUSSION-LOG.md preserved) produced 7 plans across 5 waves. Wave 1 — 16-01 RNG injection refactor (10 hot-path sites + BotClient:294 fix + BondedPair.formBond → RandomGenerator), 16-03 TickEngine tick-work DistributionSummary inline + fixtures .gitignore + build.gradle.kts -PincludeLong wiring, 16-04 five test helpers (TriggerWatcher / PopulationHistory / RunFixtureWriter / TestLogCapture / SeededBotLauncher). Wave 2 — 16-02 EmergenceMetrics bean + 4 counter increments + EMERGENCE log markers + wiring test (real BondingConfig binding). Wave 3 — 16-05 R15 CompositeFormationDeterminismTest (engine-direct, @DirtiesContext BEFORE_EACH_TEST_METHOD, 3-run HashSet.hasSize(1) + @Nested DifferentSeedControl negative-control class per D-23). Wave 4 — 16-06 R16/R17/R18 EmergenceStabilityLoadTest (full-stack @SpringBootTest RANDOM_PORT, 100 bots, 1000 ticks, D-07 × 3 + D-04 × 5 + D-11 × 7 assertions, fail-fast + try-finally fixture dump per D-22, @Value master-seed override per D-20). Wave 5 — 16-07 16-EMERGENCE.md narrative + R19 full-suite gate (checkpoint:human-verify). CONTEXT addenda D-19..D-24 appended this round: D-19 TriggerWatcher signal #5 scoped to entities with stable IDs, D-20 @Value master-seed override, D-21 autocorrelation for D-04 signal #4, D-22 fail-fast try-finally, D-23 live @Nested mutation control, D-24 buff-granted log gated on wasNewBuff. Coverage — R15→01/04/05, R16→02/04/06, R17→02/04/06/07, R18→03/04/06, R19→07. Checker PASSED iteration 3/3 after 2 revision rounds (iter 1 — 8 blockers + 11 warnings + 1 info closed; iter 2 — 2 blockers + 3 warnings closed). Next — /clear then /gsd-execute-phase 16.
+last_updated: "2026-04-21T14:30:00.000Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 7
@@ -25,23 +25,23 @@ See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
 
-**Current focus:** Phase 16 (Emergent Behavior Tests) — context captured, ready to plan
+**Current focus:** Phase 16 (Emergent Behavior Tests) — REPLANNED clean-slate, ready to execute
 
-**Status:** Phase 16 planned; 8 plans across 6 waves; checker PASSED (rev 1/3)
+**Status:** Phase 16 planned; 7 plans across 5 waves; checker PASSED (iteration 3/3)
 **Current Phase:** 16 — Emergent Behavior Tests
 **Current Phase Name:** Emergent Behavior Tests
 **Total Phases:** 16 (+ 15.1, 15.2 decimals)
-**Current Plan:** 0 of 8 (awaiting /gsd-execute-phase 16)
-**Total Plans in Phase:** 8
+**Current Plan:** 0 of 7 (awaiting /gsd-execute-phase 16)
+**Total Plans in Phase:** 7
 **Progress:** [███░░░░░░░] ready to execute
 **Last Activity:** 2026-04-21
 
 ## Current Position
 
 Phase: 16 (Emergent Behavior Tests) — ready to execute
-Plan: 0 of 8 (awaiting /gsd-execute-phase 16)
-Status: ready-to-execute — CONTEXT + RESEARCH + PATTERNS + VALIDATION + 8 PLAN.md committed
-Last activity: 2026-04-21 -- /gsd-plan-phase 16 produced 8 plans across 6 waves, checker PASSED on iteration 2 after 1 blocker + 3 warnings addressed (16-05 @DirtiesContext(BEFORE_EACH_TEST_METHOD) + 3-run counter-equality; 16-07 D-11 #4 dropouts distinct from #7 gauge; 16-02 depends_on [16-01] to dodge same-wave ctor merge; 16-08 closes narrowed to R17/R19). Coverage R15→01/02/04/05, R16→02/04/06/07, R17→01/04/06/07/08, R18→03/04/06/07, R19→08. Earlier — /gsd-discuss-phase 16 walked all 6 gray areas interactively. Key decisions: hybrid test layout (R15 engine-direct + R16/17/18 full-stack long-run, 1000 ticks); 5 tracked emergent signals with trigger-watcher rolling-average pattern for behavioural ones; component-seeded statistical assertions (byte-stable rejected as too fragile); R18 reframed from wire-parity regression to capacity-headroom stability (feature-agnostic ratios); Phase 16 JUnit-only, subjective operator UAT deferred to M5 visualiser phase; `paralife.emergence.*` Micrometer counters + `EMERGENCE` log markers added as cheap M5-seed instrumentation; in-JVM full-stack only (real cross-host deployment = M6).
+Plan: 0 of 7 (awaiting /gsd-execute-phase 16)
+Status: ready-to-execute — CONTEXT (+ D-19..D-24 addenda) + DISCUSSION-LOG + RESEARCH + PATTERNS + VALIDATION + 7 PLAN.md committed
+Last activity: 2026-04-21 — /gsd-plan-phase 16 REPLANNED clean-slate (prior 8-plan round discarded, poisoned LLM output). 7 plans across 5 waves; checker PASSED iteration 3/3 after 2 revision rounds (iter 1 closed 8 blockers + 11 warnings + 1 info; iter 2 closed 2 blockers + 3 warnings). CONTEXT addenda D-19..D-24: TriggerWatcher signal #5 ID-scoped, @Value master-seed override, autocorrelation for D-04 #4, fail-fast try-finally, @Nested DifferentSeedControl live negative control, buff-granted log gated on wasNewBuff. Coverage R15→01/04/05, R16→02/04/06, R17→02/04/06/07, R18→03/04/06, R19→07. Earlier — /gsd-discuss-phase 16 walked all 6 gray areas interactively. Key decisions: hybrid test layout (R15 engine-direct + R16/17/18 full-stack long-run, 1000 ticks); 5 tracked emergent signals with trigger-watcher rolling-average pattern for behavioural ones; component-seeded statistical assertions (byte-stable rejected as too fragile); R18 reframed from wire-parity regression to capacity-headroom stability (feature-agnostic ratios); Phase 16 JUnit-only, subjective operator UAT deferred to M5 visualiser phase; `paralife.emergence.*` Micrometer counters + `EMERGENCE` log markers added as cheap M5-seed instrumentation; in-JVM full-stack only (real cross-host deployment = M6).
 
 ## Accumulated Context
 
