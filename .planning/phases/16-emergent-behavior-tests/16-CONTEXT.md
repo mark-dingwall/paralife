@@ -231,6 +231,25 @@ Covers requirements R15–R19:
 
 </deferred>
 
+<addendum>
+## Post-Research Addendum (2026-04-21, from planner revision round 1)
+
+Added during revision to resolve checker-flagged blockers without silent scope reduction. Each decision below is as binding as D-01..D-18.
+
+- **D-19 — TriggerWatcher signal #5 trigger scoped to entities with stable IDs (BondedPair, CompositeMember).** Plain Particle has no server-global ID on `Cell.occupant()` — IDs live on `BotRegistry`, `CompositeRegistry`, `BondedPair`. Therefore `forBuffedPredator` triggers only when the buffed entity is a `BondedPair` or `CompositeMember` (both registered, both with `hasBuffs()` resolvable via `BuffRegistry.getBuffs(id)`). Plain-Particle buffs are still counted by `paralife.emergence.buffs.granted` (D-14) and logged by `EMERGENCE buff-granted` (D-15); only the per-window flee-signal observation is scoped. Rationale: the signal intent is "prey flees a stronger-than-baseline predator" — bonded/composite predators are precisely the stronger-than-baseline case, so the scoping narrows the observation to the population the signal meaningfully describes.
+
+- **D-20 — R15/R16 reproducibility via `paralife.test.master-seed` property override.** `EmergenceStabilityLoadTest` reads `@Value("${paralife.test.master-seed:#{null}}") Long` at class construction. When the property is absent, `masterSeed = System.nanoTime()` (preserves D-09 statistical-sampling intent). When set (e.g. via `-Dparalife.test.master-seed=12345` or `@TestPropertySource`), the run uses the override, so any observed failure is locally reproducible via a single CLI flag. The master seed is logged at INFO unconditionally. Supersedes the earlier planning note that override was "unwired."
+
+- **D-21 — Signal #4 (RPS boom-bust) gets a dedicated weak assertion.** `PopulationHistory.autocorrelation(type, lag)` computes lag-k autocorrelation of the per-type population series. Signal #4 asserts that at least one of the three types has autocorrelation above a weak floor (default 0.2) at lag = 50 ticks — consistent with D-04 "weak assertion (pattern exists and is roughly periodic); strict period match not required." If observed values cluster near zero (no periodicity), the floor is tightened in calibration; if consistently high, slot is left. Shares no slot with D-07 row 3 (oscillation amplitude).
+
+- **D-22 — Load-stability assertion ordering chosen: fail-fast + try-finally fixture dump.** Claude's Discretion slot in D-11 resolved. Rationale: fail-fast surfaces the first violation cleanly; `try { all-asserts } finally { RunFixtureWriter.dumpAndRollover(...) }` guarantees evidence on disk for any failure. Accumulate-all was considered but rejected — SoftAssertions + 15-rule block is harder to diagnose than a single AssertJ failure with explicit `.as(...)` messages. PLAN truths updated to reflect fail-fast.
+
+- **D-23 — Meta-validation #3 negative control lands in 16-05 as a sibling `@Nested` class with seed=1337.** Outer class uses seed=42 across 3 runs (same-seed identity). Sibling `@Nested` `DifferentSeedControl` uses `@TestPropertySource` override to seed=1337, captures composite count, and asserts `observations.get(0).compositeCount() != sharedSeed42Count` via a shared static holder. Proves the test measures the seed, not always-zero/always-same.
+
+- **D-24 — `EMERGENCE buff-granted` log gated on the new-buff branch only.** Symmetric with the counter rule (D-14 — counter increments on `list.add`, not `list.set`). Previously the PLAN had counter-gated-but-log-unconditional; this addendum unifies the two — both gate on `wasNewBuff[0]`. Assertion in `EmergenceMetricsWiringTest.buffCounterIncrementsOnNewBuffOnly` extended to also assert log-marker count matches new-buff count.
+
+</addendum>
+
 ---
 
 *Phase: 16-emergent-behavior-tests*
