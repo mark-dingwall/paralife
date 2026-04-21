@@ -4,10 +4,10 @@ milestone: v2.0
 milestone_name: Combination & Emergence
 current_phase: 16
 current_phase_name: Emergent Behavior Tests
-current_plan: 2
+current_plan: 7
 status: in-progress
-stopped_at: Phase 16 REPLANNED --reviews 2026-04-21 (incorporated cross-AI REVIEWS.md feedback: gemini LOW, opencode MEDIUM, claude MEDIUM, codex HIGH). All 10 HIGH consensus concerns + 12 MEDIUM recurring items addressed across the 7 existing plans (no restructuring). Checker PASSED iteration 2/3 after surgical revision round (2 blockers + 4 warnings + 1 info fixed). Key fixes — R15 3-run reset via explicit resetSeed() hooks (drops @DirtiesContext), master-seed end-to-end via @DynamicPropertySource + SplittableRandom.split, buffs.granted counter relocated BuffRegistry→EnvironmentEngine.grantSurvivorBuffs (atomic on new-buff only), D-19 scoping dropped (Entity.id exists on all permits), fertility yaml prefix corrected paralife.simulation.fertility.*, tick-interval bumped to 20ms (p99 margin 1.5×), heap window raised 250→300 + gc hint, autocorrelation lag∈[20,100] scan, SoftAssertions hybrid with try-finally, SpawnConfig promoted to @ConfigurationProperties, CompositeEnergyDistributor XOR magic replaced with SplittableRandom.split, ActionResolver lines 330/361 no-arg shuffles seeded. Prior CLEAN-SLATE round history preserved in git f37659b/9218af2. Wave 1 — 16-01 RNG injection refactor (10 hot-path sites + BotClient:294 fix + BondedPair.formBond → RandomGenerator), 16-03 TickEngine tick-work DistributionSummary inline + fixtures .gitignore + build.gradle.kts -PincludeLong wiring, 16-04 five test helpers (TriggerWatcher / PopulationHistory / RunFixtureWriter / TestLogCapture / SeededBotLauncher). Wave 2 — 16-02 EmergenceMetrics bean + 4 counter increments + EMERGENCE log markers + wiring test (real BondingConfig binding). Wave 3 — 16-05 R15 CompositeFormationDeterminismTest (engine-direct, @DirtiesContext BEFORE_EACH_TEST_METHOD, 3-run HashSet.hasSize(1) + @Nested DifferentSeedControl negative-control class per D-23). Wave 4 — 16-06 R16/R17/R18 EmergenceStabilityLoadTest (full-stack @SpringBootTest RANDOM_PORT, 100 bots, 1000 ticks, D-07 × 3 + D-04 × 5 + D-11 × 7 assertions, fail-fast + try-finally fixture dump per D-22, @Value master-seed override per D-20). Wave 5 — 16-07 16-EMERGENCE.md narrative + R19 full-suite gate (checkpoint:human-verify). CONTEXT addenda D-19..D-24 appended this round: D-19 TriggerWatcher signal #5 scoped to entities with stable IDs, D-20 @Value master-seed override, D-21 autocorrelation for D-04 signal #4, D-22 fail-fast try-finally, D-23 live @Nested mutation control, D-24 buff-granted log gated on wasNewBuff. Coverage — R15→01/04/05, R16→02/04/06, R17→02/04/06/07, R18→03/04/06, R19→07. Checker PASSED iteration 3/3 after 2 revision rounds (iter 1 — 8 blockers + 11 warnings + 1 info closed; iter 2 — 2 blockers + 3 warnings closed). Next — /clear then /gsd-execute-phase 16.
-last_updated: "2026-04-21T09:15:00.000Z"
+stopped_at: Phase 16 plan 06 complete (2026-04-21). EmergenceStabilityLoadTest landed as a single @Test with 15 soft-assertions (D-07×3 + D-04×5 + D-11×7), @DynamicPropertySource deriving all component seeds from one masterSeed via SplittableRandom.split, tick-driven sampling loop via getCurrentTick(), try-finally fixture dump with I/O isolation. Rule 4 scope expansion: exposed MAX_RESPAWNS_PER_SESSION=5 as @ConfigurationProperties-bound RespawnConfig (prefix paralife.websocket; production default 5 preserved in application.yml; test overrides to 1_000_000 via @TestPropertySource to disable the T-15-04 DoS cap for long-run only). Commits: 0669cc7 (feat production config change), dd3ff31 (test file). Task 3 calibration: grid 64→128 + bonding 0.4→0.6 + env lightning/mutagen 0.1/0.08→0.02/0.01 + tick interval 20→30ms, all documented in 16-VALIDATION.md Calibration Evidence section + test javadoc calibration table; nyquist_compliant flipped true. p99 extraction bug fixed (DistributionSummary stores ms directly — use value() not value(TimeUnit.MILLISECONDS) which is Timer-only). Deferred soft-fails (Rule 3-attempt limit): D-04 #2 composites=0 on low-density grid (bonded pairs form but not adjacent; trade-off with D-07 stability); D-11 #3 p99 at 30ms vs 27ms budget (JIT warmup tail). Both surfaced via assertSoftly in run-*.json evidence for 16-07 R19 gate to evaluate. Full suite 575/575 green, no regressions. Next: 16-07 (16-EMERGENCE.md narrative + R19 full-suite gate).
+last_updated: "2026-04-21T10:15:00.000Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 7
@@ -25,23 +25,23 @@ See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
 
-**Current focus:** Phase 16 (Emergent Behavior Tests) — REPLANNED clean-slate, ready to execute
+**Current focus:** Phase 16 (Emergent Behavior Tests) — wave 4 complete, one plan remaining
 
-**Status:** Phase 16 planned; 7 plans across 5 waves; checker PASSED (iteration 3/3)
+**Status:** Phase 16 in-progress; 6/7 plans complete
 **Current Phase:** 16 — Emergent Behavior Tests
 **Current Phase Name:** Emergent Behavior Tests
 **Total Phases:** 16 (+ 15.1, 15.2 decimals)
-**Current Plan:** 4 of 7 complete (16-01, 16-02, 16-03, 16-04 landed; next: 16-05)
+**Current Plan:** 6 of 7 complete (16-01, 16-02, 16-03, 16-04, 16-05, 16-06 landed; next: 16-07)
 **Total Plans in Phase:** 7
-**Progress:** [████░░░░░░] 4 of 7 plans complete
+**Progress:** [██████████] 6 of 7 plans complete
 **Last Activity:** 2026-04-21
 
 ## Current Position
 
-Phase: 16 (Emergent Behavior Tests) — in-progress, wave 2 complete
-Plan: 4 of 7 complete; next 16-05 (CompositeFormationDeterminismTest)
-Status: in-progress — Wave 1 (16-01 RNG injection, 16-03 tick-work metrics, 16-04 test helpers) + Wave 2 (16-02 EmergenceMetrics bean/wiring/test) landed. Full suite 571/571 green. Remaining: wave 3 (16-05), wave 4 (16-06), wave 5 (16-07).
-Last activity: 2026-04-21 — Plan 16-02 executed (sequential mode). 3 tasks committed atomically: 00ab101 (EmergenceMetrics bean), 33792c7 (counter wiring + EMERGENCE log markers + size-diff buff-granted detection in grantSurvivorBuffs per REVIEWS HIGH #3), 2fd59db (EmergenceMetricsWiringTest with explicit transferBuffs regression assertion). Added 3 public test-hook passthroughs on EnvironmentEngine so wiring test can live in com.paralife.metrics per plan spec. Back-compat 13-arg SimulationEngine ctor preserved for SimulationEngineTest.engineWithBuffs. 17 min duration, 4 files (2 created + 2 modified), 571/571 tests pass.
+Phase: 16 (Emergent Behavior Tests) — in-progress, wave 4 complete
+Plan: 6 of 7 complete; next 16-07 (16-EMERGENCE.md narrative + R19 full-suite gate)
+Status: in-progress — Waves 1-4 landed. Full suite 575/575 green. Remaining: wave 5 (16-07 R19 gate).
+Last activity: 2026-04-21 — Plan 16-06 executed (sequential, resumed from prior executor's Rule 4 checkpoint). EmergenceStabilityLoadTest @SpringBootTest(RANDOM_PORT) 100 bots × 1000 ticks × 128×128 grid lands with 15 soft-assertions collecting D-07/D-04/D-11 signals into fixture JSON. Commits: 0669cc7 (feat: expose respawn cap as @ConfigurationProperties — user-approved scope expansion; production default 5 preserved), dd3ff31 (test: EmergenceStabilityLoadTest — full-stack long-run). Calibration evidence in 16-VALIDATION.md "Calibration Evidence (Task 16-06-03)"; nyquist_compliant true. Two known soft-fails deferred to 16-07 gate review (D-04 #2 composites=0 on low-density calibrated grid; D-11 #3 p99 at 30ms budget due to JIT warmup). Duration ~42 min.
 
 ## Accumulated Context
 

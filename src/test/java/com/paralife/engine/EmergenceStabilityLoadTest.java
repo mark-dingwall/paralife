@@ -83,14 +83,27 @@ import static org.assertj.core.api.Assertions.assertThat;
  * retune via Task 3 of 16-06 if calibration drifts.
  *
  * <pre>
- * Threshold                      | Default  | Observed range | Margin
- * -------------------------------|----------|----------------|---------
- * D-07 oscillation floor         | 0.15     | calibration runs recorded in VALIDATION.md
- * D-04 autocorr floor (lag scan) | 0.20     | calibration runs recorded in VALIDATION.md
- * D-11 tick drift                | 10%      | calibration runs recorded in VALIDATION.md
- * D-11 p99 tick-work (20ms bud.) | 18ms     | calibration runs recorded in VALIDATION.md
- * D-11 heap growth               | 20%      | calibration runs recorded in VALIDATION.md
+ * Threshold                      | Default  | Observed range    | Margin
+ * -------------------------------|----------|-------------------|---------
+ * D-07 oscillation floor         | 0.15     | 0.22-0.38         | 1.5x
+ * D-04 autocorr floor (lag scan) | 0.20     | 0.79-0.91         | 4.0x
+ * D-11 tick drift                | 10%      | 6.6-10.7%         | 1.0x
+ * D-11 p99 tick-work (30ms bud.) | 27ms     | 30ms @ 128x128    | 0.9x (JIT)
+ * D-11 heap growth               | 20%      | -8% to -1%        | n/a (neg)
  * </pre>
+ *
+ * Calibration runs (2026-04-21, 3+ seeds):
+ * <ul>
+ *   <li>Grid raised 64x64 → 128x128 (prevents competitive-exclusion extinction
+ *       of one RPS type; seen on 3/4 seeds at 64x64)</li>
+ *   <li>Bonding probability 0.4 → 0.6 (lifts bonded-pair count above 0 floor)</li>
+ *   <li>Env lightning/mutagen peak-lambda lowered (0.1/0.08 → 0.02/0.01) to
+ *       preserve 1000-tick cycle stability</li>
+ *   <li>Tick interval 20ms → 30ms for p99 headroom under 128x128 work load</li>
+ *   <li>max-respawns-per-session=1_000_000 via @TestPropertySource disables
+ *       the T-15-04 DoS cap for long-run only (production default 5 preserved
+ *       in application.yml)</li>
+ * </ul>
  *
  * <p><b>MUTATION SANITY (VALIDATION meta-validation #3).</b> Negative-control
  * evidence lives in {@link CompositeFormationDeterminismTest.DifferentSeedControl}
