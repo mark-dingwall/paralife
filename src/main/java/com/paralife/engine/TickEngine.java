@@ -1,7 +1,11 @@
 package com.paralife.engine;
 
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
@@ -26,11 +30,28 @@ public class TickEngine {
     private final ApplicationEventPublisher eventPublisher;
     private final AtomicLong tickCounter = new AtomicLong(0);
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final DistributionSummary tickWork;
     private volatile Thread tickThread;
 
-    public TickEngine(TickConfig config, ApplicationEventPublisher eventPublisher) {
+    @Autowired
+    public TickEngine(TickConfig config, ApplicationEventPublisher eventPublisher,
+                      MeterRegistry meterRegistry) {
         this.config = config;
         this.eventPublisher = eventPublisher;
+        this.tickWork = DistributionSummary.builder("paralife.tick.work.ms")
+                .description("Per-tick wall-clock work time end-to-end (listener dispatch + all @Order slots)")
+                .baseUnit("ms")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(meterRegistry);
+    }
+
+    /**
+     * Back-compat overload for unit tests that construct TickEngine directly
+     * without a MeterRegistry bean. Defaults to a SimpleMeterRegistry so the
+     * tickWork DistributionSummary is always non-null.
+     */
+    public TickEngine(TickConfig config, ApplicationEventPublisher eventPublisher) {
+        this(config, eventPublisher, new SimpleMeterRegistry());
     }
 
     @PostConstruct
@@ -88,7 +109,9 @@ public class TickEngine {
                 var event = new TickEvent(tickNumber);
                 eventPublisher.publishEvent(event);
 
-                long elapsed = (System.nanoTime() - startTime) / 1_000_000;
+                long elapsedNs = System.nanoTime() - startTime;
+                tickWork.record(elapsedNs / 1_000_000.0);
+                long elapsed = elapsedNs / 1_000_000;
                 long sleepTime = Math.max(0, config.intervalMs() - elapsed);
 
                 if (elapsed > config.intervalMs()) {
