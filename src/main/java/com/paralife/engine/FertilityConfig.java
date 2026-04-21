@@ -19,7 +19,8 @@ public record FertilityConfig(
         int patchCount,
         int patchMinRadius,
         int patchMaxRadius,
-        int maxLevel
+        int maxLevel,
+        Long seed
 ) {
     public FertilityConfig {
         if (patchCount < 0)
@@ -32,9 +33,18 @@ public record FertilityConfig(
                             + " max=" + patchMaxRadius);
         if (maxLevel <= 0)
             throw new IllegalArgumentException("maxLevel must be > 0: " + maxLevel);
+        // seed may be null — that is valid (production path).
+    }
+
+    /**
+     * Back-compat 4-arg convenience constructor — preserves pre-Phase-16 direct
+     * instantiation in unit tests. Defaults seed to {@code null} (unseeded).
+     */
+    public FertilityConfig(int patchCount, int patchMinRadius, int patchMaxRadius, int maxLevel) {
+        this(patchCount, patchMinRadius, patchMaxRadius, maxLevel, null);
     }
 
     public static FertilityConfig defaults() {
-        return new FertilityConfig(20, 3, 8, 100);
+        return new FertilityConfig(20, 3, 8, 100, null);
     }
 }

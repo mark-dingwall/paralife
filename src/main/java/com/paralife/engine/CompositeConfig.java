@@ -39,7 +39,8 @@ public record CompositeConfig(
         int reproducerPassiveDrain,
         int reproducerActiveDrain,
         int sensorPassiveDrain,
-        boolean canFormComposites
+        boolean canFormComposites,
+        Long seed
 ) {
     public CompositeConfig {
         if (dissolutionChance < 0 || dissolutionChance > 1)
@@ -68,9 +69,33 @@ public record CompositeConfig(
             throw new IllegalArgumentException("reproducerActiveDrain must be >= 0: " + reproducerActiveDrain);
         if (sensorPassiveDrain < 0)
             throw new IllegalArgumentException("sensorPassiveDrain must be >= 0: " + sensorPassiveDrain);
+        // seed may be null — that is valid (production path).
+    }
+
+    /**
+     * Back-compat 14-arg convenience constructor — preserves pre-Phase-16 direct
+     * instantiation in unit tests. Defaults seed to {@code null} (unseeded).
+     */
+    public CompositeConfig(double dissolutionChance, int criticalEnergyPercent,
+                           double speedConstant,
+                           int locomotorPassiveDrain, int locomotorActiveDrain,
+                           int feederPassiveDrain, int feederActiveDrain,
+                           int attackerPassiveDrain, int attackerActiveDrain,
+                           int defenderPassiveDrain,
+                           int reproducerPassiveDrain, int reproducerActiveDrain,
+                           int sensorPassiveDrain,
+                           boolean canFormComposites) {
+        this(dissolutionChance, criticalEnergyPercent, speedConstant,
+                locomotorPassiveDrain, locomotorActiveDrain,
+                feederPassiveDrain, feederActiveDrain,
+                attackerPassiveDrain, attackerActiveDrain,
+                defenderPassiveDrain,
+                reproducerPassiveDrain, reproducerActiveDrain,
+                sensorPassiveDrain,
+                canFormComposites, null);
     }
 
     public static CompositeConfig defaults() {
-        return new CompositeConfig(0.03, 12, 1.0, 1, 3, 1, 2, 1, 4, 1, 1, 2, 1, true);
+        return new CompositeConfig(0.03, 12, 1.0, 1, 3, 1, 2, 1, 4, 1, 1, 2, 1, true, null);
     }
 }

@@ -48,6 +48,12 @@ paralife:
     enabled: true
     overcrowding-threshold: 6
     overcrowding-energy-penalty: 2
+    # Phase 16 Plan 01: nullable Long seeds. Production = unseeded; tests bind
+    # explicit values via @TestPropertySource / @DynamicPropertySource.
+    seed:                       # Long; null = unseeded (SimulationEngine RNG)
+    action-seed:                # Long; null = unseeded (ActionResolver RNG)
+    spawn:
+      seed:                     # Long; null = unseeded (WorldWebSocketHandler spawn placement RNG)
     # Per-type metabolic profiles (Phase 13 D-02, D-03).
     # Nested under simulation.types.* so @ConfigurationProperties on MetabolicProfile
     # (prefix paralife.simulation.types) doesn't collide with SimulationConfig's flat fields.
@@ -98,6 +104,7 @@ paralife:
       patch-min-radius: 3
       patch-max-radius: 8
       max-level: 100
+      seed:                   # Phase 16 Plan 01: Long; null = unseeded (FertilityInitializer RNG)
     seasons:
       year-length-ticks: 200
       amplitude: 0.5
@@ -178,3 +185,4 @@ paralife:
     reproducer-active-drain: 2
     sensor-passive-drain: 1
     can-form-composites: true
+    seed:                     # Phase 16 Plan 01: Long; null = unseeded (CompositeEnergyDistributor RNG)
