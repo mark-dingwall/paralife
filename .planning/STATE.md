@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Combination & Emergence
-current_phase: 15.2
-current_phase_name: Own-Death Event Wiring
-current_plan: 1
-status: phase-complete
-stopped_at: Phase 15.2 complete 2026-04-21. Live-server UAT retry (100 bots × 180s, 20x20 grid, decay=5) against commit 4d743ce: 544 DeathFinalizer events → 414 wire-level `v|D` → respawn FSM cycles (`-r1` through `-r5` ladder observed), 75 sessions hit MAX_RESPAWNS_PER_SESSION=5 cap and disconnected cleanly on `E|429` (no retry storm), 100/100 closed with code 1000 on shutdown. Phase 15 UAT returns to `status: complete, passed: 7`. ROADMAP 15.2 → Complete.
-last_updated: "2026-04-21T09:05:00.000Z"
+current_phase: 16
+current_phase_name: Emergent Behavior Tests
+current_plan: 0
+status: context-captured
+stopped_at: Phase 16 context captured 2026-04-21. 6 gray areas discussed (test layout, emergent signals, stability criteria, load baseline, UAT, protocol surface). 18 decisions locked. Key calls — hybrid test layout (R15 engine-direct short + R16/17/18 full-stack long-run 1000 ticks), 5 tracked emergent signals with trigger-watcher pattern, component-seeded statistical assertions (byte-stable rejected), R18 reframed from wire-parity to capacity-headroom stability, Phase 16 JUnit-only with subjective operator UAT deferred to M5 visualiser phase, `paralife.emergence.*` Micrometer counters + `EMERGENCE` log markers instrumented. No cross-host deployment — M6 owns that. Next — /gsd-plan-phase 16.
+last_updated: "2026-04-21T10:00:00.000Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 7
@@ -25,23 +25,23 @@ See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
 
-**Current focus:** Phase 16 (Emergent Behavior Tests) — ready to plan
+**Current focus:** Phase 16 (Emergent Behavior Tests) — context captured, ready to plan
 
-**Status:** Phase 15 UAT 7/7 pass after 15.2 closed the own-death wiring gap
-**Current Phase:** 15.2 (complete) — next up Phase 16
-**Current Phase Name:** Own-Death Event Wiring
+**Status:** Phase 16 CONTEXT.md captured; 6 gray areas discussed; 18 decisions locked
+**Current Phase:** 16 — Emergent Behavior Tests
+**Current Phase Name:** Emergent Behavior Tests
 **Total Phases:** 16 (+ 15.1, 15.2 decimals)
-**Current Plan:** n/a (15.2 shipped in a single commit)
-**Total Plans in Phase:** 1
-**Progress:** [██████████] UAT 7/7
+**Current Plan:** n/a (not yet planned)
+**Total Plans in Phase:** TBD
+**Progress:** [██░░░░░░░░] context captured
 **Last Activity:** 2026-04-21
 
 ## Current Position
 
-Phase: 15.2 (Own-Death Event Wiring) — ✅ Complete
-Plan: 1 of 1 (shipped in commit 4d743ce — wiring + NPE fix + tests)
-Status: phase-complete — Phase 15 UAT now 7/7 pass; Phase 15 returns to `status: complete`
-Last activity: 2026-04-21 -- 15.2 UAT retry against live server: 544 DeathFinalizer, 414 respawn `S|`, full -r1..-r5 ladder, 75 sessions hit cap and disconnected cleanly on E|429 (no retry storm). Test 7 evidence updated; 15-UAT.md status flipped to complete; 15.2 SUMMARY.md written.
+Phase: 16 (Emergent Behavior Tests) — context captured
+Plan: 0 of TBD (awaiting /gsd-plan-phase 16)
+Status: context-captured — 16-CONTEXT.md + 16-DISCUSSION-LOG.md committed
+Last activity: 2026-04-21 -- /gsd-discuss-phase 16 walked all 6 gray areas interactively. Key decisions: hybrid test layout (R15 engine-direct + R16/17/18 full-stack long-run, 1000 ticks); 5 tracked emergent signals with trigger-watcher rolling-average pattern for behavioural ones; component-seeded statistical assertions (byte-stable rejected as too fragile); R18 reframed from wire-parity regression to capacity-headroom stability (feature-agnostic ratios); Phase 16 JUnit-only, subjective operator UAT deferred to M5 visualiser phase; `paralife.emergence.*` Micrometer counters + `EMERGENCE` log markers added as cheap M5-seed instrumentation; in-JVM full-stack only (real cross-host deployment = M6).
 
 ## Accumulated Context
 
