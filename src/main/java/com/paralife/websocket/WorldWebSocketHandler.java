@@ -6,6 +6,7 @@ import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.ActionResolver;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.MetabolicProfile;
+import com.paralife.engine.SpawnConfig;
 import com.paralife.engine.TickEngine;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
@@ -14,7 +15,7 @@ import com.paralife.world.WorldGrid;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.Random;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -78,17 +79,52 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
     private final BotRegistry botRegistry;
     private final ActionResolver actionResolver;
     private final MetabolicProfile metabolicProfile;
+    private final SpawnConfig spawnConfig;
+    /**
+     * Phase 16 Plan 01: seeded placement RNG. Non-final so {@link #resetSeed()}
+     * can reassign it between test runs. Bound from {@link SpawnConfig#seed()}
+     * — null = unseeded (production).
+     */
+    private Random spawnRng;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public WorldWebSocketHandler(SessionRegistry sessionRegistry, WorldGrid worldGrid,
                                   TickEngine tickEngine, BotRegistry botRegistry,
                                   ActionResolver actionResolver,
-                                  MetabolicProfile metabolicProfile) {
+                                  MetabolicProfile metabolicProfile,
+                                  SpawnConfig spawnConfig) {
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
         this.tickEngine = tickEngine;
         this.botRegistry = botRegistry;
         this.actionResolver = actionResolver;
         this.metabolicProfile = metabolicProfile;
+        this.spawnConfig = spawnConfig;
+        this.spawnRng = buildRng();
+    }
+
+    /**
+     * Back-compat 6-arg convenience ctor — preserves pre-Phase-16 direct-
+     * instantiation tests (if any). Defaults SpawnConfig to unseeded.
+     */
+    public WorldWebSocketHandler(SessionRegistry sessionRegistry, WorldGrid worldGrid,
+                                  TickEngine tickEngine, BotRegistry botRegistry,
+                                  ActionResolver actionResolver,
+                                  MetabolicProfile metabolicProfile) {
+        this(sessionRegistry, worldGrid, tickEngine, botRegistry, actionResolver,
+                metabolicProfile, SpawnConfig.defaults());
+    }
+
+    private Random buildRng() {
+        return spawnConfig.seed() == null ? new Random() : new Random(spawnConfig.seed());
+    }
+
+    /**
+     * Phase 16 Plan 01 (REVIEWS HIGH #1): re-initialises {@link #spawnRng} from
+     * {@link SpawnConfig#seed()}. Test-only.
+     */
+    public void resetSeed() {
+        this.spawnRng = buildRng();
     }
 
     @Override
@@ -188,7 +224,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         int maxEnergy = metabolicProfile.forType(particleType).maxEnergy();
         Particle particle = Particle.spawn(entityId, particleType, maxEnergy);
 
-        var rng = ThreadLocalRandom.current();
+        Random rng = spawnRng;
         int x = -1, y = -1;
         boolean placed = false;
         for (int attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS; attempt++) {

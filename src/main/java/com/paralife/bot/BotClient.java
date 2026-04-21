@@ -21,7 +21,6 @@ import java.net.URI;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -73,13 +72,13 @@ public class BotClient {
     private volatile String entityId;
 
     public BotClient(String serverUri, char species, HeuristicBrain brain) {
-        this(serverUri, species, brain, 100L, 50L, ThreadLocalRandom.current());
+        this(serverUri, species, brain, 100L, 50L, new Random());
     }
 
     public BotClient(String serverUri, char species, HeuristicBrain brain,
                      long respawnCooldownMs, long respawnJitterMs) {
         this(serverUri, species, brain, respawnCooldownMs, respawnJitterMs,
-                ThreadLocalRandom.current());
+                new Random());
     }
 
     public BotClient(String serverUri, char species, HeuristicBrain brain,
@@ -291,7 +290,7 @@ public class BotClient {
         alive.set(false);
         entityId = null;
         long jitter = respawnJitterMs > 0
-                ? ThreadLocalRandom.current().nextLong(respawnJitterMs)
+                ? rng.nextLong(respawnJitterMs)
                 : 0L;
         long waitMs = respawnCooldownMs + jitter;
         CompletableFuture.delayedExecutor(waitMs, TimeUnit.MILLISECONDS).execute(() -> {
