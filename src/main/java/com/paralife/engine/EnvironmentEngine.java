@@ -5,8 +5,10 @@ import com.paralife.engine.EnvCleanupHooksBean.PendingGrant;
 import com.paralife.engine.EnvironmentConfig.Mutagen;
 import com.paralife.engine.EnvironmentConfig.Toxin;
 import com.paralife.engine.SeasonTracker.Season;
+import com.paralife.metrics.EmergenceMetrics;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.paralife.world.Entity.BondedPair;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
@@ -86,6 +88,12 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     /** Entity-status bit 3 (0x08): entity has any active survivor buff (D-39). */
     public static final byte ENTITY_STATUS_BUFFED = 0x08;
 
+    /**
+     * Phase 16 Plan 02: shared fallback registry for back-compat test ctors
+     * that don't wire a real {@link EmergenceMetrics}. Single static allocation.
+     */
+    private static final SimpleMeterRegistry FALLBACK_REGISTRY = new SimpleMeterRegistry();
+
     private final WorldGrid worldGrid;
     private final SeasonTracker seasonTracker;
     private final EnvironmentConfig config;
@@ -93,6 +101,15 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     private final FertilityConfig fertilityConfig;
     private final DeathFinalizer deathFinalizer;
     private final EnvCleanupHooksBean envCleanupHooksBean;
+    /**
+     * Phase 16 Plan 02 D-14: emergence-signal counters. Incremented at the
+     * atomic domain-event trigger sites (mutagen infection start in
+     * {@link #resolveMutagenCollisions}, new-buff branch in
+     * {@link #grantSurvivorBuffs}). REVIEWS HIGH #3 — relocated from
+     * {@link BuffRegistry} so {@link BuffRegistry#transferBuffs} does NOT
+     * double-count identity-transfer events as emergence.
+     */
+    private final EmergenceMetrics emergenceMetrics;
     // Plan 14-06 Task 1: rng is a MUTABLE field (NOT final) so resetForTest can
     // reassign it from config.seed to produce deterministic cross-run replay.
     private Random rng;
@@ -214,10 +231,12 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     public EnvironmentEngine(WorldGrid worldGrid, SeasonTracker seasonTracker,
                               EnvironmentConfig config, BuffRegistry buffRegistry,
                               FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
-                              EnvCleanupHooksBean envCleanupHooksBean) {
+                              EnvCleanupHooksBean envCleanupHooksBean,
+                              EmergenceMetrics emergenceMetrics) {
         this(worldGrid, seasonTracker, config, buffRegistry, fertilityConfig, deathFinalizer,
                 envCleanupHooksBean,
-                config.seed() == null ? new Random() : new Random(config.seed()));
+                config.seed() == null ? new Random() : new Random(config.seed()),
+                emergenceMetrics);
     }
 
     /** Package-private test constructor for deterministic Random injection. */
@@ -226,7 +245,8 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                       FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
                       EnvCleanupHooksBean envCleanupHooksBean, Random rng) {
         this(worldGrid, seasonTracker, config, buffRegistry, fertilityConfig, deathFinalizer,
-                envCleanupHooksBean, new ToxinPathGenerator(), rng);
+                envCleanupHooksBean, new ToxinPathGenerator(), rng,
+                new EmergenceMetrics(FALLBACK_REGISTRY));
     }
 
     /**
@@ -240,6 +260,31 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                       FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
                       EnvCleanupHooksBean envCleanupHooksBean,
                       ToxinPathGenerator toxinPathGenerator, Random rng) {
+        this(worldGrid, seasonTracker, config, buffRegistry, fertilityConfig, deathFinalizer,
+                envCleanupHooksBean, toxinPathGenerator, rng,
+                new EmergenceMetrics(FALLBACK_REGISTRY));
+    }
+
+    /**
+     * Phase 16 Plan 02 back-compat bridge for direct-instantiation tests that
+     * inject a Random/ToxinPathGenerator. Production path uses the 7-arg
+     * autowired ctor above which supplies the Spring-wired EmergenceMetrics.
+     */
+    EnvironmentEngine(WorldGrid worldGrid, SeasonTracker seasonTracker,
+                      EnvironmentConfig config, BuffRegistry buffRegistry,
+                      FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
+                      EnvCleanupHooksBean envCleanupHooksBean,
+                      Random rng, EmergenceMetrics emergenceMetrics) {
+        this(worldGrid, seasonTracker, config, buffRegistry, fertilityConfig, deathFinalizer,
+                envCleanupHooksBean, new ToxinPathGenerator(), rng, emergenceMetrics);
+    }
+
+    EnvironmentEngine(WorldGrid worldGrid, SeasonTracker seasonTracker,
+                      EnvironmentConfig config, BuffRegistry buffRegistry,
+                      FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
+                      EnvCleanupHooksBean envCleanupHooksBean,
+                      ToxinPathGenerator toxinPathGenerator, Random rng,
+                      EmergenceMetrics emergenceMetrics) {
         this.worldGrid = worldGrid;
         this.seasonTracker = seasonTracker;
         this.config = config;
@@ -249,6 +294,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         this.envCleanupHooksBean = envCleanupHooksBean;
         this.rng = rng;
         this.toxinPathGenerator = toxinPathGenerator;
+        this.emergenceMetrics = emergenceMetrics;
         int w = worldGrid.getWidth();
         int h = worldGrid.getHeight();
         this.toxinGrid = new byte[w][h];
@@ -571,6 +617,10 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                         cfg.damagePerTick(), dur, new Position(x, y));
                 infections.put(id, infection);
                 mutagenInfectionEventCount++; // Plan 14-06 Task 3b counter
+                // Phase 16 Plan 02 D-14: emergence signal (mutagen infection started).
+                emergenceMetrics.incInfection();
+                log.info("EMERGENCE infection-started tick={} entity={} strain={}",
+                        tickNumber, id, strain);
             }
         }
     }
@@ -702,13 +752,39 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         long expiry = tickNumber + (long) initialTicks * cfg.buffDurationMultiplier();
         if (postOcc instanceof CompositeMember cm) {
             BuffType perk = roleSpecificBuff(cm.role());
-            buffRegistry.grant(entityId, perk, expiry);
-            buffRegistry.grant(entityId, BuffType.UPKEEP_MINUS_1, expiry);
+            grantWithEmergenceCount(entityId, perk, expiry, tickNumber);
+            grantWithEmergenceCount(entityId, BuffType.UPKEEP_MINUS_1, expiry, tickNumber);
         } else {
             BuffType pick = randomBuff();
-            buffRegistry.grant(entityId, pick, expiry);
+            grantWithEmergenceCount(entityId, pick, expiry, tickNumber);
         }
         log.debug("Mutagen buff granted: entity={} tick={} expiry={}", entityId, tickNumber, expiry);
+    }
+
+    /**
+     * Phase 16 Plan 02 D-14 (REVIEWS HIGH #3): grant a buff AND emit the
+     * emergence-counter + {@code EMERGENCE buff-granted} log ONLY on the
+     * new-buff branch. Detection uses the size-diff idiom on
+     * {@link BuffRegistry#getBuffs(String)} — {@code after > before} fires
+     * only when {@link BuffRegistry#grant(String, BuffType, long)} took the
+     * {@code list.add} path. The refresh branch ({@code list.set}, same-type
+     * replacement) leaves size unchanged and does not count.
+     *
+     * <p>This placement keeps {@link BuffRegistry#grant(String, BuffType, long)}
+     * signature/return-type unchanged (REVIEWS MEDIUM — minimum blast radius)
+     * and guarantees {@link BuffRegistry#transferBuffs(String, String)} — which
+     * also calls {@code grant()} internally for identity transfer — does NOT
+     * bump the emergence counter.
+     */
+    private void grantWithEmergenceCount(String entityId, BuffType type, long expiry, long tickNumber) {
+        int before = buffRegistry.getBuffs(entityId).size();
+        buffRegistry.grant(entityId, type, expiry);
+        int after = buffRegistry.getBuffs(entityId).size();
+        if (after > before) {
+            emergenceMetrics.incBuffGranted();
+            log.info("EMERGENCE buff-granted tick={} entity={} buff={} expiry={}",
+                    tickNumber, entityId, type, expiry);
+        }
     }
 
     /**

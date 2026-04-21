@@ -1,11 +1,13 @@
 package com.paralife.engine;
 
+import com.paralife.metrics.EmergenceMetrics;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
 import com.paralife.world.Entity.Nutrient;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
@@ -58,6 +60,13 @@ public class SimulationEngine {
      */
     static final int OVERCROWDED_THRESHOLD_DEFAULT = 6;
 
+    /**
+     * Phase 16 Plan 02: shared fallback registry for back-compat ctors that
+     * bypass Spring wiring. Single static allocation — avoids per-call registry
+     * allocation on direct-instantiation unit test paths.
+     */
+    private static final SimpleMeterRegistry FALLBACK_REGISTRY = new SimpleMeterRegistry();
+
     private final WorldGrid worldGrid;
     private final SimulationConfig config;
     private final BotRegistry botRegistry;
@@ -78,6 +87,13 @@ public class SimulationEngine {
      * pre-Phase-14 unit tests — every splash emission site guards on null.
      */
     private final EnvironmentEngine environmentEngine;
+    /**
+     * Phase 16 Plan 02 D-14: emergence-signal counters. Incremented at atomic
+     * domain-event trigger sites (bond formation, composite formation) inside
+     * this engine. Never null in Spring-wired paths; back-compat ctors supply a
+     * stub {@link EmergenceMetrics} bound to {@link #FALLBACK_REGISTRY}.
+     */
+    private final EmergenceMetrics emergenceMetrics;
     private final AtomicLong nutrientIdCounter = new AtomicLong(0);
     private final AtomicInteger lastTickBondCount = new AtomicInteger(0);
     /** Tracks previous tick's pool energy per composite for panic zone decrease detection (D-31). */
@@ -100,7 +116,8 @@ public class SimulationEngine {
                             SeasonTracker seasonTracker, BuffRegistry buffRegistry,
                             DeathCleanupHooks hooks,
                             @org.springframework.context.annotation.Lazy DeathFinalizer deathFinalizer,
-                            @org.springframework.context.annotation.Lazy EnvironmentEngine environmentEngine) {
+                            @org.springframework.context.annotation.Lazy EnvironmentEngine environmentEngine,
+                            EmergenceMetrics emergenceMetrics) {
         this.worldGrid = worldGrid;
         this.config = config;
         this.botRegistry = botRegistry;
@@ -114,7 +131,27 @@ public class SimulationEngine {
         this.hooks = hooks;
         this.deathFinalizer = deathFinalizer;
         this.environmentEngine = environmentEngine;
+        this.emergenceMetrics = emergenceMetrics;
         this.simRng = buildRng();
+    }
+
+    /**
+     * Phase 16 Plan 02 back-compat 13-arg ctor — pre-Plan-02 tests that wired
+     * the full collaborator surface (BuffRegistry, DeathFinalizer, EnvironmentEngine)
+     * but did not know about {@link EmergenceMetrics}. Supplies a stub
+     * EmergenceMetrics bound to {@link #FALLBACK_REGISTRY}.
+     */
+    public SimulationEngine(WorldGrid worldGrid, SimulationConfig config,
+                            BotRegistry botRegistry, BondingConfig bondingConfig,
+                            CompositeRegistry compositeRegistry, CompositeConfig compositeConfig,
+                            MetabolicProfile metabolicProfile, StarvationConfig starvationConfig,
+                            SeasonTracker seasonTracker, BuffRegistry buffRegistry,
+                            DeathCleanupHooks hooks,
+                            DeathFinalizer deathFinalizer,
+                            EnvironmentEngine environmentEngine) {
+        this(worldGrid, config, botRegistry, bondingConfig, compositeRegistry, compositeConfig,
+                metabolicProfile, starvationConfig, seasonTracker, buffRegistry, hooks,
+                deathFinalizer, environmentEngine, new EmergenceMetrics(FALLBACK_REGISTRY));
     }
 
     /**
@@ -157,6 +194,10 @@ public class SimulationEngine {
         // Phase 14 Plan 02: back-compat tests have no env pipeline. Splash emission
         // sites guard on null so the existing behavior (pure combat) is preserved.
         this.environmentEngine = null;
+        // Phase 16 Plan 02: back-compat ctor supplies a stub EmergenceMetrics
+        // bound to the shared FALLBACK_REGISTRY. Direct-instantiation unit tests
+        // that don't care about metrics can invoke this ctor unchanged.
+        this.emergenceMetrics = new EmergenceMetrics(FALLBACK_REGISTRY);
         this.simRng = buildRng();
     }
 
@@ -549,6 +590,12 @@ public class SimulationEngine {
                 worldGrid.clearEntity(bond.secondaryPos.x(), bond.secondaryPos.y());
                 claimedForBonding.add(bond.primaryPos);
                 claimedForBonding.add(bond.secondaryPos);
+                // Phase 16 Plan 02 D-14: emergence signal (bonded-pair formed).
+                emergenceMetrics.incBondedPair();
+                log.info("EMERGENCE bonded-pair-formed tick={} types={}+{} at=({},{})",
+                        tickNumber,
+                        bond.predator.type().name().charAt(0), bond.prey.type().name().charAt(0),
+                        bond.primaryPos.x(), bond.primaryPos.y());
                 // Plan 14-03 cycle-6 HIGH #2: on BondFormation, mutagen state
                 // TRANSFERS from constituent particle ids to bp.id() (MAX-merge
                 // semantics). Preserves infection progression + survivor-buff path.
@@ -603,6 +650,10 @@ public class SimulationEngine {
                 // Place on grid
                 worldGrid.setEntity(cf.pos1().x(), cf.pos1().y(), member1);
                 worldGrid.setEntity(cf.pos2().x(), cf.pos2().y(), member2);
+                // Phase 16 Plan 02 D-14: emergence signal (composite formed).
+                emergenceMetrics.incComposite();
+                log.info("EMERGENCE composite-formed tick={} size=2 compositeId={} role-mix=[{},{}]",
+                        tickNumber, compositeId, role1, role2);
 
                 // Register in CompositeRegistry — shared pool = remainder after individual allocation
                 int sharedPool = (cf.bp1().energy() - individualEnergy1) + (cf.bp2().energy() - individualEnergy2);
