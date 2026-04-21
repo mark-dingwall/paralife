@@ -203,7 +203,7 @@ Plans:
 | 12 | Composite Entities | ✅ Complete |
 | 13 | Energy & Metabolism System | Planning complete |
 | 14 | Environmental Rules | Context complete |
-| 15 | Protocol & Transport Overhaul | UAT 6/7 pass, 1 issue (respawn FSM blocked on 15.2) |
+| 15 | Protocol & Transport Overhaul | ✅ Complete (UAT 7/7 pass after 15.2) |
 | 15.1 | Bot Operator CLI | ✅ Complete |
-| 15.2 | Own-Death Event Wiring | Not started (surfaced by 15.1 UAT retry) |
+| 15.2 | Own-Death Event Wiring | ✅ Complete |
 | 16 | Emergent Behavior Tests | Not started |

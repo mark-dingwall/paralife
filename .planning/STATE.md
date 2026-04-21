@@ -2,19 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Combination & Emergence
-current_phase: 15
-current_phase_name: Protocol & Transport Overhaul
-current_plan: 11
-status: phase-uat-issue
-uat_issue_blocked_on: Phase 15.2 (own-death v-block wiring)
-stopped_at: Phase 15.1 code landed 2026-04-21; UAT retry against BotRunner recovered 3 of 4 demoted tests (3/5/6) with real evidence. Test 7 (Respawn FSM) revealed a latent Phase 15 gap — TickBroadcaster.buildEventsForBot (src/main/java/com/paralife/websocket/TickBroadcaster.java:636) never emits own-death `v|D` events onto the wire; comment in-file already flagged it as 'plans 15-09+ wire the remaining event sources' but that wiring was never completed. Combat-tight UAT run produced 105 server-side DeathFinalizer events and 0 bot-side respawns. Out of Phase 15.1 scope — plan explicitly excludes changes to wire protocol / codec / FSM. Tracked for Phase 15.2 (or Phase 16 input). UAT 6/7 pass, 1/7 issue.
-last_updated: "2026-04-21T04:30:00.000Z"
+current_phase: 15.2
+current_phase_name: Own-Death Event Wiring
+current_plan: 1
+status: phase-complete
+stopped_at: Phase 15.2 complete 2026-04-21. Live-server UAT retry (100 bots × 180s, 20x20 grid, decay=5) against commit 4d743ce: 544 DeathFinalizer events → 414 wire-level `v|D` → respawn FSM cycles (`-r1` through `-r5` ladder observed), 75 sessions hit MAX_RESPAWNS_PER_SESSION=5 cap and disconnected cleanly on `E|429` (no retry storm), 100/100 closed with code 1000 on shutdown. Phase 15 UAT returns to `status: complete, passed: 7`. ROADMAP 15.2 → Complete.
+last_updated: "2026-04-21T09:05:00.000Z"
 last_activity: 2026-04-21
 progress:
-  total_phases: 6
-  completed_phases: 5
-  total_plans: 29
-  completed_plans: 29
+  total_phases: 7
+  completed_phases: 7
+  total_plans: 30
+  completed_plans: 30
   percent: 100
 ---
 
@@ -26,23 +25,23 @@ See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
 
-**Current focus:** Phase 15.1 close + Phase 15.2 spec (own-death v-block wiring)
+**Current focus:** Phase 16 (Emergent Behavior Tests) — ready to plan
 
-**Status:** Phase 15 UAT 6/7 pass, Test 7 blocked on Phase 15.2 fix
-**Current Phase:** 15
-**Current Phase Name:** Protocol & Transport Overhaul
-**Total Phases:** 16
-**Current Plan:** 11 (code complete); Phase 15.1 BotRunner landed
-**Total Plans in Phase:** 11
-**Progress:** [█████████░] UAT 6/7 (1 issue)
+**Status:** Phase 15 UAT 7/7 pass after 15.2 closed the own-death wiring gap
+**Current Phase:** 15.2 (complete) — next up Phase 16
+**Current Phase Name:** Own-Death Event Wiring
+**Total Phases:** 16 (+ 15.1, 15.2 decimals)
+**Current Plan:** n/a (15.2 shipped in a single commit)
+**Total Plans in Phase:** 1
+**Progress:** [██████████] UAT 7/7
 **Last Activity:** 2026-04-21
 
 ## Current Position
 
-Phase: 15 (Protocol & Transport Overhaul) — UAT 6/7 pass + 1 issue
-Plan: 11 of 11 (all code plans shipped); Phase 15.1 BotRunner landed
-Status: phase-uat-issue — Test 7 respawn FSM blocked on server-side own-death `v|D` wiring gap; Phase 15.2 to land the fix
-Last activity: 2026-04-21 -- Phase 15.1 code + UAT retries landed. Tests 3/5/6 real-evidence pass against BotRunner; Test 7 revealed a latent TickBroadcaster gap (own-death events never projected onto wire). Phase 15.1 closes with 6/7 pass; Phase 15.2 will land the wire-side death event emission.
+Phase: 15.2 (Own-Death Event Wiring) — ✅ Complete
+Plan: 1 of 1 (shipped in commit 4d743ce — wiring + NPE fix + tests)
+Status: phase-complete — Phase 15 UAT now 7/7 pass; Phase 15 returns to `status: complete`
+Last activity: 2026-04-21 -- 15.2 UAT retry against live server: 544 DeathFinalizer, 414 respawn `S|`, full -r1..-r5 ladder, 75 sessions hit cap and disconnected cleanly on E|429 (no retry storm). Test 7 evidence updated; 15-UAT.md status flipped to complete; 15.2 SUMMARY.md written.
 
 ## Accumulated Context
 
@@ -58,13 +57,13 @@ Phase 15 plan 11 Task 4: Three excluded-from-build test files (ActionResolverTes
 
 ### Blockers/Concerns
 
-_(none — WS keepalive gap resolved 2026-04-21 via WebSocketKeepaliveService + 60s Jetty idle timeout; Phase 15 UAT Test 7 re-run passes.)_
+_(none — Phase 15.2 closed the own-death wiring gap; Phase 15 UAT 7/7 pass with real live-server evidence.)_
 
 ## Session Continuity
 
-Last session: 2026-04-20T18:45:00.000Z
-Stopped at: Phase 15 complete — plan 15-11 Task 4 landed. Messages.java fully deleted (commit 3b64e83); ROADMAP and STATE updated.
-Resume file: .planning/phases/15-protocol-transport-overhaul/15-11-SUMMARY.md
+Last session: 2026-04-21T09:05:00.000Z
+Stopped at: Phase 15.2 complete — commit 4d743ce landed earlier; live-server UAT retry this session confirmed respawn FSM end-to-end (100 bots × 180s, 414 respawns, full -r1..-r5 ladder). 15-UAT.md Test 7 flipped to pass; 15.2 SUMMARY.md written; ROADMAP + STATE updated.
+Resume file: .planning/phases/15.2-own-death-event-wiring/SUMMARY.md
 Next command: /gsd-plan-phase 16 (Emergent Behavior Tests)
 
 ### Archived session note (2026-04-20T17:20:00Z — wave 6 complete)

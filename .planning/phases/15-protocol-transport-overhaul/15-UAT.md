@@ -1,9 +1,9 @@
 ---
-status: partial
+status: complete
 phase: 15-protocol-transport-overhaul
 source: [15-01-SUMMARY.md, 15-02-SUMMARY.md, 15-03-SUMMARY.md, 15-04-SUMMARY.md, 15-05-SUMMARY.md, 15-06-SUMMARY.md, 15-07-SUMMARY.md, 15-08-SUMMARY.md, 15-09-SUMMARY.md, 15-10-SUMMARY.md, 15-11-SUMMARY.md]
 started: 2026-04-20T12:58:27Z
-updated: 2026-04-21T04:30:00Z
+updated: 2026-04-21T09:05:00Z
 ---
 
 ## Tests
@@ -39,18 +39,18 @@ evidence: "2026-04-21 retry concurrent with Test 5 at t~10s (100 bots active): `
 
 ### 7. Respawn FSM After Death
 expected: Connect a bot, wait for it to take lethal damage (`v...D` event). BotClient clears `entityId`, keeps the session open, and after `respawnCooldownMs + 0..respawnJitterMs` sends a fresh `r|<species>` register. Server assigns new entityId and the bot resumes receiving tick frames. An E|429 response on respawn cap triggers disconnect (no retry storm).
-result: issue
-evidence: "2026-04-21 retry found a server-side wire-protocol gap that blocks this test from ever passing as currently implemented. Combat-tight run (20x20 grid, 0 rocks, energy-decay=5, 100 bots × 180s) via `./gradlew runBot --args=\"ws://localhost:8080/ws/world 100 180\" --paralife.world.width=20 --paralife.world.height=20 --paralife.simulation.energy-decay-per-tick=5 --paralife.world.rock.density-threshold=255` produced 105 server-side `DeathFinalizer: Particle death finalised` events (DEBUG log) — but zero bot-side respawns: `Entity registered: ... -rN` count = 0, E|429 count = 0. Root cause located: `TickBroadcaster.buildEventsForBot` (src/main/java/com/paralife/websocket/TickBroadcaster.java:636) only drains composite LOCOMOTOR alarms; no own-damage or own-death `Event('D', ...)` is ever emitted onto the v-block. The in-file comment openly flags this: 'those events are produced but not projected onto the wire in plan 15-08. Plans 15-09+ wire the remaining event sources; this slot is ready.' That wiring was never completed. BotClient.java:243 death check `t.events().stream().anyMatch(ev -> ev.code() == 'D')` therefore never fires. Respawn FSM is untestable end-to-end today — server kills the entity (grid cleanup + BotRegistry.unregisterByEntity) but the owning session keeps receiving tick frames forever with no death signal. Fix scope is server-side event-source wiring (not transport, not codec, not bot FSM) and belongs in a new Phase 15.2 or Phase 16 input, per Phase 15.1 plan's 'exit ramp' clause. This is NOT an artefact of the throwaway-harness revert — it is a latent gap in plan 15-08 that the throwaway harness never exercised long enough to expose."
+result: pass
+evidence: "2026-04-21 retry against Phase 15.2 wiring (commit 4d743ce). Combat-tight run (20×20, 0 rocks, energy-decay=5, 100 bots × 180s) via `./gradlew runBot --args=\"ws://localhost:8080/ws/world 100 180\"` with `paralife.world.width=20 paralife.world.height=20 paralife.simulation.energy-decay-per-tick=5 paralife.world.rock.density-threshold=255` on the server JVM. Server log: `DeathFinalizer` × 544, `Entity registered: ...-r1..-r5` × 414 (respawn ladder capped at MAX_RESPAWNS_PER_SESSION=5 — all of -r1..-r5 observed, 0 of -r6). Bot log: `Bot registered:` × 514 (100 initial `S|` + 414 respawn `S|`), `Server error 429: respawn cap exceeded` × 75 (75 sessions reached the cap and disconnected — no retry storm, no reconnect spam). Entity IDs confirm session-stable respawn: e.g. `entity-4b60d948-32aa-5c54-5dd4-6a3cfe300ae5-r1` reuses the original session UUID. All 100 sessions closed with code 1000 on BotRunner shutdown. End-to-end respawn FSM exercised over a 180s window with four complete `v|D → r|species → S|entity-…-rN` round trips per session on average."
 
 ## Summary
 
 total: 7
-passed: 6
-issues: 1
+passed: 7
+issues: 0
 pending: 0
 skipped: 0
 blocked: 0
 
 ## Gaps
 
-_(Test 7 revealed a latent Phase 15 gap: server emits no `v|D` own-death event onto the wire, so the respawn FSM cannot be exercised end-to-end even though the DeathFinalizer correctly unregisters dying entities server-side. See Test 7 evidence for exact source pointer (`TickBroadcaster.java:636`) and rationale. Fix is out of Phase 15.1 scope — Phase 15.1 explicitly excludes changes to wire protocol / codec / respawn FSM. Tracked for Phase 15.2 (or Phase 16 input if that's where it lands after discussion).)_
+_(none — Phase 15.2 closed the own-death wiring gap; Test 7 now passes end-to-end with 414 respawns + 75 respawn-cap disconnects observed in a single 180s run.)_
