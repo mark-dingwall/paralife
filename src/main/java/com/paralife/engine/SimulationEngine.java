@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -81,6 +82,15 @@ public class SimulationEngine {
     private final AtomicInteger lastTickBondCount = new AtomicInteger(0);
     /** Tracks previous tick's pool energy per composite for panic zone decrease detection (D-31). */
     private final ConcurrentHashMap<String, Integer> previousPoolEnergy = new ConcurrentHashMap<>();
+    /**
+     * Phase 16 Plan 01: ctor-injected seeded RNG. Non-final so {@link #resetSeed()}
+     * can reassign it between test runs (REVIEWS HIGH #1 — addresses the gap that
+     * {@code @DirtiesContext} + {@code worldGrid.clear()} do NOT reset bean-internal
+     * RNG state between the 3 runs inside a single {@code @Test} method). Sim core
+     * is single-threaded per CLAUDE.md §Conventions, so a plain non-final field is
+     * safe — no volatile or AtomicReference needed.
+     */
+    private Random simRng;
 
     @org.springframework.beans.factory.annotation.Autowired
     public SimulationEngine(WorldGrid worldGrid, SimulationConfig config,
@@ -104,6 +114,7 @@ public class SimulationEngine {
         this.hooks = hooks;
         this.deathFinalizer = deathFinalizer;
         this.environmentEngine = environmentEngine;
+        this.simRng = buildRng();
     }
 
     /**
@@ -146,6 +157,21 @@ public class SimulationEngine {
         // Phase 14 Plan 02: back-compat tests have no env pipeline. Splash emission
         // sites guard on null so the existing behavior (pure combat) is preserved.
         this.environmentEngine = null;
+        this.simRng = buildRng();
+    }
+
+    private Random buildRng() {
+        return config.seed() == null ? new Random() : new Random(config.seed());
+    }
+
+    /**
+     * Phase 16 Plan 01 (REVIEWS HIGH #1): re-initialises {@link #simRng} from the
+     * bound {@link SimulationConfig#seed()}. Test-only — call between in-method
+     * deterministic runs where {@code @DirtiesContext} cannot fire. Production
+     * code does NOT invoke this.
+     */
+    public void resetSeed() {
+        this.simRng = buildRng();
     }
 
     public int getLastTickBondCount() {
@@ -235,10 +261,10 @@ public class SimulationEngine {
         }
 
         // Shuffle to prevent directional bias
-        Collections.shuffle(particlePositions, ThreadLocalRandom.current());
+        Collections.shuffle(particlePositions, simRng);
 
         List<InteractionResult> results = new ArrayList<>();
-        ThreadLocalRandom rng = ThreadLocalRandom.current();
+        Random rng = simRng;
 
         // FN-3: track combats per attacker kind so composite-member attacks
         // (1 delta each) are not undercounted when mixed with particle attacks
@@ -443,7 +469,7 @@ public class SimulationEngine {
                     }
                 }
             }
-            Collections.shuffle(bondedPairPositions, ThreadLocalRandom.current());
+            Collections.shuffle(bondedPairPositions, simRng);
             Set<Position> scannedForComposite = new HashSet<>();
             for (Position bpPos : bondedPairPositions) {
                 if (scannedForComposite.contains(bpPos)) continue;
@@ -516,7 +542,8 @@ public class SimulationEngine {
                         bondingConfig.bondRateBonusMin(),
                         bondingConfig.bondRateBonusMax(),
                         bondingConfig.bondDecayCostMin(),
-                        bondingConfig.bondDecayCostMax()
+                        bondingConfig.bondDecayCostMax(),
+                        simRng
                 );
                 worldGrid.setEntity(bond.primaryPos.x(), bond.primaryPos.y(), bondedPair);
                 worldGrid.clearEntity(bond.secondaryPos.x(), bond.secondaryPos.y());
@@ -939,7 +966,7 @@ public class SimulationEngine {
         }
 
         // D-29: Roll for graceful degradation vs full dissolution
-        if (ThreadLocalRandom.current().nextDouble() < compositeConfig.dissolutionChance()) {
+        if (simRng.nextDouble() < compositeConfig.dissolutionChance()) {
             // Full dissolution — shatter surviving members to Particles
             dissolveToParticles(composite, processedComposites);
         } else {
@@ -1076,7 +1103,7 @@ public class SimulationEngine {
 
         // Progressive shatter die roll: probability scales from 0 (at criticalPercent) to 0.5 (at 0%)
         double shatterProb = (1.0 - poolPercent / compositeConfig.criticalEnergyPercent()) * 0.5;
-        if (ThreadLocalRandom.current().nextDouble() < shatterProb) {
+        if (simRng.nextDouble() < shatterProb) {
             dissolveToParticles(composite, processedComposites);
         }
     }
@@ -1087,7 +1114,7 @@ public class SimulationEngine {
         if (config.nutrientSpawnProbability() <= 0) return 0;
 
         int spawned = 0;
-        ThreadLocalRandom rng = ThreadLocalRandom.current();
+        Random rng = simRng;
         // D-14: global seasonal sine modulator — computed once per tick.
         double seasonalMultiplier = seasonTracker.getSeasonalMultiplier(tickNumber);
 

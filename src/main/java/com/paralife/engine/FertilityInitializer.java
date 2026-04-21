@@ -7,7 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.Random;
 
 /**
  * Generates fertility patches on the {@link WorldGrid} at world init (Phase 13 D-13).
@@ -31,19 +31,49 @@ public class FertilityInitializer {
 
     private final WorldGrid worldGrid;
     private final FertilityConfig config;
+    /**
+     * Phase 16 Plan 01: ctor-built seeded RNG. Non-final so {@link #resetSeed()}
+     * can reassign it between test runs (REVIEWS HIGH #1). Bound from
+     * {@link FertilityConfig#seed()} — null = unseeded (production).
+     */
+    private Random fertilityRng;
 
     public FertilityInitializer(WorldGrid worldGrid, FertilityConfig config) {
         this.worldGrid = worldGrid;
         this.config = config;
+        this.fertilityRng = buildRng();
+    }
+
+    private Random buildRng() {
+        return config.seed() == null ? new Random() : new Random(config.seed());
     }
 
     @PostConstruct
     public void initializeFertility() {
+        seedPatches();
+    }
+
+    /**
+     * Phase 16 Plan 01 (REVIEWS HIGH #1): re-initialises {@link #fertilityRng}
+     * from {@link FertilityConfig#seed()} AND re-runs {@link #seedPatches()} so
+     * the grid's fertility state is regenerated. Tests MUST call this AFTER
+     * {@code worldGrid.clear()} — bare {@code worldGrid.clear()} does not
+     * re-run {@code @PostConstruct} (which fires once at bean startup) and the
+     * prior round's implementation failed because it only reset the RNG field,
+     * leaving the grid's {@code nutrientLevel} values from the prior run
+     * intact.
+     */
+    public void resetSeed() {
+        this.fertilityRng = buildRng();
+        seedPatches();
+    }
+
+    private void seedPatches() {
         if (config.patchCount() == 0) {
             log.debug("Fertility patchCount=0, skipping initialization");
             return;
         }
-        ThreadLocalRandom rng = ThreadLocalRandom.current();
+        Random rng = fertilityRng;
         int width = worldGrid.getWidth();
         int height = worldGrid.getHeight();
 
@@ -52,7 +82,8 @@ public class FertilityInitializer {
             int cy = rng.nextInt(height);
             int radius = (config.patchMinRadius() == config.patchMaxRadius())
                     ? config.patchMinRadius()
-                    : rng.nextInt(config.patchMinRadius(), config.patchMaxRadius() + 1);
+                    : config.patchMinRadius() + rng.nextInt(
+                            config.patchMaxRadius() - config.patchMinRadius() + 1);
             generatePatch(cx, cy, radius, width, height);
         }
 

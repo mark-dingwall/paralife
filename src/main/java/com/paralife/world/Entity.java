@@ -1,6 +1,7 @@
 package com.paralife.world;
 
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.random.RandomGenerator;
 
 /**
  * Sealed entity hierarchy for all things that occupy grid cells.
@@ -251,9 +252,11 @@ public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutr
          * Combat transfer and attack power (D-05) use
          * {@code avg + (max - avg) * random(bonusMin, bonusMax)}.
          *
-         * <p>Uses {@link ThreadLocalRandom} directly. Package-independent signature
-         * (takes primitive ints / doubles) so this can be called without pulling
-         * MetabolicProfile / BondingConfig into the world package.
+         * <p>Phase 16 Plan 01: last parameter widened from {@link ThreadLocalRandom}
+         * to {@link RandomGenerator} so callers can inject a seeded RNG for
+         * determinism. Package-independent signature (takes primitive ints /
+         * doubles + a JDK-standard RandomGenerator) so this can be called without
+         * pulling MetabolicProfile / BondingConfig into the world package.
          */
         public static BondedPair formBond(
                 String id,
@@ -261,8 +264,8 @@ public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutr
                 int primaryDecay, int primaryCombatTransfer, int primaryAttackPower, int primaryMaxEnergy,
                 int secondaryDecay, int secondaryCombatTransfer, int secondaryAttackPower, int secondaryMaxEnergy,
                 double bondRateBonusMin, double bondRateBonusMax,
-                double bondDecayCostMin, double bondDecayCostMax) {
-            ThreadLocalRandom rng = ThreadLocalRandom.current();
+                double bondDecayCostMin, double bondDecayCostMax,
+                RandomGenerator rng) {
 
             int maxEnergy = primaryMaxEnergy + secondaryMaxEnergy; // D-07
             int combinedEnergy = primary.energy() + secondary.energy();
@@ -283,16 +286,16 @@ public sealed interface Entity permits Entity.Particle, Entity.Rock, Entity.Nutr
         }
 
         /** Hybrid vigor (D-05): rate = avg + (max-avg) * random(bonusMin, bonusMax). */
-        static int hybridRate(int rateA, int rateB, double bonusMin, double bonusMax, ThreadLocalRandom rng) {
+        static int hybridRate(int rateA, int rateB, double bonusMin, double bonusMax, RandomGenerator rng) {
             int avg = (rateA + rateB) / 2;
             int max = Math.max(rateA, rateB);
-            // Guard: ThreadLocalRandom.nextDouble(min,max) requires min<max; use min when equal.
+            // Guard: RandomGenerator.nextDouble(origin,bound) requires origin<bound; use min when equal.
             double bonus = (bonusMin == bonusMax) ? bonusMin : rng.nextDouble(bonusMin, bonusMax);
             return avg + (int) ((max - avg) * bonus);
         }
 
         /** Bond decay cost (D-06): bondedDecay = sum(A,B) * random(costMin, costMax). */
-        static int bondDecayCost(int decayA, int decayB, double costMin, double costMax, ThreadLocalRandom rng) {
+        static int bondDecayCost(int decayA, int decayB, double costMin, double costMax, RandomGenerator rng) {
             double factor = (costMin == costMax) ? costMin : rng.nextDouble(costMin, costMax);
             int raw = (int) ((decayA + decayB) * factor);
             // Ensure at least 1 unit of decay when the constituents had any decay at all.

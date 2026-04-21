@@ -14,7 +14,8 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.Random;
+import java.util.SplittableRandom;
 
 /**
  * Tick pipeline component for composite energy accounting.
@@ -46,12 +47,38 @@ public class CompositeEnergyDistributor {
      */
     private BuffRegistry buffRegistry = new BuffRegistry();
 
+    /**
+     * Phase 16 Plan 01: seeded RNG derived from {@link CompositeConfig#seed()} via
+     * {@link SplittableRandom#split()} — the JDK-standard way to derive an
+     * uncorrelated sub-stream without a magic XOR constant (REVIEWS MEDIUM).
+     * Non-final so {@link #resetSeed()} can reassign.
+     */
+    private Random compositeRng;
+
     public CompositeEnergyDistributor(WorldGrid worldGrid,
                                        CompositeRegistry compositeRegistry,
                                        CompositeConfig config) {
         this.worldGrid = worldGrid;
         this.compositeRegistry = compositeRegistry;
         this.config = config;
+        this.compositeRng = buildRng();
+    }
+
+    private Random buildRng() {
+        if (config.seed() == null) return new Random();
+        // SplittableRandom.split() yields an uncorrelated sub-stream; derive a
+        // seed for java.util.Random from it. Replaces the XOR-magic pattern
+        // flagged in REVIEWS MEDIUM.
+        SplittableRandom base = new SplittableRandom(config.seed());
+        return new Random(base.split().nextLong());
+    }
+
+    /**
+     * Phase 16 Plan 01 (REVIEWS HIGH #1): re-initialises {@link #compositeRng}
+     * from {@link CompositeConfig#seed()}. Test-only.
+     */
+    public void resetSeed() {
+        this.compositeRng = buildRng();
     }
 
     /**
@@ -74,7 +101,7 @@ public class CompositeEnergyDistributor {
 
     private void processCompositeEnergy(CompositeRegistry.CompositeState composite) {
         List<String> memberIds = new ArrayList<>(composite.getMemberIds());
-        Collections.shuffle(memberIds, ThreadLocalRandom.current()); // prevent healing starvation
+        Collections.shuffle(memberIds, compositeRng); // prevent healing starvation
 
         for (String memberId : memberIds) {
             Position pos = composite.getPositionForMember(memberId);

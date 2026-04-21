@@ -1,6 +1,7 @@
 package com.paralife.engine;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 /**
  * Fertility patch generation config (Phase 13 D-13).
@@ -22,6 +23,7 @@ public record FertilityConfig(
         int maxLevel,
         Long seed
 ) {
+    @ConstructorBinding
     public FertilityConfig {
         if (patchCount < 0)
             throw new IllegalArgumentException("patchCount must be >= 0: " + patchCount);

@@ -18,7 +18,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -111,6 +110,14 @@ public class ActionResolver {
     private volatile long currentTick = 0L;
 
     /**
+     * Phase 16 Plan 01: ctor-injected seeded RNG for Collections.shuffle tie-break
+     * and bonus-offspring die rolls. Non-final so {@link #resetSeed()} can reassign
+     * it between test runs (REVIEWS HIGH #1). Bound from
+     * {@link SimulationConfig#actionSeed()} — null = unseeded (production).
+     */
+    private Random actionRng;
+
+    /**
      * Pending action: sessionId → {@link Frame.ActionFrame}. Only the last
      * frame per session per tick is kept. Uses {@link AtomicReference} swap
      * for atomic drain — see {@link #onTick}.
@@ -143,6 +150,19 @@ public class ActionResolver {
         this.metabolicProfile = metabolicProfile;
         this.starvationConfig = starvationConfig;
         this.alarmQueue = alarmQueue;
+        this.actionRng = buildRng();
+    }
+
+    private Random buildRng() {
+        return config.actionSeed() == null ? new Random() : new Random(config.actionSeed());
+    }
+
+    /**
+     * Phase 16 Plan 01 (REVIEWS HIGH #1): re-initialises {@link #actionRng} from
+     * {@link SimulationConfig#actionSeed()}. Test-only.
+     */
+    public void resetSeed() {
+        this.actionRng = buildRng();
     }
 
     /**
@@ -327,7 +347,7 @@ public class ActionResolver {
         }
 
         // Phase 2: Shuffle for fairness then resolve Particle (solo) actions
-        Collections.shuffle(resolvedList);
+        Collections.shuffle(resolvedList, actionRng);
         Set<Position> claimedCells = new HashSet<>();
 
         for (ResolvedAction ra : resolvedList) {
@@ -358,7 +378,7 @@ public class ActionResolver {
         }
 
         // Phase 3: Resolve composite member reactive role actions
-        Collections.shuffle(resolvedCompositeList);
+        Collections.shuffle(resolvedCompositeList, actionRng);
 
         for (ResolvedCompositeAction rca : resolvedCompositeList) {
             var compositeOpt = compositeRegistry.getComposite(rca.member.compositeId());
@@ -517,7 +537,7 @@ public class ActionResolver {
 
         lastReproducedTick.put(ra.particle.id(), tickNumber);
         if (profile.bonusOffspringChance() > 0.0
-                && ThreadLocalRandom.current().nextDouble() < profile.bonusOffspringChance()) {
+                && actionRng.nextDouble() < profile.bonusOffspringChance()) {
             Position bonusTarget = findEmptyAdjacentCell(target, claimedCells);
             if (bonusTarget != null) {
                 String bonusChildId = "child-" + childIdCounter.incrementAndGet();

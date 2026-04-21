@@ -1,6 +1,7 @@
 package com.paralife.engine;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 /**
  * Configuration for the composite entity system.
@@ -42,6 +43,7 @@ public record CompositeConfig(
         boolean canFormComposites,
         Long seed
 ) {
+    @ConstructorBinding
     public CompositeConfig {
         if (dissolutionChance < 0 || dissolutionChance > 1)
             throw new IllegalArgumentException("dissolutionChance must be in [0,1]: " + dissolutionChance);

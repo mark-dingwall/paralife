@@ -1,6 +1,7 @@
 package com.paralife.engine;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 /**
  * Configuration for the simulation physics engine.
@@ -32,6 +33,7 @@ public record SimulationConfig(
         /** Master seed for ActionResolver RNG. null = unseeded (production). */
         Long actionSeed
 ) {
+    @ConstructorBinding
     public SimulationConfig {
         if (energyDecayPerTick < 0) throw new IllegalArgumentException("energyDecayPerTick must be >= 0: " + energyDecayPerTick);
         if (combatEnergyTransfer < 0) throw new IllegalArgumentException("combatEnergyTransfer must be >= 0: " + combatEnergyTransfer);
