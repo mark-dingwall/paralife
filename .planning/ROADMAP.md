@@ -183,7 +183,7 @@ Plans:
 - [x] 16-02-PLAN.md — EmergenceMetrics bean + 4 counter increment sites + EMERGENCE log markers + wiring test (R17)
 - [x] 16-03-PLAN.md — TickEngine paralife.tick.work.ms DistributionSummary + .gitignore fixtures entry (R18)
 - [x] 16-04-PLAN.md — 5 test helpers (PopulationHistory, RunFixtureWriter, TestLogCapture, TriggerWatcher, SeededBotLauncher) (R15/R16/R17/R18)
-- [ ] 16-05-PLAN.md — CompositeFormationDeterminismTest engine-direct 3-run identity assertion (R15)
+- [x] 16-05-PLAN.md — CompositeFormationDeterminismTest engine-direct 3-run identity assertion (R15)
 - [ ] 16-06-PLAN.md — EmergenceStabilityLoadTest full-stack 100-bot 1000-tick long-run with D-04/D-07/D-11 assertions + fixture dump (R16/R17/R18)
 - [ ] 16-07-PLAN.md — 16-EMERGENCE.md narrative + R19 full-suite gate checkpoint (R17/R19)
 **Success Criteria:**
@@ -216,4 +216,4 @@ Plans:
 | 15 | Protocol & Transport Overhaul | ✅ Complete (UAT 7/7 pass after 15.2) |
 | 15.1 | Bot Operator CLI | ✅ Complete |
 | 15.2 | Own-Death Event Wiring | ✅ Complete |
-| 16 | Emergent Behavior Tests | Not started |
+| 16 | Emergent Behavior Tests | In progress (5/7 plans complete) |
