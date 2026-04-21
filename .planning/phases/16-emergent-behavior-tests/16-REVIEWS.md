@@ -1,6 +1,6 @@
 ---
 phase: 16
-reviewers: [gemini, claude, codex]
+reviewers: [gemini, claude, codex, opencode]
 reviewed_at: 2026-04-21T03:56:52Z
 plans_reviewed:
   - 16-01-PLAN.md
@@ -11,7 +11,8 @@ plans_reviewed:
   - 16-06-PLAN.md
   - 16-07-PLAN.md
   - 16-08-PLAN.md
-skipped: [opencode (empty response), qwen (not installed), cursor (not installed)]
+skipped: [qwen (not installed), cursor (not installed)]
+notes: opencode initially returned empty output (stderr suppressed in orchestrator); retried with stderr visible and succeeded — model z-ai/glm-5.1 via openrouter, agentic mode (spawned Explore subagent + grepped codebase)
 ---
 
 # Cross-AI Plan Review — Phase 16: Emergent Behavior Tests
@@ -216,51 +217,128 @@ The plan set is directionally strong, but the main risks are determinism scope, 
 
 ## OpenCode Review
 
-OpenCode review failed or returned empty output.
+*Model: `z-ai/glm-5.1` via OpenRouter. Ran in agentic mode — spawned an Explore subagent and grepped the codebase to verify concerns against actual file:line references.*
+
+# Phase 16 Cross-AI Plan Review
+
+## 1. Summary
+
+Phase 16 is a well-architected capstone that correctly separates determinism proof (engine-direct R15) from stability/emergence validation (full-stack R16–R18). The wave ordering is sound, the Micrometer-counters-as-test-evidence pattern is elegant, and the D-10 reframe of R18 to capacity-headroom is the right call. However, several issues survived the prior review round: the TickWorkTimer end-bookend misses the `@Order(200)` keepalive listener, RandomSource's determinism scope is narrower than R15's claims require, heap-delta assertions will flake on GC, and the statistical thresholds remain uncalibrated. The R15 test proves aggregate reproducibility but not sequence-level determinism. These are addressable without restructuring the phase, but they need fixing before execution.
+
+## 2. Strengths
+
+- **Two-test topology** cleanly isolates determinism failures (R15, engine-direct) from concurrency/transport failures (R16–R18, full-stack) — all three prior reviewers agree
+- **EmergenceMetrics counters as shared evidence** for both production observability and test assertions validates the monitoring stack by construction
+- **Statistical assertion approach** (count ≥ K, share ≥ X%, amplitude ≥ Y) is the correct framing for emergence; byte-exact fixtures would be meaningless
+- **D-10 reframe** of R18 from wire-parity to capacity-headroom avoids the trap of defending an ever-receding baseline
+- **Wave dependency graph** is correct — infra → helpers → tests → assertions → docs
+- **Nullable EmergenceMetrics injection** keeps production codepaths clean; no behavioral regression when counters are absent
+- **EMERGENCE log prefix** is grep-friendly and M5-forward-compatible without design commitment
+- **Per-component seed derivation** from a single master property is simple and auditable
+- **D-12 forced-formation config** is honest — the test exercises composite paths rather than hoping for emergence at production rates
+- **Plan 16-06/16-07 split** keeps each plan within a manageable LOC budget; the placeholder assertion in 16-06 is explicitly marked as temporary
+
+## 3. Concerns
+
+### HIGH
+
+- **TickWorkTimer `@Order(101)` misses `WebSocketKeepaliveService @Order(200)`** — Verified in `WebSocketKeepaliveService.java:52`. The timer's Javadoc says "to final listener completion" but the final listener is at Order 200, not 100. The mean/p99 tick-work metrics will under-report by the cost of keepalive pings. This is a **misleading metric**, not just a measurement gap — D-11 assertions on tick-work budget will pass more easily than they should, giving false confidence.
+- **Heap-delta assertion (`<20%`) will flake on GC.** `System.gc()` is a hint, not a guarantee. On G1GC (Java 21 default), a minor collection between the two measurement points can shift heap by 30–50%. The 16-07 plan acknowledges this with a fallback ("heap after 1000 < 2x heap after 200") but the primary assertion is still a hard gate.
+- **Statistical thresholds (amplitude ≥0.15, floor ≥5% for ≥80% ticks) are uncalibrated.** No dry-run data exists. Forced-formation knobs (bond-probability=0.5, bond-energy-threshold=15) may produce one-type-dominant dynamics that violate the 5% floor, or the oscillation amplitude at 64x64 may naturally be higher or lower than 0.15.
+- **RandomSource determinism scope is narrower than R15 claims.** Confirmed leaky sites: `Entity.BondedPair.formBond()` at `Entity.java:265` (ThreadLocalRandom), `WorldWebSocketHandler.java:191` (spawn placement), `FertilityInitializer.java:46` (world init), `BotClient.java:294` (respawn jitter). Plan 16-02 explicitly excludes these per RESEARCH §RNG Audit (b)/(c), but Plan 16-05's engine-direct test doesn't exercise any of these paths — so the R15 test is actually sound **for its scope**. The problem is the framing: the CONTEXT says R15 proves "deterministic seed test for composite formation" but the proof only covers the tick-pipeline RNG, not the full entity lifecycle.
+- **R15 proof proves aggregate reproducibility, not sequence determinism.** Three runs with identical counter deltas could result from different per-tick formation sequences that happen to sum to the same total. For a phase that closes R15 ("emergence from rules, not luck"), this is a gap — the test proves the *total count* is deterministic, not the *sequence of events*.
+
+### MEDIUM
+
+- **`buffs.granted` counter semantics ambiguous.** `BuffRegistry.grant()` may extend expiry of an existing buff rather than creating a new one. If the counter increments on grant attempts rather than new buff episodes, the metric's meaning is unclear and could diverge from what the test asserts.
+- **`0 ERROR log entries` is unscoped** — any third-party library logging an ERROR (e.g., Jetty, Jackson, Netty) will fail the test. Should scope to `com.paralife` namespace.
+- **Session-gauge polling in 16-07 samples at ~1s intervals but the tick interval is 20ms** — that's ~50 ticks between samples. A transient dropout that resolves within 50 ticks would be invisible to D-11 #4. The assertion is weaker than it appears.
+- **SeededBotLauncher error handling is silent** — `catch (Exception e) { /* surface via test timeout */ }` at 16-04 line ~485 means a bot that fails to register will only surface as a timeout, not a descriptive failure. The 100-bot registration latch will wait the full 60s before failing.
+- **No `@Timeout` on EmergenceStabilityLoadTest** — a hung bot or deadlock blocks CI indefinitely. This was flagged in the prior Claude review and not addressed.
+
+### LOW
+
+- **Fixture JSON in `.planning/` tree** rather than `build/` — not a build artifact, but it's unusual and could confuse developers expecting build outputs in `build/`.
+- **`RandomSource(-1L)` sentinel** introduces a third convention alongside existing `0` (RockConfig) and `null` (EnvironmentEngine config.seed) for "unseeded."
+- **16-08 narrative hardcodes point counter values** that will drift when config changes. Fixture references + seed are more durable.
+
+## 4. Suggestions
+
+1. **Fix TickWorkTimer end-bookend to `@Order(Integer.MAX_VALUE)`** or move timing into `TickEngine` around `publishEvent()`. The former is the smallest change; the latter is architecturally cleaner but touches production tick-loop code. The `@Order(Integer.MAX_VALUE)` approach ensures any future listeners at arbitrary orders are captured.
+2. **Downgrade heap-delta to a diagnostic** — log the value and include it in the summary, but don't hard-gate on it. Alternatively, use `MemoryMXBean.getHeapMemoryUsage().getUsed()` after explicit `System.gc()` + 200ms sleep, and assert `< 2x` (not `< 20%`) which is a meaningful leak detector without being GC-sensitive.
+3. **Add a calibration step before Wave 5** — run 16-06 harness with logging of all raw values (amplitude, floor coverage, counter totals) and set thresholds from observed distribution with 20–30% margin. This should be a Task 0 in 16-07.
+4. **Scope the ERROR log assertion** to `com.paralife` loggers: `TestLogCapture` should accept a logger-name prefix filter, defaulting to `"com.paralife"`.
+5. **Strengthen R15 proof** — add a second assertion comparing the *per-tick population series* across the three runs (e.g., compare PopulationHistory samples at tick 50, 100, 150, 200). This proves sequence-level determinism without requiring byte-exact world-state snapshots.
+6. **Add `@Timeout(value = 180, unit = TimeUnit.SECONDS)`** on EmergenceStabilityLoadTest.
+7. **Define explicit determinism scope in R15 framing** — the CONTEXT should state: "R15 proves deterministic tick-pipeline outcomes given fixed server-side RNG. Full-stack end-to-end determinism (including bot placement, respawn jitter, and hybrid-vigor rolls) is out of scope and accepted as stochastic."
+8. **Clarify `buffs.granted` semantics** — in EmergenceMetrics, the counter should increment only on *new* buff grants, not extensions. Test this in EmergenceMetricsTest.
+9. **Increase session-gauge sampling frequency** — poll every 5 ticks (matching the sampling loop cadence) instead of every ~1s, to catch transient dropouts.
+10. **Improve SeededBotLauncher error visibility** — log the exception rather than swallowing it, and consider failing fast if any bot registration throws.
+
+## 5. Risk Assessment: **MEDIUM-HIGH**
+
+| Subsystem | Risk | Justification |
+|-----------|------|---------------|
+| 16-01 EmergenceMetrics | **LOW** | Proven pattern, nullable injection, unit-tested |
+| 16-02 RandomSource | **MEDIUM** | Implementation is straightforward, but determinism scope claims exceed what the refactor delivers |
+| 16-03 TickWorkTimer | **MEDIUM** — but **HIGH** if `@Order(101)` ships as-is | The metric will be misleading; the D-11 assertions built on it will give false confidence |
+| 16-04 Test Helpers | **LOW** | Test-only code, well-specified, TDD'd |
+| 16-05 R15 Test | **MEDIUM** | Test will pass, but the proof it provides is weaker than stated. `auto-start=false` is correctly set. The three-run-in-one-method pattern is sound per the plan's analysis |
+| 16-06 Harness | **MEDIUM** | Likely to need knob-tuning on first run; expensive to iterate (~90s per run) |
+| 16-07 Assertions | **HIGH** | 15 uncalibrated statistical assertions on a single expensive test. Heap-delta and amplitude thresholds are the top flakiness risks. One flaky assertion blocks R16/R17/R18 evidence entirely |
+| 16-08 Narrative | **LOW** | Documentation only; depends entirely on 16-05/16-07 results |
+
+**Overall: MEDIUM-HIGH.** The phase structure is sound and the design decisions are defensible, but execution risk concentrates in Wave 5 (16-07). The three fixes with the highest ROI before execution are: (1) fix the TickWorkTimer order, (2) calibrate or de-gate the heap-delta assertion, and (3) add a calibration pass for statistical thresholds. Without these, expect 2–3 iteration cycles to get the long-run test green.
 
 ---
 
 ## Consensus Summary
 
-Three reviewers completed substantive reviews (Gemini, Claude, Codex). All three converged on the same core issues.
+Four reviewers completed substantive reviews (Gemini, Claude, Codex, OpenCode). All four converged on the same core issues.
 
 ### Agreed Strengths
 
-- **Two-test topology is correct** — engine-direct for R15 determinism, full-stack for R16/R17/R18 stability (all three reviewers)
-- **Statistical assertions are the right approach** for emergence; byte-exact would be meaningless (Gemini, Claude)
-- **D-10 R18 reframe to capacity-headroom** is superior to v1.0 wire-parity (Gemini, Claude)
-- **EmergenceMetrics pattern mirrors WebSocketMetrics cleanly** (Gemini, Codex)
-- **EMERGENCE log prefix is M5-forward-compatible** (Claude, implicit in Codex)
-- **Wave dependency ordering is correct** — infrastructure before helpers before tests (Claude)
+- **Two-test topology is correct** — engine-direct for R15 determinism, full-stack for R16/R17/R18 stability (all four reviewers)
+- **Statistical assertions are the right approach** for emergence; byte-exact would be meaningless (Gemini, Claude, OpenCode)
+- **D-10 R18 reframe to capacity-headroom** is superior to v1.0 wire-parity (Gemini, Claude, OpenCode)
+- **EmergenceMetrics pattern mirrors WebSocketMetrics cleanly** (Gemini, Codex, OpenCode)
+- **EMERGENCE log prefix is M5-forward-compatible** (Claude, OpenCode; implicit in Codex)
+- **Wave dependency ordering is correct** — infrastructure before helpers before tests (Claude, OpenCode)
+- **Nullable EmergenceMetrics injection keeps production path clean** (Claude, OpenCode)
 
 ### Agreed Concerns (HIGH severity — 2+ reviewers)
 
 | Concern | Reviewers | Severity |
 |---------|-----------|----------|
-| **Uncalibrated statistical thresholds** (amplitude ≥0.15, floor ≥5%) — no evidence from real runs | Claude, Codex, Gemini | HIGH |
-| **Heap-delta assertion is GC-noise** — swings of 30–50%+ are normal; this WILL flake | Claude, Codex | HIGH |
-| **RandomSource determinism scope too narrow** — UUID, bot placement, fertility init, respawn jitter still leak non-determinism | Codex (explicit), Gemini (implicit as "hidden non-determinism") | HIGH |
-| **TickWorkTimer @Order(101) misses keepalive at @Order(200)** — misleading metric | Codex | HIGH |
-| **R15 proof too weak** — matching aggregate counter deltas ≠ deterministic sequence | Codex | HIGH |
+| **Uncalibrated statistical thresholds** (amplitude ≥0.15, floor ≥5%) — no evidence from real runs | Gemini, Claude, Codex, OpenCode | HIGH |
+| **Heap-delta assertion is GC-noise** — swings of 30–50%+ are normal; this WILL flake | Claude, Codex, OpenCode | HIGH |
+| **TickWorkTimer @Order(101) misses keepalive at @Order(200)** — misleading metric (OpenCode verified at `WebSocketKeepaliveService.java:52`) | Codex, OpenCode | HIGH |
+| **RandomSource determinism scope too narrow** — `Entity.java:265`, `WorldWebSocketHandler.java:191`, `FertilityInitializer.java:46`, `BotClient.java:294` still leak non-determinism (OpenCode cited exact file:line) | Codex, OpenCode (explicit), Gemini (as "hidden non-determinism") | HIGH |
+| **R15 proof too weak** — matching aggregate counter deltas ≠ deterministic sequence | Codex, OpenCode | HIGH |
 | **`paralife.tick.auto-start` must be false** in R15 test else background tick races test | Codex | HIGH |
 | **Session-gauge "post-warmup" undefined** — needs explicit warmup tick constant | Claude | HIGH |
-| **SeededBotLauncher teardown unspecified** | Claude | MEDIUM |
-| **`0 ERROR log entries` should scope to paralife namespace** | Claude | MEDIUM |
-| **`buffs.granted` counter semantics ambiguous** (new buff vs extend expiry) | Codex | MEDIUM |
+| **SeededBotLauncher teardown / error handling unspecified** | Claude, OpenCode | MEDIUM |
+| **`0 ERROR log entries` should scope to paralife namespace** | Claude, OpenCode | MEDIUM |
+| **`buffs.granted` counter semantics ambiguous** (new buff vs extend expiry) | Codex, OpenCode | MEDIUM |
+| **No `@Timeout` on EmergenceStabilityLoadTest** — runaway test blocks CI | Claude, OpenCode | MEDIUM |
+| **Session-gauge sampling cadence too slow** (~1s vs 20ms tick) — dropouts within 50 ticks invisible | OpenCode | MEDIUM |
 | **16-06/16-07 wave split creates CI false signal** | Claude | MEDIUM |
 
 ### Divergent Views
 
-- **Overall risk rating:** Gemini: LOW; Claude: MEDIUM-HIGH; Codex: HIGH on multiple plans. Codex examined the actual codebase (cited file:line references), so its findings on TickWorkTimer @Order(200) and RandomSource leakage sites carry more weight.
-- **Test helpers (16-04):** Gemini sees no issue; Codex flags over-engineering risk; Claude doesn't rate it separately.
-- **16-08 narrative:** Codex concerns about value drift are valid; Gemini and Claude both consider it lower priority.
+- **Overall risk rating:** Gemini: LOW; Claude: MEDIUM-HIGH; OpenCode: MEDIUM-HIGH; Codex: HIGH on multiple plans. Codex and OpenCode both examined the actual codebase (cited file:line references), so their findings on TickWorkTimer @Order(200) and RandomSource leakage sites carry more weight. OpenCode partially rehabilitates Plan 16-05: "the R15 test is actually sound **for its scope**" — the issue is framing, not correctness.
+- **Test helpers (16-04):** Gemini sees no issue; Codex flags over-engineering risk; OpenCode rates LOW ("test-only code, well-specified, TDD'd"); Claude doesn't rate it separately.
+- **16-08 narrative:** Codex and OpenCode both flag counter-value drift risk; Gemini and Claude consider it lower priority.
 
 ### Recommended Actions Before Execution
 
-1. **Fix TickWorkTimer order** — move end bookend to `@Order(201)` or time inside `TickEngine.publishEvent()` instead.
-2. **Extend RandomSource audit** — enumerate UUID/placement/fertility/respawn jitter sources; declare explicit determinism scope.
-3. **Run calibration pass** before Wave 5 — run 16-06 harness with no assertions, observe actual threshold values, set margins.
-4. **Drop or de-gate heap-delta assertion** — use diagnostic (log + test summary) not hard gate, or call `System.gc()` before snapshot.
+1. **Fix TickWorkTimer order** — OpenCode recommends `@Order(Integer.MAX_VALUE)` to capture any future listener; alternative is to time inside `TickEngine.publishEvent()`.
+2. **Extend RandomSource audit** — enumerate UUID/placement/fertility/respawn jitter sources; declare explicit determinism scope ("R15 proves deterministic tick-pipeline outcomes; full-stack stochastic by design" — OpenCode suggestion 7).
+3. **Run calibration pass** before Wave 5 — run 16-06 harness with no assertions, observe actual threshold values, set margins (+20–30%).
+4. **Drop or de-gate heap-delta assertion** — diagnostic-only; or use `MemoryMXBean` after explicit `System.gc()` + 200ms sleep and assert `< 2x`, not `< 20%`.
 5. **Define `WARMUP_TICKS` constant** and scope session-gauge + population-floor assertions to post-warmup window.
-6. **Strengthen R15 proof** — compare per-tick series or final-state hash, not just aggregate counter deltas.
-7. **Add `@Timeout` on EmergenceStabilityLoadTest**.
+6. **Strengthen R15 proof** — OpenCode specifically suggests comparing per-tick `PopulationHistory` samples at tick 50/100/150/200 across the three runs (sequence-level determinism without byte-exact snapshots).
+7. **Add `@Timeout(value = 180, unit = SECONDS)` on EmergenceStabilityLoadTest**.
+8. **Scope ERROR log assertion** to `com.paralife` loggers; add prefix filter to `TestLogCapture`.
+9. **Clarify `buffs.granted` semantics** — increment only on new episodes, not expiry extensions; test this in `EmergenceMetricsTest`.
+10. **Increase session-gauge sampling frequency** — poll every 5 ticks, not every ~1s, to catch transient dropouts.
