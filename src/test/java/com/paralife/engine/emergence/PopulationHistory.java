@@ -44,6 +44,7 @@ public class PopulationHistory {
     private final List<Long> ticks = new ArrayList<>();
     private final List<Integer> sessionCounts = new ArrayList<>();
     private final List<Long> heapSamples = new ArrayList<>();
+    private final List<Integer> bondedPairsOnGrid = new ArrayList<>();
     private List<EntitySnapshot> lastEntities = List.of();
 
     /**
@@ -77,6 +78,7 @@ public class PopulationHistory {
         counts.put("MEMBRANE", 0);
         counts.put("SPORE", 0);
         List<EntitySnapshot> entities = new ArrayList<>();
+        int bondedPairsThisTick = 0;
 
         WorldGrid.GridSnapshot snap = grid.snapshot();
         for (int x = 0; x < snap.width(); x++) {
@@ -96,6 +98,7 @@ public class PopulationHistory {
                         counts.merge(bp.primaryType().name(), 1, Integer::sum);
                         counts.merge(bp.secondaryType().name(), 1, Integer::sum);
                         entities.add(new EntitySnapshot(id, bp.primaryType().name(), cell.flags(), new Position(x, y), hasBuffs));
+                        bondedPairsThisTick++;
                     }
                     case Entity.CompositeMember cm -> {
                         counts.merge(cm.type().name(), 1, Integer::sum);
@@ -111,7 +114,24 @@ public class PopulationHistory {
         ticks.add(currentTick);
         sessionCounts.add(sessionRegistry.getSessionCount());
         heapSamples.add(Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory());
+        bondedPairsOnGrid.add(bondedPairsThisTick);
         lastEntities = List.copyOf(entities);
+    }
+
+    /**
+     * D-04 #2 soft-check opportunity proxy: count of sampled ticks on which
+     * at least two BondedPair entities were simultaneously present anywhere
+     * on the grid. Non-zero means the composite-formation scan had at least
+     * one opportunity to observe a pair-adjacency configuration. Purely
+     * observational — used to classify the D-04 #2 result as "exercised"
+     * vs "not exercised under this run's emergent config".
+     */
+    public int bondedPairAdjacencyEventTicks() {
+        int n = 0;
+        for (int count : bondedPairsOnGrid) {
+            if (count >= 2) n++;
+        }
+        return n;
     }
 
     public int tickCount() { return history.size(); }

@@ -6,6 +6,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -14,6 +15,13 @@ import java.util.List;
  * {@link #emergenceMarkers}. Consumers MUST call {@link #detach} in
  * {@code @AfterEach} to avoid stickiness across test classes (threat
  * T-16-13).
+ *
+ * <p>Accessor methods snapshot the appender's backing list under a
+ * synchronized block before streaming. The Logback {@link ListAppender}
+ * appends from arbitrary logging threads (here, the tick-engine virtual
+ * thread), so reading the live list from the test thread would race and
+ * throw {@link java.util.ConcurrentModificationException} when long-run
+ * tests sample mid-pipeline.
  */
 public class TestLogCapture {
 
@@ -36,12 +44,18 @@ public class TestLogCapture {
         appender.stop();
     }
 
+    private List<ILoggingEvent> snapshot() {
+        synchronized (appender.list) {
+            return new ArrayList<>(appender.list);
+        }
+    }
+
     public long errorCount() {
-        return appender.list.stream().filter(e -> e.getLevel() == Level.ERROR).count();
+        return snapshot().stream().filter(e -> e.getLevel() == Level.ERROR).count();
     }
 
     public List<String> emergenceMarkers() {
-        return appender.list.stream()
+        return snapshot().stream()
                 .map(ILoggingEvent::getFormattedMessage)
                 .filter(m -> m != null && m.startsWith("EMERGENCE "))
                 .toList();
