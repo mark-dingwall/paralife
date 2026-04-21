@@ -918,32 +918,32 @@ double rollingAmplitude(List<Integer> typeSeries, int windowSize) {
 
 **If the Assumptions Log is non-trivial:** Items A1, A3, A4 should be resolved by a calibration pass in plan 16-07 (wire assertions) before thresholds lock. Items A6 and A10 should be flagged for verifier-agent attention.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Seed-property shape — single master vs per-component?**
    - What we know: CONTEXT.md §Claude's Discretion lists "per-component seed-derivation scheme" as planner's call; both approaches work.
    - What's unclear: Whether a single `paralife.seed.master` yaml property plus a new `RandomSource` bean is preferable to five or six independent `paralife.*.seed` properties.
-   - Recommendation: Go with **per-component properties** (no new bean). Simpler diff, matches the existing `paralife.simulation.events.seed` and `paralife.world.rock.seed` patterns. The test `@TestPropertySource` derives all values from a master and logs it.
+   - **RESOLVED:** Recommendation — Go with **per-component properties** (no new bean). Simpler diff, matches the existing `paralife.simulation.events.seed` and `paralife.world.rock.seed` patterns. The test `@TestPropertySource` derives all values from a master and logs it.
 
 2. **Should `EmergenceMetrics` live in `metrics/` or `engine/`?**
    - What we know: CONTEXT.md §Claude's Discretion explicitly lists this as planner's call.
    - What's unclear: `metrics/` is a sibling to other subsystems (the Phase 15 package); `engine/` keeps the counter next to its primary consumers.
-   - Recommendation: `metrics/` — same rationale as `WebSocketMetrics` (Phase 15 Plan 10 chose this). Keep all Micrometer wiring in one package.
+   - **RESOLVED:** Recommendation — `metrics/` — same rationale as `WebSocketMetrics` (Phase 15 Plan 10 chose this). Keep all Micrometer wiring in one package.
 
 3. **Should the long-run test be `@Tag("slow")`?**
    - What we know: D-02 says CI tolerates minutes; local target ≤90 s.
    - What's unclear: Whether every `./gradlew test` run on developer laptops should pay the 90 s tax.
-   - Recommendation: Yes — `@Tag("slow")`. Include `./gradlew test -P excludeTags=slow` as the default fast-loop gate; R19's full-suite gate uses the untagged default. Document in the phase summary.
+   - **RESOLVED:** Recommendation — Yes — `@Tag("slow")`. Include `./gradlew test -P excludeTags=slow` as the default fast-loop gate; R19's full-suite gate uses the untagged default. Document in the phase summary.
 
 4. **What's the minimum seeding scope for R15?**
    - What we know: Five RNG sites (#1–3, #5, #13) cover composite-formation determinism.
    - What's unclear: Whether elevated `BondingConfig` in R15's test config produces enough composites that a few non-seeded sites (e.g., `CompositeEnergyDistributor` shuffle #9) still yield deterministic counts in practice.
-   - Recommendation: **Seed the minimum 5-site set.** If `CompositeFormationDeterminismTest` with the 5-site set passes across 3 repeated runs, we're done. If it flakes, add sites #9 and #17 incrementally. Plan 16-02 may scope "nullable Random" ctor — seeded in test, `ThreadLocalRandom` in prod.
+   - **RESOLVED:** Recommendation — **Seed the minimum 5-site set.** If `CompositeFormationDeterminismTest` with the 5-site set passes across 3 repeated runs, we're done. If it flakes, add sites #9 and #17 incrementally. Plan 16-02 may scope "nullable Random" ctor — seeded in test, `ThreadLocalRandom` in prod.
 
 5. **`BondedPair.formBond` signature change — breaking for existing tests?**
    - What we know: 6 existing tests call `BondedPair.formBond(...)` directly (grep `formBond`).
    - What's unclear: Whether changing the last param from `ThreadLocalRandom` to `RandomGenerator` (JDK 17+) breaks callers.
-   - Recommendation: `RandomGenerator` is a supertype of `ThreadLocalRandom`, so widening the parameter type is source-compatible but binary-incompatible for method resolution. The safer path: overload — keep the existing `formBond(..., ThreadLocalRandom)` and add `formBond(..., Random)`. Planner to decide.
+   - **RESOLVED:** Recommendation — `RandomGenerator` is a supertype of `ThreadLocalRandom`, so widening the parameter type is source-compatible but binary-incompatible for method resolution. The safer path: overload — keep the existing `formBond(..., ThreadLocalRandom)` and add `formBond(..., Random)`. Planner to decide.
 
 ## Sources
 
