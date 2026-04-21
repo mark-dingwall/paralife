@@ -5,9 +5,9 @@ milestone_name: Combination & Emergence
 current_phase: 16
 current_phase_name: Emergent Behavior Tests
 current_plan: 0
-status: context-captured
-stopped_at: Phase 16 context captured 2026-04-21. 6 gray areas discussed (test layout, emergent signals, stability criteria, load baseline, UAT, protocol surface). 18 decisions locked. Key calls — hybrid test layout (R15 engine-direct short + R16/17/18 full-stack long-run 1000 ticks), 5 tracked emergent signals with trigger-watcher pattern, component-seeded statistical assertions (byte-stable rejected), R18 reframed from wire-parity to capacity-headroom stability, Phase 16 JUnit-only with subjective operator UAT deferred to M5 visualiser phase, `paralife.emergence.*` Micrometer counters + `EMERGENCE` log markers instrumented. No cross-host deployment — M6 owns that. Next — /gsd-plan-phase 16.
-last_updated: "2026-04-21T10:00:00.000Z"
+status: ready-to-execute
+stopped_at: Phase 16 planned 2026-04-21. 8 plans across 6 waves. Wave 1 — 16-01 EmergenceMetrics + 4 counter sites, 16-03 TickWorkTimer bookend @Order(0)/@Order(101) + fixtures .gitignore. Wave 2 — 16-02 RandomSource + refactor 9 hot-path RNG sites (nullable-Random pattern), 16-04 test helpers (TriggerWatcher, PopulationHistory, RunFixtureWriter, TestLogCapture, SeededBotLauncher). Wave 3 — 16-05 R15 CompositeFormationDeterminismTest (engine-direct, @DirtiesContext BEFORE_EACH_TEST_METHOD, 3-run counter-equality). Wave 4 — 16-06 R16/R17/R18 full-stack harness @SpringBootTest(RANDOM_PORT) 100 bots 1000 ticks. Wave 5 — 16-07 assertions (D-07 stability 3 rows + D-04 five emergence signals + D-11 load-stability 7 rows distinct + fixture JSON dump). Wave 6 — 16-08 16-EMERGENCE.md narrative + R19 full-suite gate (checkpoint). Coverage — R15→01/02/04/05, R16→02/04/06/07, R17→01/04/06/07/08, R18→03/04/06/07, R19→08. Checker passed rev 1/3 after blocker + 3 warnings revised. Next — /gsd-execute-phase 16 (or /clear first).
+last_updated: "2026-04-21T11:00:00.000Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 7
@@ -27,21 +27,21 @@ See: .planning/PROJECT.md
 
 **Current focus:** Phase 16 (Emergent Behavior Tests) — context captured, ready to plan
 
-**Status:** Phase 16 CONTEXT.md captured; 6 gray areas discussed; 18 decisions locked
+**Status:** Phase 16 planned; 8 plans across 6 waves; checker PASSED (rev 1/3)
 **Current Phase:** 16 — Emergent Behavior Tests
 **Current Phase Name:** Emergent Behavior Tests
 **Total Phases:** 16 (+ 15.1, 15.2 decimals)
-**Current Plan:** n/a (not yet planned)
-**Total Plans in Phase:** TBD
-**Progress:** [██░░░░░░░░] context captured
+**Current Plan:** 0 of 8 (awaiting /gsd-execute-phase 16)
+**Total Plans in Phase:** 8
+**Progress:** [███░░░░░░░] ready to execute
 **Last Activity:** 2026-04-21
 
 ## Current Position
 
-Phase: 16 (Emergent Behavior Tests) — context captured
-Plan: 0 of TBD (awaiting /gsd-plan-phase 16)
-Status: context-captured — 16-CONTEXT.md + 16-DISCUSSION-LOG.md committed
-Last activity: 2026-04-21 -- /gsd-discuss-phase 16 walked all 6 gray areas interactively. Key decisions: hybrid test layout (R15 engine-direct + R16/17/18 full-stack long-run, 1000 ticks); 5 tracked emergent signals with trigger-watcher rolling-average pattern for behavioural ones; component-seeded statistical assertions (byte-stable rejected as too fragile); R18 reframed from wire-parity regression to capacity-headroom stability (feature-agnostic ratios); Phase 16 JUnit-only, subjective operator UAT deferred to M5 visualiser phase; `paralife.emergence.*` Micrometer counters + `EMERGENCE` log markers added as cheap M5-seed instrumentation; in-JVM full-stack only (real cross-host deployment = M6).
+Phase: 16 (Emergent Behavior Tests) — ready to execute
+Plan: 0 of 8 (awaiting /gsd-execute-phase 16)
+Status: ready-to-execute — CONTEXT + RESEARCH + PATTERNS + VALIDATION + 8 PLAN.md committed
+Last activity: 2026-04-21 -- /gsd-plan-phase 16 produced 8 plans across 6 waves, checker PASSED on iteration 2 after 1 blocker + 3 warnings addressed (16-05 @DirtiesContext(BEFORE_EACH_TEST_METHOD) + 3-run counter-equality; 16-07 D-11 #4 dropouts distinct from #7 gauge; 16-02 depends_on [16-01] to dodge same-wave ctor merge; 16-08 closes narrowed to R17/R19). Coverage R15→01/02/04/05, R16→02/04/06/07, R17→01/04/06/07/08, R18→03/04/06/07, R19→08. Earlier — /gsd-discuss-phase 16 walked all 6 gray areas interactively. Key decisions: hybrid test layout (R15 engine-direct + R16/17/18 full-stack long-run, 1000 ticks); 5 tracked emergent signals with trigger-watcher rolling-average pattern for behavioural ones; component-seeded statistical assertions (byte-stable rejected as too fragile); R18 reframed from wire-parity regression to capacity-headroom stability (feature-agnostic ratios); Phase 16 JUnit-only, subjective operator UAT deferred to M5 visualiser phase; `paralife.emergence.*` Micrometer counters + `EMERGENCE` log markers added as cheap M5-seed instrumentation; in-JVM full-stack only (real cross-host deployment = M6).
 
 ## Accumulated Context
 
