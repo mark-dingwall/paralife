@@ -176,6 +176,17 @@ Plans:
 ### Phase 16: Emergent Behavior Tests
 **Goal:** Validate that complex behaviors emerge from the combination of bonding, composites, metabolism, environment, and protocol
 **Depends on:** Phase 15 (all systems including new protocol must be active)
+**Requirements:** R15, R16, R17, R18, R19
+**Plans:** 8 plans
+Plans:
+- [ ] 16-01-PLAN.md — EmergenceMetrics bean + 4 counter-increment sites + EMERGENCE log markers
+- [ ] 16-02-PLAN.md — Server-side RNG refactor (9 hot-path sites) + RandomSource @Component bean
+- [ ] 16-03-PLAN.md — TickWorkTimer bookend listeners (@Order 0/101) + fixtures/ gitignore
+- [ ] 16-04-PLAN.md — Test helpers: TriggerWatcher, PopulationHistory, RunFixtureWriter, TestLogCapture, SeededBotLauncher
+- [ ] 16-05-PLAN.md — R15 CompositeFormationDeterminismTest (engine-direct, seeded, two @Test methods)
+- [ ] 16-06-PLAN.md — R16/R17/R18 EmergenceStabilityLoadTest harness (@SpringBootTest RANDOM_PORT + 100 bots + sampling loop)
+- [ ] 16-07-PLAN.md — R16/R17/R18 assertions (D-07 stability + D-04 emergence + D-11 load-stability) + fixture JSON dump
+- [ ] 16-08-PLAN.md — 16-EMERGENCE.md narrative writeup + R19 full-suite regression gate
 **Success Criteria:**
 - Deterministic seed test demonstrating composite formation from simple rules
 - Population dynamics test with metabolism + environment showing stable ecosystems
