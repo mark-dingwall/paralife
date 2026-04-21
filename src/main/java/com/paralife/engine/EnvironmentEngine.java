@@ -1418,6 +1418,24 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         else if (before > 0 && clamped == 0) nonZeroToxinCellCount--;
     }
 
+    /**
+     * Phase 16 Plan 02: public bridge wrappers so cross-package tests
+     * (com.paralife.metrics.EmergenceMetricsWiringTest) can drive the mutagen
+     * pipeline without being forced into the engine package. Thin passthroughs
+     * to the package-private ForTest helpers.
+     */
+    public void stampMutagenAtForTestPublic(Position pos, int strain) {
+        stampMutagenForTest(pos, strain);
+    }
+
+    public void resolveMutagenCollisionsForTestPublic(long tickNumber) {
+        resolveMutagenCollisions(tickNumber);
+    }
+
+    public void tickBuffsAndInfectionsForTestPublic(long tickNumber) {
+        tickBuffsAndInfections(tickNumber);
+    }
+
     /** Test helper — stamp mutagen strain at a cell (and reset the reinforcement tick). */
     void stampMutagenForTest(Position pos, int strain) {
         int x = Math.floorMod(pos.x(), worldGrid.getWidth());
