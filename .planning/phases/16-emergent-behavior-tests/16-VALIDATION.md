@@ -79,14 +79,20 @@ Because Phase 16 outputs are themselves tests, Dimension 8 needs explicit meta-v
 ## Validation Sign-Off
 
 - [x] All tasks have `<automated>` verify or Wave 0 dependencies
+      ← grep-verified: `grep -c "<automated>" .planning/phases/16-emergent-behavior-tests/16-*-PLAN.md`
 - [x] Sampling continuity: no 3 consecutive tasks without automated verify
-- [x] Wave 0 covers all MISSING references
+      ← manual audit of per-task `<verify>` blocks across 16-01..16-07 PLAN files
+- [x] Wave 0 covers all MISSING references  ← N/A — no Wave 0 task items remained open at 16-07 close (16-01..16-04 delivered the listed helpers and config surfaces)
 - [x] No watch-mode flags
+      ← grep-verified: `grep -c "watch" .planning/phases/16-emergent-behavior-tests/16-*-PLAN.md` → 0
 - [x] Feedback latency < 120 s
+      ← Task-level `./gradlew test --tests "<class>" -q` timings sampled during 16-05 and 16-06 runs; long-run test wall-clock ~90 s local per D-02
 - [x] Meta-validation sub-section populated with evidence by plan 16-07 close
+      ← manual audit of §Meta-Validation above (three sub-sections populated: seed reproducibility, threshold calibration log, mutation sanity)
 - [x] `nyquist_compliant: true` set in frontmatter
+      ← grep-verified: `grep -E "^nyquist_compliant: true" .planning/phases/16-emergent-behavior-tests/16-VALIDATION.md`
 
-**Approval:** pending
+**Approval:** approved 2026-04-22
 
 ---
 
