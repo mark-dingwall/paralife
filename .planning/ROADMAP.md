@@ -177,6 +177,15 @@ Plans:
 **Goal:** Validate that complex behaviors emerge from the combination of bonding, composites, metabolism, environment, and protocol
 **Depends on:** Phase 15 (all systems including new protocol must be active)
 **Requirements:** R15, R16, R17, R18, R19
+**Plans:** 7 plans
+Plans:
+- [ ] 16-01-PLAN.md — RNG injection refactor across 10 hot-path sites + BotClient:294 fix + application.yml seed properties (R15)
+- [ ] 16-02-PLAN.md — EmergenceMetrics bean + 4 counter increment sites + EMERGENCE log markers + wiring test (R17)
+- [ ] 16-03-PLAN.md — TickEngine paralife.tick.work.ms DistributionSummary + .gitignore fixtures entry (R18)
+- [ ] 16-04-PLAN.md — 5 test helpers (PopulationHistory, RunFixtureWriter, TestLogCapture, TriggerWatcher, SeededBotLauncher) (R15/R16/R17/R18)
+- [ ] 16-05-PLAN.md — CompositeFormationDeterminismTest engine-direct 3-run identity assertion (R15)
+- [ ] 16-06-PLAN.md — EmergenceStabilityLoadTest full-stack 100-bot 1000-tick long-run with D-04/D-07/D-11 assertions + fixture dump (R16/R17/R18)
+- [ ] 16-07-PLAN.md — 16-EMERGENCE.md narrative + R19 full-suite gate checkpoint (R17/R19)
 **Success Criteria:**
 - Deterministic seed test demonstrating composite formation from simple rules
 - Population dynamics test with metabolism + environment showing stable ecosystems
