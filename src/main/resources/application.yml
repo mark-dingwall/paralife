@@ -40,6 +40,11 @@ paralife:
     # Jetty server-side read-idle close, defensive fallback if pings fail.
     # Must be > 2 × (keepaliveTicks × tick.interval-ms).
     idle-timeout-ms: 60000
+    # Phase 16 Plan 06 — per-session respawn cap (T-15-04, D-33). Previously a
+    # hardcoded constant in WorldWebSocketHandler; exposed here so long-run
+    # emergence tests can raise the ceiling via @TestPropertySource without
+    # relaxing the production invariant. Production MUST stay at 5.
+    max-respawns-per-session: 5
   simulation:
     energy-decay-per-tick: 1
     combat-energy-transfer: 10

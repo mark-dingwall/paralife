@@ -47,11 +47,15 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
  *       {@code r|} re-registers, counted by {@code respawnCount}.</li>
  * </ul>
  *
- * <p><b>Respawn cap (T-15-04).</b> {@link #MAX_RESPAWNS_PER_SESSION} bounds
- * respawn storms per session. The first {@code r|} is registration, not
- * counted; subsequent {@code r|} accepts each increment {@code respawnCount}.
- * Exceeding the cap yields {@code E|429|respawn cap exceeded}. The session
- * itself stays open so a client can still observe the final error.
+ * <p><b>Respawn cap (T-15-04).</b> {@link RespawnConfig#maxRespawnsPerSession}
+ * bounds respawn storms per session. The first {@code r|} is registration,
+ * not counted; subsequent {@code r|} accepts each increment
+ * {@code respawnCount}. Exceeding the cap yields
+ * {@code E|429|respawn cap exceeded}. The session itself stays open so a
+ * client can still observe the final error. The cap is bound from
+ * {@code paralife.websocket.max-respawns-per-session} (production default
+ * {@code 5}); tests override via {@code @TestPropertySource} to disable the
+ * gate for long-run emergence runs.
  */
 @Component
 public class WorldWebSocketHandler extends TextWebSocketHandler {
@@ -60,10 +64,14 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
 
     /**
      * D-33 per-session respawn cap. Bounds the respawn-storm DoS vector
-     * (T-15-04). Value is a reasonable default; exposing it as a configurable
-     * property is deferred to a later plan.
+     * (T-15-04). Bound from {@link RespawnConfig#maxRespawnsPerSession}
+     * (prefix {@code paralife.websocket}); production default is
+     * {@link RespawnConfig#DEFAULT_MAX_RESPAWNS_PER_SESSION} (5). Phase 16
+     * Plan 06 exposed this as a configuration property so long-run
+     * emergence tests can raise the ceiling via {@code @TestPropertySource}
+     * without relaxing the production invariant.
      */
-    private static final int MAX_RESPAWNS_PER_SESSION = 5;
+    private final int maxRespawnsPerSession;
 
     /** Max random-placement attempts before declaring the grid effectively full. */
     private static final int MAX_PLACEMENT_ATTEMPTS = 50;
@@ -92,7 +100,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
                                   TickEngine tickEngine, BotRegistry botRegistry,
                                   ActionResolver actionResolver,
                                   MetabolicProfile metabolicProfile,
-                                  SpawnConfig spawnConfig) {
+                                  SpawnConfig spawnConfig,
+                                  RespawnConfig respawnConfig) {
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
         this.tickEngine = tickEngine;
@@ -100,19 +109,35 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         this.actionResolver = actionResolver;
         this.metabolicProfile = metabolicProfile;
         this.spawnConfig = spawnConfig;
+        this.maxRespawnsPerSession = respawnConfig.maxRespawnsPerSession();
         this.spawnRng = buildRng();
     }
 
     /**
+     * Back-compat 7-arg convenience ctor — preserves pre-Phase-16-06
+     * direct-instantiation tests. Defaults RespawnConfig to the production
+     * cap {@link RespawnConfig#DEFAULT_MAX_RESPAWNS_PER_SESSION}.
+     */
+    public WorldWebSocketHandler(SessionRegistry sessionRegistry, WorldGrid worldGrid,
+                                  TickEngine tickEngine, BotRegistry botRegistry,
+                                  ActionResolver actionResolver,
+                                  MetabolicProfile metabolicProfile,
+                                  SpawnConfig spawnConfig) {
+        this(sessionRegistry, worldGrid, tickEngine, botRegistry, actionResolver,
+                metabolicProfile, spawnConfig, RespawnConfig.defaults());
+    }
+
+    /**
      * Back-compat 6-arg convenience ctor — preserves pre-Phase-16 direct-
-     * instantiation tests (if any). Defaults SpawnConfig to unseeded.
+     * instantiation tests (if any). Defaults SpawnConfig to unseeded and
+     * RespawnConfig to the production cap.
      */
     public WorldWebSocketHandler(SessionRegistry sessionRegistry, WorldGrid worldGrid,
                                   TickEngine tickEngine, BotRegistry botRegistry,
                                   ActionResolver actionResolver,
                                   MetabolicProfile metabolicProfile) {
         this(sessionRegistry, worldGrid, tickEngine, botRegistry, actionResolver,
-                metabolicProfile, SpawnConfig.defaults());
+                metabolicProfile, SpawnConfig.defaults(), RespawnConfig.defaults());
     }
 
     private Random buildRng() {
@@ -195,7 +220,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         int respawnCount = respawnCountOf(attrs);
         Object storedType = attrs.get(ATTR_ENTITY_TYPE);
         boolean isRespawn = storedType != null;
-        if (isRespawn && respawnCount >= MAX_RESPAWNS_PER_SESSION) {
+        if (isRespawn && respawnCount >= maxRespawnsPerSession) {
             sendFrame(session, new Frame.ErrorFrame(429, Optional.of("respawn cap exceeded")));
             return;
         }
@@ -300,7 +325,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
      * Transition the session from Alive to Dead (respawn pending). Called by
      * the downstream broadcaster (plan 15-08) when it detects the session's
      * entity has been removed from the grid. Subsequent {@code r|} is accepted
-     * as a respawn, counted against {@link #MAX_RESPAWNS_PER_SESSION}.
+     * as a respawn, counted against {@link #maxRespawnsPerSession}.
      */
     public void markDead(WebSocketSession session) {
         if (session == null) return;
