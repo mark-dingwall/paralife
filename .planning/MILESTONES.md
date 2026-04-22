@@ -1,12 +1,15 @@
 # Milestones
 
-## v2.0 Combination & Emergence (Shipped: 2026-04-22)
+Internal milestone archive. `v1.0` / `v2.0` are planning-era milestone identifiers, not public release versions.
+
+
+## v2.0 Combination & Emergence (Completed: 2026-04-22)
 
 **Phases completed:** 8 phases, 36 plans
 
 **Key accomplishments:**
 
-- Bonding, composites, richer metabolism, and environmental effects shipped across Phases 11-14, turning the original RPS simulation into a multi-system emergent ecosystem.
+- Bonding, composites, richer metabolism, and environmental effects completed across Phases 11-14, turning the original RPS simulation into a multi-system emergent ecosystem.
 - Phase 15 replaced the JSON transport with a compact codec-native protocol on Jetty 12, added permessage-deflate negotiation, zero-trust perception filtering, and stateless reactive bots.
 - Phase 15.1 landed the permanent `BotRunner` / `runBot` operator path, and Phase 15.2 closed the latent own-death wire gap so Phase 15 UAT returned to `7/7` pass.
 - Phase 16 added seeded determinism hooks, emergence metrics, long-run load fixtures, and helper infrastructure for reproducible emergence testing.
@@ -19,7 +22,7 @@
 
 ## v1.0 — Foundation & Living Simulation
 
-**Shipped:** 2026-04-12
+**Completed:** 2026-04-12
 **Phases:** 10 (01-10)
 **Plans:** 11 (across phases 01, 06-10)
 **Tests:** 166 passing

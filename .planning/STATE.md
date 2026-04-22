@@ -24,13 +24,13 @@ progress:
 See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
-**Current focus:** Define the next milestone after v2.0 archive and release tagging
+**Current focus:** Define the next milestone after the v2.0 internal milestone archive
 
 ## Current Position
 
-Milestone: v2.0 (Combination & Emergence) — shipped and archived
+Milestone: v2.0 (Combination & Emergence) — completed and archived as an internal milestone
 Status: milestone complete
-Last activity: 2026-04-22 — archived `ROADMAP.md`, `REQUIREMENTS.md`, and the close-time audit under `.planning/milestones/`; Phase 16 close-out remains the final shipped work in this milestone
+Last activity: 2026-04-22 — archived `ROADMAP.md`, `REQUIREMENTS.md`, and the close-time audit under `.planning/milestones/`; Phase 16 close-out remains the final completed work in this milestone. The overall project is still unreleased.
 
 Progress: [██████████] v2.0 complete
 

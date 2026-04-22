@@ -10,7 +10,9 @@ Emergent spatial behaviour from simple local rules. Paralife is most valuable wh
 
 ## Current State
 
-Milestone `v2.0 Combination & Emergence` shipped on `2026-04-22`.
+Project release status: unreleased.
+
+Internal milestone `v2.0 Combination & Emergence` completed and was archived on `2026-04-22`.
 
 - Bonding, composite organisms, metabolism, and environmental systems are all live.
 - The transport layer is compact-text, codec-native, Jetty-based, and exercised by stateless bot clients.
@@ -21,8 +23,8 @@ Milestone `v2.0 Combination & Emergence` shipped on `2026-04-22`.
 
 ### Validated
 
-- **v1.0 — Foundation & Living Simulation** shipped the baseline world, tick loop, WebSocket bot control, and 100-bot load envelope.
-- **v2.0 — Combination & Emergence** shipped bonding, composites, metabolism, environmental rules, protocol overhaul, live operator tooling, deterministic emergence tests, and the final regression gate.
+- **v1.0 — Foundation & Living Simulation** completed the baseline world, tick loop, WebSocket bot control, and 100-bot load envelope as an internal milestone.
+- **v2.0 — Combination & Emergence** completed bonding, composites, metabolism, environmental rules, protocol overhaul, live operator tooling, deterministic emergence tests, and the final regression gate as an internal milestone.
 
 ### Active
 
@@ -55,7 +57,7 @@ Milestone `v2.0 Combination & Emergence` shipped on `2026-04-22`.
 ## Historical Context
 
 <details>
-<summary>Shipped milestone archives</summary>
+<summary>Archived internal milestone artifacts</summary>
 
 - `.planning/milestones/v1.0-ROADMAP.md`
 - `.planning/milestones/v1.0-MILESTONE-AUDIT.md`

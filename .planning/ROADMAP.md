@@ -1,9 +1,12 @@
 # Paralife Roadmap
 
+Internal milestone tracker. `v1.0` / `v2.0` are milestone IDs, not release versions.
+
+
 ## Milestones
 
-- ✅ **v1.0 Foundation & Living Simulation** — Phases 01-10 (shipped 2026-04-12)
-- ✅ **v2.0 Combination & Emergence** — Phases 11-16 plus 15.1/15.2 follow-ups (shipped 2026-04-22)
+- ✅ **v1.0 Foundation & Living Simulation** — Phases 01-10 (completed 2026-04-12)
+- ✅ **v2.0 Combination & Emergence** — Phases 11-16 plus 15.1/15.2 follow-ups (completed 2026-04-22)
 
 ## Archived Milestones
 
