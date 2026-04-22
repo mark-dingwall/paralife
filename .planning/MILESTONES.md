@@ -1,5 +1,22 @@
 # Milestones
 
+## v2.0 Combination & Emergence (Shipped: 2026-04-22)
+
+**Phases completed:** 8 phases, 36 plans
+
+**Key accomplishments:**
+
+- Bonding, composites, richer metabolism, and environmental effects shipped across Phases 11-14, turning the original RPS simulation into a multi-system emergent ecosystem.
+- Phase 15 replaced the JSON transport with a compact codec-native protocol on Jetty 12, added permessage-deflate negotiation, zero-trust perception filtering, and stateless reactive bots.
+- Phase 15.1 landed the permanent `BotRunner` / `runBot` operator path, and Phase 15.2 closed the latent own-death wire gap so Phase 15 UAT returned to `7/7` pass.
+- Phase 16 added seeded determinism hooks, emergence metrics, long-run load fixtures, and helper infrastructure for reproducible emergence testing.
+- `16-EMERGENCE.md` landed with fixture-backed narrative evidence, and `./gradlew test -PincludeLong=true` passed as the v2.0 regression gate.
+- The missing world-level population back-pressure requirement was recovered as a temporary registration cap, with durable-policy redesign and offspring agency both parked in backlog as 999.1 and 999.2.
+
+**Known deferred items at close:** 1 acknowledged artifact item (see `STATE.md` Deferred Items)
+
+---
+
 ## v1.0 — Foundation & Living Simulation
 
 **Shipped:** 2026-04-12
