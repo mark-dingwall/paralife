@@ -211,4 +211,28 @@ class WorldGridTest {
         assertThat(grid.getCell(1, 0).occupant()).isInstanceOf(Rock.class);
         assertThat(grid.getCell(2, 0).occupant()).isInstanceOf(Nutrient.class);
     }
+
+    @Test
+    void livingEntityCountCountsOnlyLiveNonTerrainOccupants() {
+        grid.setEntity(0, 0, Particle.spawn("p1", ParticleType.CATALYST));
+        grid.setEntity(1, 0, new Rock("r1"));
+        grid.setEntity(2, 0, Nutrient.spawn("n1"));
+        grid.setEntity(3, 0, new Entity.BondedPair(
+                "bp1", ParticleType.CATALYST, ParticleType.SPORE, 30, 100));
+        grid.setEntity(4, 0, new Entity.CompositeMember(
+                "cm1", "comp-1", ParticleType.MEMBRANE, Entity.Role.FEEDER, 25, 100));
+
+        assertThat(grid.livingEntityCount()).isEqualTo(3);
+    }
+
+    @Test
+    void livingEntityCountExcludesZeroEnergyOccupants() {
+        grid.setEntity(0, 0, new Particle("dead-p", ParticleType.CATALYST, 0));
+        grid.setEntity(1, 0, new Entity.BondedPair(
+                "dead-bp", ParticleType.CATALYST, ParticleType.SPORE, 0, 100));
+        grid.setEntity(2, 0, new Entity.CompositeMember(
+                "dead-cm", "comp-1", ParticleType.MEMBRANE, Entity.Role.ATTACKER, 0, 100));
+
+        assertThat(grid.livingEntityCount()).isZero();
+    }
 }

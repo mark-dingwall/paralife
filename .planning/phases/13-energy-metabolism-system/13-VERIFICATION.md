@@ -1,7 +1,7 @@
 ---
 phase: 13-energy-metabolism-system
-verified: 2026-04-15T02:00:00Z
-status: human_needed
+verified: 2026-04-15T02:30:00Z
+status: passed
 score: 28/28 must-haves verified
 overrides_applied: 0
 ---
@@ -9,9 +9,9 @@ overrides_applied: 0
 # Phase 13: Energy & Metabolism System — Verification Report
 
 **Phase Goal:** Richer energy model — entities need food, starve, and reproduce based on metabolic state.
-**Verified:** 2026-04-15T02:00:00Z
-**Status:** human_needed (automated verification complete; multi-tick behavioral observation left for operator)
-**Re-verification:** No — initial verification
+**Verified:** 2026-04-15T02:30:00Z
+**Status:** passed
+**Re-verification:** Yes — human follow-up in `13-HUMAN-UAT.md` completed all deferred qualitative checks
 
 ## Goal Achievement
 
@@ -144,7 +144,7 @@ Deferred to the separate `13-REVIEW.md` code-review pass (already performed). Su
 
 The 13-REVIEW.md issues are acknowledged but not re-reported here — they will flow into the next planning cycle if the developer chooses to address them. None prevent the phase goal from being achieved.
 
-### Human Verification Required
+### Human Verification Completed
 
 The goal ("entities need food, starve, and reproduce based on metabolic state") is automatically verified at the mechanistic level — every sub-behavior is unit-tested and the 600-tick integration test proves the full pipeline runs and starvation activates. What remains human-observable is the *qualitative ecosystem feel* — whether the parameter balance produces interesting emergent dynamics vs. collapse/explosion.
 
@@ -174,11 +174,11 @@ The goal ("entities need food, starve, and reproduce based on metabolic state") 
 
 ### Gaps Summary
 
-No gaps. All 28 must-have truths verified (26 strongly, 2 with documented diagnostic-only caveats that match plan summary decisions). All 11 required artifacts present and substantive. All 11 key links wired. All 4 requirements satisfied. Full test suite green (420/420). Three code-review warnings exist but are tracked in 13-REVIEW.md and do not block phase goal achievement.
+No gaps. All 28 must-have truths verified (26 strongly, 2 with documented diagnostic-only caveats that match plan summary decisions). All 11 required artifacts present and substantive. All 11 key links wired. All 4 requirements satisfied. Full test suite green (420/420). The prior human-verification follow-up is now complete and recorded in `13-HUMAN-UAT.md` with 4/4 passes. Three code-review warnings exist but are tracked in 13-REVIEW.md and do not block phase goal achievement.
 
-Status is `human_needed` solely because goal-level validation of "richer energy model" requires multi-tick qualitative observation (seasonal correlation, ecosystem shape, dispersal visualization) that no single-run automated test can credibly assert.
+Status is now `passed`: the goal-level qualitative checks for seasonal correlation, starvation concentration, fertility-map coherence, and SPORE dispersal were completed in `13-HUMAN-UAT.md`.
 
 ---
 
-_Verified: 2026-04-15T02:00:00Z_
+_Verified: 2026-04-15T02:30:00Z_
 _Verifier: Claude (gsd-verifier)_

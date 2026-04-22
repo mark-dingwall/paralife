@@ -11,6 +11,7 @@ tags:
   - snapshot-once-perf-polish
   - rising-edge-event-counters
   - particle-only-harness-constraint
+requirements-completed: [R12, R13, R14]
 dependency_graph:
   requires:
     - EnvironmentEngine (Plans 14-01..05)

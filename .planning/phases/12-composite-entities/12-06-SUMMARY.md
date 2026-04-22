@@ -3,6 +3,7 @@ phase: 12-composite-entities
 plan: 06
 subsystem: engine
 tags: [integration-test, composite-lifecycle, regression, full-pipeline]
+requirements-completed: [R04, R05, R06, R07]
 dependency_graph:
   requires: [CompositeMember, CompositeRegistry, CompositeConfig, CompositeEnergyDistributor, ActionResolver, SimulationEngine, PerceptionBroadcaster]
   provides: [CompositeIntegrationTest]

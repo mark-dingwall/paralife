@@ -3,6 +3,7 @@ phase: 13-energy-metabolism-system
 plan: 04
 subsystem: engine
 tags: [integration-test, metabolism, capstone, bot-launcher, season-cycle, starvation-observability]
+requirements-completed: [R08, R09, R10, R11]
 requires:
   - MetabolicProfile (13-01)
   - StarvationConfig (13-01)

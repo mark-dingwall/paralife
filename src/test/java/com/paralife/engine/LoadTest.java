@@ -30,7 +30,9 @@ import static org.assertj.core.api.Assertions.assertThat;
         "paralife.simulation.nutrient-spawn-probability=0.001",
         "paralife.simulation.nutrient-consume-energy=5",
         "paralife.simulation.overcrowding-threshold=8",
-        "paralife.simulation.overcrowding-energy-penalty=0"
+        "paralife.simulation.overcrowding-energy-penalty=0",
+        "paralife.websocket.max-respawns-per-session=1000000",
+        "paralife.websocket.max-active-entities=1000000"
 })
 class LoadTest {
 

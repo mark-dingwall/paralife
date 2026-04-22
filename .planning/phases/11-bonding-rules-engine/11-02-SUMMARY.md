@@ -5,6 +5,7 @@ title: "Bonding Rules Engine — Downstream Consumers"
 one_liner: "BondedPair wired into PerceptionBroadcaster, Messages.Tick bondCount field, TickBroadcaster reads SimulationEngine bond count"
 subsystem: websocket, engine
 tags: [bonding, perception, tick-broadcast, observability]
+requirements-completed: [R01, R02, R03]
 dependency_graph:
   requires:
     - "Entity.BondedPair sealed permit (Plan 01)"

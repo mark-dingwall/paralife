@@ -276,7 +276,8 @@ public class BotClient {
     private void onError(Frame.ErrorFrame e) {
         log.warn("Server error {}: {}", e.code(), e.message().orElse(""));
         if (e.code() == 429) {
-            // Threat T-15-04: respawn cap exceeded. Disconnect instead of hammering.
+            // 429 is the server's back-pressure signal (respawn cap or population cap).
+            // Disconnect instead of retrying and hammering the registration path.
             disconnect();
         }
     }

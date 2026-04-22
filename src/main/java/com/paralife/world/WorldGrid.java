@@ -177,6 +177,34 @@ public class WorldGrid {
     }
 
     /**
+     * Count live non-terrain occupants on the grid.
+     *
+     * <p>Used by WebSocket registration back-pressure. Rocks and nutrients do
+     * not count; zero-energy occupants that are awaiting cleanup do not count.
+     */
+    public int livingEntityCount() {
+        lock.readLock().lock();
+        try {
+            int count = 0;
+            for (Cell[] col : cells) {
+                for (Cell cell : col) {
+                    Entity occupant = cell.occupant();
+                    if (occupant instanceof Entity.Particle particle && particle.isAlive()) {
+                        count++;
+                    } else if (occupant instanceof Entity.BondedPair pair && pair.energy() > 0) {
+                        count++;
+                    } else if (occupant instanceof Entity.CompositeMember member && member.isAlive()) {
+                        count++;
+                    }
+                }
+            }
+            return count;
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /**
      * Immutable snapshot of the grid at a point in time.
      */
     public record GridSnapshot(int width, int height, Cell[][] cells) {

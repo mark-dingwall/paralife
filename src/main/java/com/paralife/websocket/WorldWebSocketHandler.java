@@ -47,6 +47,12 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
  *       {@code r|} re-registers, counted by {@code respawnCount}.</li>
  * </ul>
  *
+ * <p><b>Population cap.</b> Register / respawn requests are denied with
+ * {@code E|429|population cap exceeded} when live non-rock / non-nutrient
+ * occupants on the grid have reached
+ * {@link PopulationCapConfig#maxActiveEntities()}. This is a temporary global
+ * load-injection guardrail; it does not apply to in-sim reproduction.
+ *
  * <p><b>Respawn cap (T-15-04).</b> {@link RespawnConfig#maxRespawnsPerSession}
  * bounds respawn storms per session. The first {@code r|} is registration,
  * not counted; subsequent {@code r|} accepts each increment
@@ -72,6 +78,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
      * without relaxing the production invariant.
      */
     private final int maxRespawnsPerSession;
+    private final int maxActiveEntities;
 
     /** Max random-placement attempts before declaring the grid effectively full. */
     private static final int MAX_PLACEMENT_ATTEMPTS = 50;
@@ -101,7 +108,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
                                   ActionResolver actionResolver,
                                   MetabolicProfile metabolicProfile,
                                   SpawnConfig spawnConfig,
-                                  RespawnConfig respawnConfig) {
+                                  RespawnConfig respawnConfig,
+                                  PopulationCapConfig populationCapConfig) {
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
         this.tickEngine = tickEngine;
@@ -110,6 +118,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         this.metabolicProfile = metabolicProfile;
         this.spawnConfig = spawnConfig;
         this.maxRespawnsPerSession = respawnConfig.maxRespawnsPerSession();
+        this.maxActiveEntities = populationCapConfig.maxActiveEntities();
         this.spawnRng = buildRng();
     }
 
@@ -124,7 +133,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
                                   MetabolicProfile metabolicProfile,
                                   SpawnConfig spawnConfig) {
         this(sessionRegistry, worldGrid, tickEngine, botRegistry, actionResolver,
-                metabolicProfile, spawnConfig, RespawnConfig.defaults());
+                metabolicProfile, spawnConfig, RespawnConfig.defaults(),
+                PopulationCapConfig.defaults());
     }
 
     /**
@@ -137,7 +147,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
                                   ActionResolver actionResolver,
                                   MetabolicProfile metabolicProfile) {
         this(sessionRegistry, worldGrid, tickEngine, botRegistry, actionResolver,
-                metabolicProfile, SpawnConfig.defaults(), RespawnConfig.defaults());
+                metabolicProfile, SpawnConfig.defaults(), RespawnConfig.defaults(),
+                PopulationCapConfig.defaults());
     }
 
     private Random buildRng() {
@@ -213,6 +224,11 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         Object existingId = attrs.get(ATTR_ENTITY_ID);
         if (existingId != null) {
             sendFrame(session, new Frame.ErrorFrame(409, Optional.of("already registered")));
+            return;
+        }
+
+        if (worldGrid.livingEntityCount() >= maxActiveEntities) {
+            sendFrame(session, new Frame.ErrorFrame(429, Optional.of("population cap exceeded")));
             return;
         }
 
