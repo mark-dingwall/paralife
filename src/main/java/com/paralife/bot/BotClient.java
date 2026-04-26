@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
+import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -67,9 +68,13 @@ public class BotClient {
     private final AtomicBoolean alive = new AtomicBoolean(false);
     private final AtomicReference<BotState> state;
 
+    private final AtomicBoolean shutdown = new AtomicBoolean(false);
+
     private WebSocketClient client;
     private volatile Session session;
     private volatile String entityId;
+    /** Phase 17: server-issued opaque resume token; sent on reconnect after STALLED to re-bind to the same entity. */
+    private volatile String resumeToken;
 
     public BotClient(String serverUri, char species, HeuristicBrain brain) {
         this(serverUri, species, brain, 100L, 50L, new Random());
@@ -130,11 +135,13 @@ public class BotClient {
         log.info("Bot connected: species={} uri={}", species, serverUri);
 
         // Send initial register frame immediately; server responds with S|<id>.
-        sendFrame(new Frame.RegisterFrame(species));
+        // Phase 17: if a resume token is held (STALLED reconnect), include it.
+        sendInitialRegister();
     }
 
     /** Disconnect the bot and stop the underlying Jetty client. */
     public void disconnect() {
+        shutdown.set(true);
         try {
             Session s = this.session;
             if (s != null && s.isOpen()) {
@@ -235,6 +242,9 @@ public class BotClient {
 
     private void onSync(Frame.SyncFrame s) {
         entityId = s.entityId();
+        // Phase 17: store the resume token when the server issues one (fresh or re-bind).
+        // Overwrites any stale token — consumed-once semantics on successful re-bind.
+        s.resumeToken().ifPresent(t -> this.resumeToken = t);
         alive.set(true);
         // On re-sync after respawn, reset BotState to a fresh SOLO of the
         // original species — any prior bonded/composite state is gone on death.
@@ -244,7 +254,8 @@ public class BotClient {
         } else {
             respawnCount.incrementAndGet();
         }
-        log.info("Bot registered: entity={} species={}", entityId, species);
+        log.info("Bot registered: entity={} species={} hasResumeToken={}",
+                entityId, species, resumeToken != null);
     }
 
     private void onTick(Frame.TickFrame t) {
@@ -274,11 +285,64 @@ public class BotClient {
     }
 
     private void onError(Frame.ErrorFrame e) {
-        log.warn("Server error {}: {}", e.code(), e.message().orElse(""));
+        String msg = e.message().orElse("");
+        log.warn("Server error {}: {}", e.code(), msg);
+        if (e.code() == 408 && "reconnect-required".equals(msg)) {
+            // Phase 17 STALLED-pivot: server is closing this WS; reconnect with token to rebind same entity.
+            handleStalled();
+            return;
+        }
         if (e.code() == 429) {
             // 429 is the server's back-pressure signal (respawn cap or population cap).
             // Disconnect instead of retrying and hammering the registration path.
             disconnect();
+        }
+    }
+
+    /**
+     * Phase 17 STALLED-pivot handler. Called when the server sends {@code E|408|reconnect-required}.
+     * The server is closing (or has closed) the WebSocket; the entity is held on the grid
+     * for {@code graceWindowTicks}. We mark ourselves not-alive and let the {@code onClose}
+     * hook trigger reconnect with the stored resume token.
+     *
+     * <p>Orthogonal to {@link #handleDeath}: death stays on the same WS with a fresh entity;
+     * STALLED requires a new WS and re-binds the same entity via the resume token.
+     */
+    private void handleStalled() {
+        alive.set(false);
+        // Do NOT null entityId — server preserves the entity during the grace window.
+        // Keep resumeToken — it will be sent on reconnect via sendInitialRegister().
+        log.info("Bot STALLED: entity={} species={} hasResumeToken={}", entityId, species, resumeToken != null);
+        // The server will close the WS. onClose() in Endpoint triggers reconnect when resumeToken != null.
+    }
+
+    /**
+     * Sends the initial register frame after a WS connection is established.
+     * If a resume token is held (STALLED reconnect path), includes it so the server
+     * can re-bind the entity. Otherwise sends a plain fresh-registration frame.
+     *
+     * <p>Death-pivot ({@link #handleDeath}) does NOT use this helper — it always
+     * sends a no-token {@link Frame.RegisterFrame} for a fresh entity on the same WS.
+     */
+    private void sendInitialRegister() {
+        String token = this.resumeToken;
+        if (token != null) {
+            sendFrame(new Frame.RegisterFrame(species, Optional.of(token)));
+            log.info("Reconnect with resume-token (entityId={} preserved if grace not expired)", entityId);
+        } else {
+            sendFrame(new Frame.RegisterFrame(species));
+        }
+    }
+
+    /**
+     * Re-enters the connect cycle after a STALLED WS close.
+     * Called from the {@code onClose} hook when a resume token is held.
+     */
+    private void reconnect() {
+        try {
+            connect();
+        } catch (Exception e) {
+            log.warn("Reconnect failed: {}", e.getMessage());
         }
     }
 
@@ -325,7 +389,12 @@ public class BotClient {
 
         @OnWebSocketClose
         public void onClose(int statusCode, String reason) {
-            log.info("WS closed: {} {}", statusCode, reason);
+            log.info("WS closed: status={} reason={}", statusCode, reason);
+            if (resumeToken != null && !shutdown.get()) {
+                // Phase 17 STALLED-pivot: reconnect on a fresh WS to attempt re-bind within grace window.
+                long delayMs = 100L;
+                CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS).execute(BotClient.this::reconnect);
+            }
         }
 
         @OnWebSocketError
