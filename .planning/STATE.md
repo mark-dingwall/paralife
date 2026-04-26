@@ -1,20 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Combination & Emergence
-current_phase: 16
-current_phase_name: Emergent Behavior Tests
-current_plan: 7
-status: milestone-complete
-stopped_at: v2.0 archived after Phase 16 close-out. Requirements, roadmap, and audit are archived under .planning/milestones/. Next milestone not yet defined.
-last_updated: "2026-04-22T15:30:00+10:00"
-last_activity: 2026-04-22
+milestone: v3.0
+milestone_name: Scale Engineering (M4)
+status: roadmap created; ready to discuss and plan
+stopped_at: Phase 17 context gathered
+last_updated: "2026-04-26T17:04:40.192Z"
+last_activity: 2026-04-22 — M3/v2.0 archived cleanly, the archived audit references were normalized, and the M4 milestone requirements and roadmap were created. The overall project is still unreleased.
 progress:
-  total_phases: 8
-  completed_phases: 8
-  total_plans: 36
-  completed_plans: 36
-  percent: 100
+  total_phases: 6
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
@@ -24,27 +20,28 @@ progress:
 See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
-**Current focus:** Define the next milestone after the v2.0 internal milestone archive
+**Current focus:** Milestone v3.0 / M4 scale engineering — durable admission control, load harnesses, and benchmark evidence
 
 ## Current Position
 
-Milestone: v2.0 (Combination & Emergence) — completed and archived as an internal milestone
-Status: milestone complete
-Last activity: 2026-04-22 — archived `ROADMAP.md`, `REQUIREMENTS.md`, and the close-time audit under `.planning/milestones/`; Phase 16 close-out remains the final completed work in this milestone. The overall project is still unreleased.
+Milestone: v3.0 (Scale Engineering / M4) — active
+Phase: 17 (Durable Admission Control & Backpressure)
+Plan: not started
+Status: roadmap created; ready to discuss and plan
+Last activity: 2026-04-22 — M3/v2.0 archived cleanly, the archived audit references were normalized, and the M4 milestone requirements and roadmap were created. The overall project is still unreleased.
 
-Progress: [██████████] v2.0 complete
+Progress: [----------] v3.0 not started
 
 ## Deferred Items
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| backlog | 999.1 durable WebSocket registration policy | open | 2026-04-22 |
-| backlog | 999.2 offspring become bot-driven; M5 flower fallback | open | 2026-04-22 |
 | artifact | 13-HUMAN-UAT.md retained as passed historical evidence | acknowledged | 2026-04-22 |
+| backlog | 999.2 offspring become bot-driven; M5 flower fallback | open | 2026-04-22 |
 
 ## Session Continuity
 
-Last session: 2026-04-22 15:30 +10:00
-Stopped at: v2.0 archived; next milestone planning not started
-Resume file: .planning/PROJECT.md
-Next command: /gsd-new-milestone
+Last session: --stopped-at
+Stopped at: Phase 17 context gathered
+Resume file: --resume-file
+Next command: /gsd-discuss-phase 17
