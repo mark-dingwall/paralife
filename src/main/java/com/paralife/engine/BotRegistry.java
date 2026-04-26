@@ -10,6 +10,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -31,7 +32,16 @@ public class BotRegistry {
     /**
      * Immutable state for a registered bot.
      */
-    public record BotState(String sessionId, String entityId, Position position) {}
+    public record BotState(String sessionId, String entityId, Position position) {
+
+        /**
+         * Phase 17 D-13: returns a copy of this state with the sessionId replaced.
+         * Used by {@link BotRegistry#rebindSession} to update the bySession map.
+         */
+        public BotState withSessionId(String newSessionId) {
+            return new BotState(newSessionId, entityId, position);
+        }
+    }
 
     /**
      * Phase 15.2: death notice captured at the moment a bot-controlled entity
@@ -135,6 +145,48 @@ public class BotRegistry {
      */
     public Optional<String> getSessionForEntity(String entityId) {
         return Optional.ofNullable(entityToSession.get(entityId));
+    }
+
+    /**
+     * Phase 17 D-12: alias for {@link #getSessionForEntity} used by
+     * {@code WorldWebSocketHandler.cleanupByEntityId} (plan spec name).
+     */
+    public Optional<String> getSessionByEntity(String entityId) {
+        return getSessionForEntity(entityId);
+    }
+
+    /**
+     * Phase 17 D-13: rebind an existing entity (preserved across STALLED-pivot) to a new
+     * WebSocket session. Removes the prior session→entity record (if any) and the prior
+     * entity→session reverse record, then inserts the new session→entity record using the
+     * SAME BotState (position, species, etc.) — only the session id changes.
+     *
+     * <p>If {@code entityId} is unknown, this is a no-op (returns false). Otherwise returns true.
+     *
+     * @throws IllegalStateException if the new sessionId is already bound to a different entity
+     */
+    public synchronized boolean rebindSession(String newSessionId, String entityId) {
+        Objects.requireNonNull(newSessionId, "newSessionId");
+        Objects.requireNonNull(entityId, "entityId");
+        String oldSessionId = entityToSession.get(entityId);
+        if (oldSessionId == null) return false;
+
+        BotState existing = bySession.get(oldSessionId);
+        if (existing == null) return false;
+
+        // Defensive: refuse to clobber a different entity that may already be bound to newSessionId.
+        BotState collision = bySession.get(newSessionId);
+        if (collision != null && !collision.entityId().equals(entityId)) {
+            throw new IllegalStateException("rebindSession: " + newSessionId
+                    + " already bound to entity=" + collision.entityId()
+                    + "; refusing to clobber for entity=" + entityId);
+        }
+
+        bySession.remove(oldSessionId);
+        bySession.put(newSessionId, existing.withSessionId(newSessionId));
+        entityToSession.put(entityId, newSessionId);
+        log.debug("Bot rebound: entity={} oldSession={} newSession={}", entityId, oldSessionId, newSessionId);
+        return true;
     }
 
     /**
