@@ -21,3 +21,10 @@ Thumbs.db
 
 # GSD fixtures — Phase 16 long-run test per-run dump (D-06b; rollover N=5)
 /.planning/phases/16-emergent-behavior-tests/fixtures/*.json
+
+# Claude
+.claude/
+
+# Codex
+.codex/
+.codex
