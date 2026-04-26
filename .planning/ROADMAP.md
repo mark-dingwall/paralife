@@ -45,10 +45,10 @@ Prove the architecture handles large-scale externally driven load without losing
 Plans:
 - [x] 17-01-PLAN.md — AdmissionConfig record + RejectionToken constants + 17-ADMISSION.md spec doc
 - [x] 17-02-PLAN.md — Codec extension for resume-token slot on r| and S| frames
-- [ ] 17-03-PLAN.md — AdmissionGate bean + AdmissionMetrics tagged counter and gauges
-- [ ] 17-04-PLAN.md — TickHealthMonitor rolling-window hysteresis gate + TickEngine.lastTickWorkMs
-- [ ] 17-05-PLAN.md — ResumeTokenRegistry mint/lookup/expiry sweep with grace window
-- [ ] 17-06-PLAN.md — OutboundSender per-session VT-per-queue with overflow callback
+- [x] 17-03-PLAN.md — AdmissionGate bean + AdmissionMetrics tagged counter and gauges
+- [x] 17-04-PLAN.md — TickHealthMonitor rolling-window hysteresis gate + TickEngine.lastTickWorkMs
+- [x] 17-05-PLAN.md — ResumeTokenRegistry mint/lookup/expiry sweep with grace window
+- [x] 17-06-PLAN.md — OutboundSender per-session VT-per-queue with overflow callback
 - [ ] 17-07-PLAN.md — WorldWebSocketHandler refactor: delegate admission, retoken errors, STALLED FSM
 - [ ] 17-08-PLAN.md — TickBroadcaster refactor: enqueue via OutboundSender, remove synchronized(session)
 - [ ] 17-09-PLAN.md — BotClient resume-token storage + STALLED-pivot reconnect
