@@ -51,6 +51,14 @@ final class ParseCursor {
         return out;
     }
 
+    /** Restore cursor position to a previously recorded index. Used for non-consuming peeks. */
+    void setIndex(int newIdx) {
+        if (newIdx < 0 || newIdx > source.length()) {
+            throw new CodecException("setIndex out of range: " + newIdx);
+        }
+        this.idx = newIdx;
+    }
+
     String readRun(int count) {
         if (idx + count > source.length()) {
             throw new CodecException("Cannot read " + count + " chars at " + idx + "; only " + remaining() + " left");

@@ -10,22 +10,43 @@ import java.util.Optional;
 public sealed interface Frame
         permits Frame.RegisterFrame, Frame.SyncFrame, Frame.TickFrame, Frame.ActionFrame, Frame.ErrorFrame {
 
-    /** Client → Server. entityType ∈ {C, M, S}. */
-    record RegisterFrame(char entityType) implements Frame {
+    /**
+     * Client → Server. entityType ∈ {C, M, S}.
+     * resumeToken is the r:-sentinel token issued by the server on prior successful registration
+     * (format: {@code r:%016x}, 18 chars). {@code Optional.empty()} = fresh registration.
+     */
+    record RegisterFrame(char entityType, Optional<String> resumeToken) implements Frame {
         public RegisterFrame {
             if (entityType != 'C' && entityType != 'M' && entityType != 'S') {
                 throw new IllegalArgumentException("entityType must be C/M/S: " + entityType);
             }
+            if (resumeToken == null) resumeToken = Optional.empty();
+        }
+
+        /** Convenience constructor for fresh registration (no token). */
+        public RegisterFrame(char entityType) {
+            this(entityType, Optional.empty());
         }
     }
 
-    /** Server → Client. Initial sync (no effects) or resync (with effects). */
-    record SyncFrame(String entityId, List<ActiveEffect> effects) implements Frame {
+    /**
+     * Server → Client. Initial sync (no token, no effects), resync (with token), or
+     * resync-with-effects. resumeToken is the r:-sentinel token the client may present
+     * on reconnect to recover a stalled entity (Phase 17 D-12/D-13).
+     * {@code Optional.empty()} = no token issued (e.g. fresh-spawn before Phase 17 server).
+     */
+    record SyncFrame(String entityId, Optional<String> resumeToken, List<ActiveEffect> effects) implements Frame {
         public SyncFrame {
             if (entityId == null || entityId.isEmpty()) {
                 throw new IllegalArgumentException("entityId must not be blank");
             }
+            if (resumeToken == null) resumeToken = Optional.empty();
             effects = (effects == null) ? List.of() : List.copyOf(effects);
+        }
+
+        /** Convenience constructor for legacy/no-token usage. */
+        public SyncFrame(String entityId, List<ActiveEffect> effects) {
+            this(entityId, Optional.empty(), effects);
         }
     }
 
