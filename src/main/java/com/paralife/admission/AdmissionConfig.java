@@ -2,6 +2,7 @@ package com.paralife.admission;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.ConstructorBinding;
+import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
  * Durable admission policy config (Phase 17, replaces {@code PopulationCapConfig}).
@@ -20,10 +21,10 @@ import org.springframework.boot.context.properties.bind.ConstructorBinding;
  */
 @ConfigurationProperties(prefix = "paralife.admission")
 public record AdmissionConfig(
-        int cap,
-        boolean maintenance,
-        TickOverloadConfig tickOverload,
-        BackpressureConfig backpressure) {
+        @DefaultValue("256") int cap,
+        @DefaultValue("false") boolean maintenance,
+        @DefaultValue TickOverloadConfig tickOverload,
+        @DefaultValue BackpressureConfig backpressure) {
 
     /**
      * Conservative default: 2.5x the validated 100-bot operator envelope,
@@ -56,7 +57,10 @@ public record AdmissionConfig(
      * budget; it clears when the mean drops below {@code lowWaterPct}%. Hysteresis
      * prevents flapping on single-tick GC spikes.
      */
-    public record TickOverloadConfig(int highWaterPct, int lowWaterPct, int windowTicks) {
+    public record TickOverloadConfig(
+            @DefaultValue("80") int highWaterPct,
+            @DefaultValue("60") int lowWaterPct,
+            @DefaultValue("10") int windowTicks) {
 
         @ConstructorBinding
         public TickOverloadConfig {
@@ -103,7 +107,9 @@ public record AdmissionConfig(
      * the session transitions to STALLED; the entity is held on the grid for
      * {@code graceWindowTicks} to allow reconnection with the resume token.
      */
-    public record BackpressureConfig(int outboundQueueSize, int graceWindowTicks) {
+    public record BackpressureConfig(
+            @DefaultValue("16") int outboundQueueSize,
+            @DefaultValue("10") int graceWindowTicks) {
 
         @ConstructorBinding
         public BackpressureConfig {
