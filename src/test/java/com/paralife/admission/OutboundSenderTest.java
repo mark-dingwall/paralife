@@ -56,18 +56,22 @@ class OutboundSenderTest {
 
     @Test
     void offerReturnsFalseWhenQueueFull() throws Exception {
+        // Use capacity=1 so the pattern is deterministic:
+        //   offer #1 -- VT takes it immediately, blocks on sendMessage latch (in-flight)
+        //   offer #2 -- queued (1/1 -- queue is now full)
+        //   offer #3 -- queue full -> returns false
         FakeSession blocking = new FakeSession("session-blocking");
-        sender.attachSession(blocking, 2);
+        sender.attachSession(blocking, 1);
         blocking.holdNextSend(true);
 
         sender.offer("session-blocking", new Frame.RegisterFrame('C'));   // dispatched, in-flight
-        boolean a = sender.offer("session-blocking", new Frame.RegisterFrame('M'));   // queued
-        boolean b = sender.offer("session-blocking", new Frame.RegisterFrame('S'));   // queued (queue=2)
-        boolean c = sender.offer("session-blocking", new Frame.RegisterFrame('C'));   // queue full
+        // Wait briefly for the VT to take the frame so the queue is clear before offer #2
+        awaitUntil(() -> blocking.sendPending, 2000);
+        boolean a = sender.offer("session-blocking", new Frame.RegisterFrame('M'));   // queued (1/1)
+        boolean b = sender.offer("session-blocking", new Frame.RegisterFrame('S'));   // queue full -> false
 
         assertThat(a).isTrue();
-        assertThat(b).isTrue();
-        assertThat(c).isFalse();
+        assertThat(b).isFalse();
 
         blocking.releaseAll();
         sender.detachSession("session-blocking");
@@ -176,6 +180,8 @@ class OutboundSenderTest {
         final String id;
         final List<String> captured = Collections.synchronizedList(new ArrayList<>());
         volatile boolean failNextSend = false;
+        /** Set to true the moment sendMessage is entered (before waiting on holdLatch). */
+        volatile boolean sendPending = false;
         private volatile CountDownLatch holdLatch;
 
         FakeSession(String id) { this.id = id; }
@@ -191,10 +197,12 @@ class OutboundSenderTest {
         @Override public String getId() { return id; }
         @Override public boolean isOpen() { return true; }
         @Override public void sendMessage(WebSocketMessage<?> message) throws java.io.IOException {
+            sendPending = true;
             CountDownLatch l = this.holdLatch;
             if (l != null) {
                 try { l.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new java.io.IOException("interrupted"); }
             }
+            sendPending = false;
             if (failNextSend) {
                 failNextSend = false;
                 throw new java.io.IOException("simulated send failure");
