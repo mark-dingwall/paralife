@@ -34,6 +34,15 @@ public final class PerceptionCodec {
      */
     public static final int MAX_V_ENTRIES = 32;
 
+    /**
+     * Resume-token sentinel prefix per Phase 17 admission spec (Plan 02).
+     * Tokens are minted by ResumeTokenRegistry as {@code String.format("r:%016x", n)} —
+     * always 18 chars total, always begin with this two-char literal sequence.
+     * No SyncFrame effect block can begin with "r:" (effect codes are S/I/F/A/M/U),
+     * so this is the SOLE disambiguator between a token slot and an effect list slot.
+     */
+    private static final String RESUME_TOKEN_SENTINEL = "r:";
+
     private PerceptionCodec() {
         // utility — not instantiable
     }
@@ -110,6 +119,7 @@ public final class PerceptionCodec {
 
     private static void encodeSync(StringBuilder sb, Frame.SyncFrame s) {
         sb.append('S').append('|').append(s.entityId());
+        s.resumeToken().ifPresent(token -> sb.append('|').append(token));
         if (!s.effects().isEmpty()) {
             sb.append('|');
             encodeEffectList(sb, s.effects());
@@ -120,6 +130,7 @@ public final class PerceptionCodec {
 
     private static void encodeRegister(StringBuilder sb, Frame.RegisterFrame r) {
         sb.append('r').append('|').append(r.entityType());
+        r.resumeToken().ifPresent(token -> sb.append('|').append(token));
     }
 
     // ---- Action frame ----
@@ -716,25 +727,78 @@ public final class PerceptionCodec {
     private static Frame.SyncFrame parseSync(ParseCursor c) {
         String entityId = c.readUntil('|', false);
         if (entityId.isEmpty()) throw new CodecException("Sync entityId missing at " + c.index());
+
+        Optional<String> resumeToken = Optional.empty();
         List<ActiveEffect> effects = List.of();
+
         if (!c.atEnd() && c.peek() == '|') {
-            c.next(); // consume '|'
-            effects = parseEffectList(c);
+            c.next(); // consume first '|' after entityId
+            if (c.atEnd()) {
+                throw new CodecException("Sync second slot empty at " + c.index());
+            }
+            // Sole disambiguator: second slot starts with 'r:' => resume token; otherwise => effects.
+            // No effect code begins with 'r' (valid codes: S/I/F/A/M/U per §8.3).
+            if (peekStartsWithSentinel(c, RESUME_TOKEN_SENTINEL)) {
+                String token = c.readUntil('|', false);
+                if (token.isEmpty()) throw new CodecException("Sync resume-token empty at " + c.index());
+                resumeToken = Optional.of(token);
+                // Optional third slot: |<effects>
+                if (!c.atEnd() && c.peek() == '|') {
+                    c.next(); // consume '|'
+                    if (c.atEnd()) {
+                        throw new CodecException("Sync effects slot empty after token at " + c.index());
+                    }
+                    effects = parseEffectList(c);
+                }
+            } else {
+                effects = parseEffectList(c);
+            }
         }
-        return new Frame.SyncFrame(entityId, effects);
+        return new Frame.SyncFrame(entityId, resumeToken, effects);
     }
 
     // ---- Register frame parse ----
 
     private static Frame.RegisterFrame parseRegister(ParseCursor c) {
         char t = c.next();
-        if (!c.atEnd()) {
-            throw new CodecException("Register frame has trailing bytes at " + c.index());
-        }
         if (t != 'C' && t != 'M' && t != 'S') {
             throw new CodecException("Register entityType must be C/M/S at " + (c.index() - 1) + ": " + t);
         }
-        return new Frame.RegisterFrame(t);
+        Optional<String> resumeToken = Optional.empty();
+        if (!c.atEnd()) {
+            if (c.peek() != '|') {
+                throw new CodecException(
+                        "Register frame: expected '|' or end at " + c.index() + ", got: " + c.peek());
+            }
+            c.next(); // consume '|'
+            String token = c.readUntil('|', false); // reads to '|' or end-of-input
+            if (token.isEmpty()) {
+                throw new CodecException("Register frame: empty resume-token at " + c.index());
+            }
+            if (!token.startsWith(RESUME_TOKEN_SENTINEL)) {
+                throw new CodecException(
+                        "Register resume-token must start with 'r:' at " + c.index() + ": " + token);
+            }
+            resumeToken = Optional.of(token);
+        }
+        return new Frame.RegisterFrame(t, resumeToken);
+    }
+
+    /**
+     * Non-consuming check: does the cursor's remaining buffer start with {@code prefix}?
+     * Snapshots and restores the cursor index; never advances on a false result.
+     */
+    private static boolean peekStartsWithSentinel(ParseCursor c, String prefix) {
+        int savedIdx = c.index();
+        try {
+            for (int i = 0; i < prefix.length(); i++) {
+                if (c.atEnd()) return false;
+                if (c.next() != prefix.charAt(i)) return false;
+            }
+            return true;
+        } finally {
+            c.setIndex(savedIdx); // ALWAYS restore — never consume on a peek
+        }
     }
 
     // ---- Action frame parse ----
