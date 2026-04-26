@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering (M4)
-status: roadmap created; ready to discuss and plan
+status: executing
 stopped_at: Phase 17 context gathered
-last_updated: "2026-04-26T20:43:34.180Z"
-last_activity: 2026-04-22 — M3/v2.0 archived cleanly, the archived audit references were normalized, and the M4 milestone requirements and roadmap were created. The overall project is still unreleased.
+last_updated: "2026-04-26T23:12:59.890Z"
+last_activity: 2026-04-26 -- Phase 17 execution started
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 11
-  completed_plans: 0
-  percent: 0
+  completed_plans: 2
+  percent: 18
 ---
 
 # Project State
@@ -21,15 +21,15 @@ progress:
 See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
-**Current focus:** Milestone v3.0 / M4 scale engineering — durable admission control, load harnesses, and benchmark evidence
+**Current focus:** Phase 17 — durable-admission-control-backpressure
 
 ## Current Position
 
 Milestone: v3.0 (Scale Engineering / M4) — active
-Phase: 17 (Durable Admission Control & Backpressure)
-Plan: not started
-Status: roadmap created; ready to discuss and plan
-Last activity: 2026-04-22 — M3/v2.0 archived cleanly, the archived audit references were normalized, and the M4 milestone requirements and roadmap were created. The overall project is still unreleased.
+Phase: 17 (durable-admission-control-backpressure) — EXECUTING
+Plan: 1 of 11
+Status: Executing Phase 17
+Last activity: 2026-04-26 -- Phase 17 execution started
 
 Progress: [----------] v3.0 not started
 
