@@ -653,25 +653,29 @@ Step 2.6: SKIPPED — Phase 17 is code/config-only changes with no external tool
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **`RespawnConfig` fold vs sibling**
    - What we know: `RespawnConfig` is at `paralife.websocket.max-respawns-per-session`. Many tests use this key via `@TestPropertySource`.
    - What's unclear: Whether folding into `AdmissionConfig` is worth the test-migration cost.
    - Recommendation: Keep `RespawnConfig` as a sibling at its existing prefix. The rejection token for respawn-cap is still emitted through `AdmissionGate` (or `WorldWebSocketHandler`), satisfying D-07 token taxonomy without moving the config key. Only merge if the planner sees a compelling cohesion reason.
+   - **RESOLVED:** Keep `RespawnConfig` as a sibling at `paralife.websocket.max-respawns-per-session`. Test-migration cost outweighs cohesion gain; the rejection token still flows through `AdmissionGate`.
 
 2. **`AdmissionGate` bean — `WorldWebSocketHandler` delegation vs inline**
    - What we know: All admission checks are currently inline in `handleRegister`. The method is ~80 lines with 5 sequential guard clauses.
    - What's unclear: Whether a separate `AdmissionGate` @Component with an `evaluate(...)` method is worth the extra bean.
    - Recommendation: Extract `AdmissionGate` as a separate bean in `com.paralife.admission`. Rationale: it has its own dependencies (`AdmissionConfig`, `ResumeTokenRegistry`, `TickHealthMonitor`, `MeterRegistry`), and extracting it makes `WorldWebSocketHandler` easier to test with a mock gate.
+   - **RESOLVED:** Extract `AdmissionGate` as a `@Component` bean in `com.paralife.admission`. Better testability and cleaner dependency surface in the handler.
 
 3. **Sender VT interrupt vs poison-pill on STALLED**
    - What we know: STALLED transition closes the WS. The sender VT must stop. Interrupt works when blocked in `queue.take()`; a sentinel `POISON_PILL` frame in the queue works when the VT is between `take()` and `sendMessage()`.
    - Recommendation: Use interrupt only — the `isOpen()` guard before `sendMessage()` handles the between-take-and-send race harmlessly. Poison-pill adds complexity for negligible benefit.
+   - **RESOLVED:** Interrupt-only. The `session.isOpen()` guard before `sendMessage()` covers the take-vs-send race; poison-pill complexity is not justified.
 
 4. **Position of `lastTickWorkMs` exposure from `TickEngine`**
    - What we know: `TickEngine` already records to `tickWork` DistributionSummary but doesn't expose a per-tick volatile.
    - Recommendation: Add `volatile long lastTickWorkMs` field to `TickEngine`, set alongside `tickWork.record(...)`. `TickHealthMonitor` reads it via a simple getter. Alternatively, `TickHealthMonitor` can do its own `System.nanoTime()` measurement in an `@Order` after broadcast — simpler, no `TickEngine` change.
+   - **RESOLVED:** Add `volatile long lastTickWorkMs` field on `TickEngine` plus a `getLastTickWorkMs()` getter, set alongside the existing `tickWork.record(...)` call. `TickHealthMonitor` reads via the getter — no duplicate `System.nanoTime()` measurement needed.
 
 ---
 
