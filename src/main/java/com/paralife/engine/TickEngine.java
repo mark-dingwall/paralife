@@ -32,6 +32,8 @@ public class TickEngine {
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final DistributionSummary tickWork;
     private volatile Thread tickThread;
+    private volatile long lastTickWorkMs;
+    private volatile long currentTick;
 
     @Autowired
     public TickEngine(TickConfig config, ApplicationEventPublisher eventPublisher,
@@ -106,12 +108,14 @@ public class TickEngine {
                 long tickNumber = tickCounter.incrementAndGet();
                 long startTime = System.nanoTime();
 
+                this.currentTick = tickNumber;  // visible to same-tick @EventListener readers
                 var event = new TickEvent(tickNumber);
                 eventPublisher.publishEvent(event);
 
                 long elapsedNs = System.nanoTime() - startTime;
                 tickWork.record(elapsedNs / 1_000_000.0);
                 long elapsed = elapsedNs / 1_000_000;
+                this.lastTickWorkMs = elapsed;  // written after publishEvent; readers see tick N-1
                 long sleepTime = Math.max(0, config.intervalMs() - elapsed);
 
                 if (elapsed > config.intervalMs()) {
@@ -134,6 +138,23 @@ public class TickEngine {
     public long getCurrentTick() {
         return tickCounter.get();
     }
+
+    /**
+     * Wall-clock work time in ms for the most recently COMPLETED tick.
+     *
+     * <p>Note: same-{@code TickEvent}-listener readers see tick N-1's value during the dispatch
+     * for tick N (because this field is written after {@code publishEvent} returns). This is
+     * acceptable for the rolling-mean hysteresis use-case in {@link com.paralife.admission.TickHealthMonitor}
+     * — the gauge runs ~1 tick behind, with no correctness impact on hysteresis transitions.
+     */
+    public long getLastTickWorkMs() { return lastTickWorkMs; }
+
+    /**
+     * The tick number currently being dispatched. Written before {@code publishEvent} so
+     * same-{@code TickEvent} listeners (e.g. Plan 07 markStalled, Plan 05 ResumeTokenRegistry)
+     * read the correct tick number for the in-flight event.
+     */
+    public long currentTick() { return currentTick; }
 
     public boolean isRunning() {
         return running.get();
