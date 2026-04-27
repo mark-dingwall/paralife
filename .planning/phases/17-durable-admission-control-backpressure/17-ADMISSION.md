@@ -144,8 +144,8 @@ Predicate definitions:
 
 - Issued on every successful `r|` (fresh registration or re-bind).
 - Included in the `S|<entityId>|<resumeToken>` reply.
-- Format: 16-char hex string, `String.format("%016x", ThreadLocalRandom.current().nextLong())` — 64-bit entropy, unguessable.
-- Example: `S|entity-abc123|4f8b2e9d1a7c3f50`
+- Format: 18-char string, `String.format("r:%016x", ThreadLocalRandom.current().nextLong())` — 64-bit entropy, unguessable. The `r:` prefix is the codec disambiguator for the `r|<species>|<resumeToken>` frame so the parser can distinguish a token from an entity-type-only frame.
+- Example: `S|entity-abc123|r:4f8b2e9d1a7c3f50`
 
 ### Storage
 
@@ -234,9 +234,8 @@ if (session.isOpen()) {
 }
 ```
 
-- Queue: `ArrayBlockingQueue<Frame>(outboundQueueSize)` — default 16 frames.
-- `TickBroadcaster` enqueues frames via `queue.offer(frame)` (non-blocking). If `offer` returns `false` (queue full), the stall-tick counter for the session is incremented.
-- After `windowTicks` consecutive full-queue ticks, the session transitions to STALLED.
+- Queue: `ArrayBlockingQueue<Frame>(outboundQueueSize)` — default 128 frames. At the 30ms test tick with 2 frames/tick/bot (perception + tick snapshot) this gives ≈2s of buffered frames per session — survives GC pauses and scheduler jitter at sustained 100-bot fan-out without false-positive STALLED. Production tick at 500ms makes the same 128 frames a ~64s buffer; tune for workload.
+- `TickBroadcaster` enqueues frames via `queue.offer(frame)` (non-blocking). If `offer` returns `false` (queue full), the session transitions to STALLED immediately (single-shot, not windowed).
 
 **Rationale (D-10):** Matches Paralife's VT philosophy (simple blocking code, VTs do concurrency). Per-session isolation is structural — one slow socket cannot block the tick thread or any other session. `queue.size()` is the explicit backpressure signal, trivially observable as a gauge. Java 21 VTs are cheap (few KB heap each); 1000+ VTs is acceptable.
 
@@ -246,7 +245,9 @@ if (session.isOpen()) {
 
 ### STALLED Transition (D-11)
 
-When `windowTicks` consecutive full-queue misses occur:
+When `OutboundSender.offer` returns false (queue full), the session transitions to STALLED immediately (single-shot, not windowed). Windowed-stall could be reintroduced if false-positives become an operator concern, but the empirical 100-bot LoadTest hit ≥99% recovery rate without windowing — so single-shot stays the default.
+
+On the first failed offer:
 
 1. Set `ATTR_STALL_TICK` session attribute to `currentTick`.
 2. Remove `entityId` attribute (entity stays on grid under grace).
@@ -314,7 +315,7 @@ Log channel pays forward to M5 visualizer / observer — no redesign of emission
 | (none) | `paralife.admission.tick-overload.high-water-pct` | 80 | New gate |
 | (none) | `paralife.admission.tick-overload.low-water-pct` | 60 | New gate |
 | (none) | `paralife.admission.tick-overload.window-ticks` | 10 | New gate |
-| (none) | `paralife.admission.backpressure.outbound-queue-size` | 16 | New queue |
+| (none) | `paralife.admission.backpressure.outbound-queue-size` | 128 | New queue |
 | (none) | `paralife.admission.backpressure.grace-window-ticks` | 10 | New grace |
 
 `paralife.websocket.max-respawns-per-session` stays at `RespawnConfig` (sibling, not folded) to minimise test churn. The `respawn-cap` token still flows through `AdmissionGate`.

@@ -135,6 +135,9 @@ public record AdmissionConfig(
          * (16 was too tight; 64 reduced churn but still triggered ~10 stalls/bot/run on
          * a workstation; 128 reaches the operator SLI of ≥99% recovery rate).
          * 10-tick grace balances "tolerate a tab switch" against "don't hoard reaper slots".
+         * At the 500ms production tick this same 128 frames buffers ~64s — generous
+         * tolerance for transient client slowness; operators should tune downward if
+         * tighter stall detection is desired.
          */
         public static BackpressureConfig defaults() {
             return new BackpressureConfig(128, 10);

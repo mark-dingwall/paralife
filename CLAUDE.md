@@ -104,9 +104,12 @@ When the queue overflows, the session transitions to STALLED:
 - If the client reconnects with `r|<species>|<resumeToken>` within the grace window, `AdmissionGate` consults
   `ResumeTokenRegistry.tryRebind` and re-binds the new session to the preserved entityId.
 
-Single-writer invariant: only the per-session VT calls `session.sendMessage`. Error frames built on the
-inbound Jetty thread are routed through `OutboundSender.offer` rather than direct `sendMessage`. The
-fallback path in `WorldWebSocketHandler.sendFrame` (post-detach) uses a `synchronized(session)` guard.
+Synchronized-session-monitor contract: every writer to a session holds `synchronized(session)` for
+the actual `sendMessage` call. Writers: drain VT (`OutboundSender.drainLoop`), keepalive PING
+(`WebSocketKeepaliveService.onTick`), out-of-band stall/error frames
+(`WorldWebSocketHandler.sendOutOfBand`), and the back-compat fallback in
+`WorldWebSocketHandler.sendFrame`. Encoding and metric recording stay outside the monitor — the
+monitor only protects the non-thread-safe `sendMessage` invocation.
 <!-- GSD:architecture-end -->
 
 <!-- GSD:skills-start -->
