@@ -92,7 +92,11 @@ class AdmissionGateTest {
 
     @Test
     void rejectsWorldFull() {
-        when(worldGrid.livingEntityCount()).thenReturn(2);
+        // Fill reserved slots up to cap (2) via legitimate Allow evaluations.
+        // Phase 17 hardening: AdmissionGate uses an atomic reservation counter
+        // (not livingEntityCount) for cap admission decisions.
+        assertThat(gate.evaluate(req(false, false, 0, Optional.empty()))).isInstanceOf(AdmissionResult.Allow.class);
+        assertThat(gate.evaluate(req(false, false, 0, Optional.empty()))).isInstanceOf(AdmissionResult.Allow.class);
         AdmissionResult r = gate.evaluate(req(false, false, 0, Optional.empty()));
         assertThat(((AdmissionResult.Reject) r).token()).isEqualTo(RejectionToken.WORLD_FULL);
     }

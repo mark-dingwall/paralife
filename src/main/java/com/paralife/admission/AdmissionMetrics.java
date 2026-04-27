@@ -47,11 +47,13 @@ public class AdmissionMetrics {
     public static final String M_FRAME_SIZE         = "paralife.outbound.frame.size.bytes";
     public static final String M_REBOUND            = "paralife.backpressure.rebound";
     public static final String M_TERMINAL_DROPOUT   = "paralife.backpressure.terminal.dropouts";
+    public static final String M_STALLED_TOTAL      = "paralife.backpressure.stalled.total";
 
     private final MeterRegistry registry;
     private final Counter ingressOverwrites;
     private final Counter rebound;
     private final Counter terminalDropouts;
+    private final Counter stalledTotal;
     private final DistributionSummary frameSize;
 
     private final AtomicInteger activeEntities  = new AtomicInteger();
@@ -66,7 +68,12 @@ public class AdmissionMetrics {
                 .register(registry);
         this.rebound = Counter.builder(M_REBOUND)
                 .description("STALLED sessions that successfully reconnected with their resume token within the grace window. "
-                        + "Operator SLI: rebound / (rebound + terminal_dropouts) is the recovery rate.")
+                        + "Operator SLI: recovery rate = rebound / stalled.total. (In steady state, stalled.total ≈ rebound + terminal_dropouts; "
+                        + "stalled.total is the right denominator — counts stalls in flight at sample time without miscount.)")
+                .register(registry);
+        this.stalledTotal = Counter.builder(M_STALLED_TOTAL)
+                .description("Sessions that transitioned into STALLED grace; terminal counter complementing the stalled.sessions gauge. "
+                        + "Operator alert: rate-of-change = stall storms in progress. SLI denominator for recovery rate.")
                 .register(registry);
         this.terminalDropouts = Counter.builder(M_TERMINAL_DROPOUT)
                 .description("STALLED sessions whose resume token expired before reconnect; entity reaped by ResumeTokenRegistry sweep. "
@@ -118,6 +125,11 @@ public class AdmissionMetrics {
     /** Increment when a STALLED session's grace window expires before reconnect — entity is reaped. */
     public void incTerminalDropout() {
         terminalDropouts.increment();
+    }
+
+    /** Increment when a session transitions into STALLED. SLI denominator for recovery rate (B3/D1). */
+    public void incStalledTotal() {
+        stalledTotal.increment();
     }
 
     /**

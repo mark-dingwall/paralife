@@ -196,7 +196,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
             WebSocketSession s = sessionRegistry.getSession(sessionId);
             if (s == null) return;
             log.info("BACKPRESSURE stalled tick={} session={} queue-depth={} limit={}",
-                    currentTick, sessionId, depth, depth);
+                    currentTick, sessionId, depth,
+                    admissionConfig.backpressure().outboundQueueSize());
             markStalled(s, currentTick);
         });
 
@@ -376,6 +377,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         }
 
         if (!placed) {
+            // Only fresh registrations consumed a slot at admission; respawn reuses existing slot.
+            if (!isRespawn && admissionGate != null) admissionGate.releaseSlot();
             if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.GRID_FULL);
             sendFrame(session, new Frame.ErrorFrame(503, Optional.of(RejectionToken.GRID_FULL)));
             return;
@@ -471,6 +474,9 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         // Idempotent guard (codex HIGH): if already STALLED, do nothing.
         if (attrs.containsKey(ATTR_STALL_TICK)) return;
 
+        // SLI denominator: count this real stall transition (post-idempotency guard).
+        if (admissionMetrics != null) admissionMetrics.incStalledTotal();
+
         attrs.put(ATTR_STALL_TICK, stallTick);
         Object entityIdObj = attrs.remove(ATTR_ENTITY_ID);
         String entityId = entityIdObj == null ? null : entityIdObj.toString();
@@ -528,10 +534,15 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
     /** Remove bot's entity from the grid, then unregister from BotRegistry. */
     public void cleanupBot(String sessionId) {
         WebSocketSession s = sessionRegistry.getSession(sessionId);
+        boolean wasRegistered = false;
         if (s != null) {
             Object eid = s.getAttributes().remove(ATTR_ENTITY_ID);
             s.getAttributes().remove(ATTR_STALL_TICK);
             s.getAttributes().remove(ATTR_RESUME_TOKEN);
+            // ATTR_ENTITY_TYPE is the durable "session ever admitted" marker (survives Phase 15.2
+            // death-pivot). Removing here makes the slot release idempotent against repeated
+            // cleanupBot calls for the same session.
+            wasRegistered = s.getAttributes().remove(ATTR_ENTITY_TYPE) != null;
             if (eid instanceof String e) {
                 respawnCountAtStall.remove(e);
                 if (resumeTokenRegistry != null) resumeTokenRegistry.clearActive(e);
@@ -542,6 +553,11 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
             worldGrid.clearEntity(pos.x(), pos.y());
         });
         botRegistry.unregisterBySession(sessionId);
+        // Release the reservation booked at initial admission. Covers Alive→close, Dead→close,
+        // and STALLED→reaped paths — once per registered session.
+        if (wasRegistered && admissionGate != null) {
+            admissionGate.releaseSlot();
+        }
         if (admissionMetrics != null) {
             admissionMetrics.setActiveEntities(worldGrid.livingEntityCount());
         }

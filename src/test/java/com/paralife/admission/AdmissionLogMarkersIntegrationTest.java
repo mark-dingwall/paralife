@@ -130,15 +130,12 @@ class AdmissionLogMarkersIntegrationTest {
 
     @Test
     void admissionRejectedWorldFull() {
-        // cap=1; first request fills the cap, second is rejected.
-        // worldGrid.livingEntityCount returns 0 by default; we mock the count by registering
-        // an actual particle. Simpler: ask AdmissionGate to evaluate twice with alreadyAlive=false
-        // BUT cap counts livingEntityCount which is 0 unless we add an entity. To trigger
-        // world-full deterministically, place a particle on the grid via WorldGrid.
-        var worldGrid = (com.paralife.world.WorldGrid) ReflectionTestUtils.getField(admissionGate, "worldGrid");
-        var profile = new com.paralife.world.Entity.Particle(
-                "log-marker-test-1", com.paralife.world.Entity.ParticleType.CATALYST, 50, 50);
-        worldGrid.trySetEntity(0, 0, profile);
+        // Phase 17 hardening: AdmissionGate uses an atomic reservation counter (not livingEntityCount)
+        // for cap admission decisions. Fill the cap via a successful Allow evaluation, then assert the
+        // next evaluation rejects with world-full.
+        AdmissionGate.AdmissionRequest first = new AdmissionGate.AdmissionRequest(
+                "session-fill", 100L, false, false, 0, Optional.empty());
+        assertThat(admissionGate.evaluate(first)).isInstanceOf(AdmissionResult.Allow.class);
 
         AdmissionGate.AdmissionRequest req = new AdmissionGate.AdmissionRequest(
                 "session-X", 100L, false, false, 0, Optional.empty());
@@ -153,8 +150,8 @@ class AdmissionLogMarkersIntegrationTest {
                 m.contains("active=") &&
                 m.contains("/"));
 
-        // Cleanup so other tests don't see this lingering entity.
-        worldGrid.clearEntity(0, 0);
+        // Release reservation so subsequent tests start clean.
+        admissionGate.releaseSlot();
     }
 
     @Test

@@ -6,7 +6,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import jakarta.annotation.PostConstruct;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Admission decision point for Phase 17 (D-01..D-08, D-13..D-16).
@@ -44,6 +46,15 @@ public class AdmissionGate {
     private final ResumeTokenRegistry resumeTokenRegistry;
     private final AdmissionMetrics metrics;
 
+    /**
+     * Atomic reservation counter — source of truth for global cap admission decisions
+     * (closes A4 check-then-act race). Every Allow path increments before returning;
+     * every placement-failure / cleanup path decrements via {@link #releaseSlot()}.
+     * {@link WorldGrid#livingEntityCount()} remains the gauge source (ground truth on
+     * the grid); reserved may briefly exceed it during placement but never above the cap.
+     */
+    private final AtomicInteger reservedSlots = new AtomicInteger();
+
     public AdmissionGate(AdmissionConfig admissionConfig,
                          RespawnConfig respawnConfig,
                          WorldGrid worldGrid,
@@ -56,6 +67,29 @@ public class AdmissionGate {
         this.tickHealthMonitor = tickHealthMonitor;
         this.resumeTokenRegistry = resumeTokenRegistry;
         this.metrics = metrics;
+    }
+
+    /**
+     * Seed reservedSlots from current grid live count. Defensive: handles a hypothetical
+     * restart-with-existing-state. Currently always 0 in practice but cheap to seed.
+     */
+    @PostConstruct
+    void seedReservedSlots() {
+        reservedSlots.set(worldGrid.livingEntityCount());
+    }
+
+    /**
+     * Release one reserved slot. Callers: {@link com.paralife.websocket.WorldWebSocketHandler}
+     * on placement failure (GRID_FULL) and on session cleanup (entity removed from grid).
+     * Floors at 0 — defensive against double-release.
+     */
+    public void releaseSlot() {
+        reservedSlots.updateAndGet(n -> n > 0 ? n - 1 : 0);
+    }
+
+    /** Diagnostic accessor: current reserved-slot count. */
+    public int reservedSlots() {
+        return reservedSlots.get();
     }
 
     /**
@@ -99,13 +133,25 @@ public class AdmissionGate {
             // Unknown or expired token → fall through to fresh-registration path (D-13 back-compat).
         }
 
-        // Guard 5: Global cap (D-01). World-full check after rebind so valid resume tokens bypass it.
-        int active = worldGrid.livingEntityCount();
-        if (active >= admissionConfig.cap()) {
-            return reject(req, 429, RejectionToken.WORLD_FULL);
+        // Guard 5: Global cap (D-01). Atomic reservation closes the A4 check-then-act race —
+        // N concurrent r| frames cannot all observe `active = cap-1` and all succeed.
+        // Respawn frames REUSE the slot reserved at initial registration; only fresh
+        // registrations consume a new slot. The slot is released by WorldWebSocketHandler.cleanupBot
+        // when the session ends (covers Alive→close, Dead→close, and STALLED→reaped paths).
+        int cap = admissionConfig.cap();
+        if (!req.isRespawn()) {
+            while (true) {
+                int n = reservedSlots.get();
+                if (n >= cap) {
+                    return reject(req, 429, RejectionToken.WORLD_FULL);
+                }
+                if (reservedSlots.compareAndSet(n, n + 1)) {
+                    break;
+                }
+            }
         }
 
-        // Guard 6: Per-session respawn cap. Only applies to respawn frames, not initial registration.
+        // Guard 6: Per-session respawn cap.
         if (req.isRespawn() && req.respawnCount() >= respawnConfig.maxRespawnsPerSession()) {
             return reject(req, 429, RejectionToken.RESPAWN_CAP);
         }
