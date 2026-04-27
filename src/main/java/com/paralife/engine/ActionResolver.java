@@ -1,5 +1,6 @@
 package com.paralife.engine;
 
+import com.paralife.admission.AdmissionMetrics;
 import com.paralife.codec.Frame;
 import com.paralife.websocket.SessionRegistry;
 import com.paralife.world.Cell;
@@ -106,6 +107,20 @@ public class ActionResolver {
      */
     private BuffRegistry buffRegistry = new BuffRegistry();
 
+    /**
+     * Phase 17 Plan 10 (D-09): aggregate ingress-overwrite counter. Incremented
+     * once for every {@link #pendingActions} {@code put} that returned a non-null
+     * previous value (i.e. last-write-wins collapsed an unprocessed action frame
+     * for the same session within the same tick). Setter-injected ({@code required=false})
+     * so pre-Phase-17 unit-test constructors continue to compile without wiring
+     * a {@link AdmissionMetrics} bean.
+     *
+     * <p>Purely observational — no auto-disconnect, no rate-limit feedback. The
+     * collapse itself is the protective behavior (D-09); this counter just makes
+     * the rate visible to operators via {@code paralife.admission.ingress.overwrites}.
+     */
+    private AdmissionMetrics admissionMetrics;
+
     /** Current tick number — captured on the {@link TickEvent} for verb-L alarm routing. */
     private volatile long currentTick = 0L;
 
@@ -210,6 +225,17 @@ public class ActionResolver {
         if (buffRegistry != null) this.buffRegistry = buffRegistry;
     }
 
+    /**
+     * Phase 17 Plan 10 (D-09): setter-inject {@link AdmissionMetrics}. Pre-Phase-17
+     * unit-test constructors don't wire a metrics bean — when null the overwrite
+     * counter is a silent no-op (the last-write-wins collapse still happens; only
+     * the operator-visibility counter is suppressed).
+     */
+    @Autowired(required = false)
+    public void setAdmissionMetrics(AdmissionMetrics admissionMetrics) {
+        this.admissionMetrics = admissionMetrics;
+    }
+
     /** Package-private read accessor for tests. */
     BuffRegistry getBuffRegistry() {
         return buffRegistry;
@@ -261,7 +287,13 @@ public class ActionResolver {
      */
     public void queueAction(String sessionId, Frame.ActionFrame action) {
         if (action == null) return;
-        pendingActions.get().put(sessionId, action);
+        Frame.ActionFrame previous = pendingActions.get().put(sessionId, action);
+        if (previous != null && admissionMetrics != null) {
+            // D-09: last-write-wins collapse — increment the aggregate ingress-overwrite
+            // counter (paralife.admission.ingress.overwrites). Observational only; the
+            // collapse itself is the protective behavior. No auto-disconnect.
+            admissionMetrics.incIngressOverwrite();
+        }
         if (action.verb() == 'V' && action.arg().isPresent()) {
             pendingVoteBallots.get().put(sessionId, action.arg().get());
         }
