@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         "paralife.simulation.overcrowding-threshold=8",
         "paralife.simulation.overcrowding-energy-penalty=0",
         "paralife.websocket.max-respawns-per-session=1000000",
-        "paralife.websocket.max-active-entities=1000000"
+        "paralife.admission.cap=1000000"
 })
 class LoadTest {
 

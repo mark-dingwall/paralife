@@ -45,11 +45,16 @@ paralife:
     # emergence tests can raise the ceiling via @TestPropertySource without
     # relaxing the production invariant. Production MUST stay at 5.
     max-respawns-per-session: 5
-    # Temporary world-level registration gate. Counts live non-rock /
-    # non-nutrient occupants; register / respawn is denied with E|429 once the
-    # cap is reached. Conservative default until the longer-term load policy
-    # replaces it.
-    max-active-entities: 256
+  admission:
+    cap: 256
+    maintenance: false
+    tick-overload:
+      high-water-pct: 80
+      low-water-pct: 60
+      window-ticks: 10
+    backpressure:
+      outbound-queue-size: 16
+      grace-window-ticks: 10
   simulation:
     energy-decay-per-tick: 1
     combat-energy-transfer: 10
