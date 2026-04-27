@@ -49,9 +49,9 @@ Plans:
 - [x] 17-04-PLAN.md — TickHealthMonitor rolling-window hysteresis gate + TickEngine.lastTickWorkMs
 - [x] 17-05-PLAN.md — ResumeTokenRegistry mint/lookup/expiry sweep with grace window
 - [x] 17-06-PLAN.md — OutboundSender per-session VT-per-queue with overflow callback
-- [ ] 17-07-PLAN.md — WorldWebSocketHandler refactor: delegate admission, retoken errors, STALLED FSM
-- [ ] 17-08-PLAN.md — TickBroadcaster refactor: enqueue via OutboundSender, remove synchronized(session)
-- [ ] 17-09-PLAN.md — BotClient resume-token storage + STALLED-pivot reconnect
+- [x] 17-07-PLAN.md — WorldWebSocketHandler refactor: delegate admission, retoken errors, STALLED FSM
+- [x] 17-08-PLAN.md — TickBroadcaster refactor: enqueue via OutboundSender, remove synchronized(session)
+- [x] 17-09-PLAN.md — BotClient resume-token storage + STALLED-pivot reconnect
 - [ ] 17-10-PLAN.md — Migration: delete PopulationCapConfig, migrate application.yml + LoadTest, ActionResolver D-09 counter, CLAUDE.md Outbound concurrency
 - [ ] 17-11-PLAN.md — Integration tests: STALLED recovery, hysteresis gate, log markers
 
