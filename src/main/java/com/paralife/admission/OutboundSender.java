@@ -19,7 +19,14 @@ import java.util.function.BiConsumer;
  * Per-session virtual-thread outbound sender (Phase 17 D-10, D-11).
  *
  * <p>Each open WebSocket session is paired with one VT that loops:
- * {@code queue.take(); session.sendMessage(...)}. The VT is the single writer to its session.
+ * {@code queue.take(); synchronized(session) { session.sendMessage(...) }}.
+ *
+ * <p><b>Synchronized-session-monitor contract (Phase 17 hardening):</b> Spring's
+ * {@code WebSocketSession.sendMessage} is NOT thread-safe; concurrent calls may interleave or
+ * throw. Every writer to a session — drain VT, keepalive PING (Plan 09), and out-of-band stall/
+ * error frames built on the inbound Jetty thread — MUST hold {@code synchronized(session)} for
+ * the actual {@code sendMessage} invocation. Encoding and metric recording stay outside the
+ * monitor (they don't touch the session).
  *
  * <p><b>Outbound concurrency rationale</b> (D-10; mirrored in {@code CLAUDE.md} "Outbound concurrency"):
  * <ul>
@@ -39,11 +46,6 @@ import java.util.function.BiConsumer;
  * per attach lifecycle (per-session {@code AtomicBoolean overflowFired}). Plan 07's
  * {@code markStalled} is therefore invoked at most once per stall transition, eliminating the
  * duplicate-token / log-spam / repeated-FSM-transition bug flagged by codex HIGH review.
- *
- * <p><b>Bounded detach race:</b> {@link #detachSession} interrupts the sender VT and joins for
- * up to 100ms. This bounds the window where a Plan 07 fallback {@code synchronized(session)} send
- * could race the dying VT (claude HIGH review). Combined with the {@code session.isOpen()} guard
- * in the drain loop, the race window is at most 100ms.
  *
  * <p><b>Frame-size metric:</b> {@link AdmissionMetrics#recordFrameSize(int)} is called in the
  * drain loop after encode — single measurement point. Callers such as {@code TickBroadcaster}
@@ -99,8 +101,8 @@ public class OutboundSender {
 
     /**
      * Interrupts the sender VT and joins it for up to {@value #DETACH_JOIN_TIMEOUT_MS}ms.
-     * Bounds the window where a Plan 07 fallback {@code synchronized(session)} send could
-     * race the dying VT — single-writer invariant restored within 100ms.
+     * Mutual exclusion of writers is guaranteed by the synchronized-session-monitor contract;
+     * the join keeps detach bounded so callers don't block indefinitely on a misbehaving VT.
      */
     public void detachSession(String sessionId) {
         queues.remove(sessionId);
@@ -180,7 +182,9 @@ public class OutboundSender {
                     String encoded = PerceptionCodec.encode(frame);
                     int byteLen = encoded.getBytes(StandardCharsets.UTF_8).length;
                     metrics.recordFrameSize(byteLen);
-                    session.sendMessage(new TextMessage(encoded));
+                    synchronized (session) {
+                        session.sendMessage(new TextMessage(encoded));
+                    }
                 } catch (IOException e) {
                     log.warn("Send failed for session={}: {}", session.getId(), e.getMessage());
                 } catch (RuntimeException e) {
