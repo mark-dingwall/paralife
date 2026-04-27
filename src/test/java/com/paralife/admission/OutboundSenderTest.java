@@ -164,6 +164,67 @@ class OutboundSenderTest {
     }
 
     @Test
+    void drainAndExternalSyncWriterSerialize() throws Exception {
+        // F11 regression for A1/A2: drain VT and external "keepalive" writer must
+        // serialize via synchronized(session). Simultaneous unsynchronized sends
+        // would interleave; with the contract all sends complete cleanly.
+        FakeSession s = new FakeSession("session-stress");
+        sender.attachSession(s, 64);
+
+        int producerCount = 1000;
+        int keepaliveCount = 200;
+        CountDownLatch producerDone = new CountDownLatch(1);
+        CountDownLatch keepaliveDone = new CountDownLatch(1);
+        AtomicInteger producerAccepted = new AtomicInteger();
+        AtomicInteger keepaliveSent = new AtomicInteger();
+        AtomicInteger keepaliveErrors = new AtomicInteger();
+
+        Thread.startVirtualThread(() -> {
+            try {
+                for (int i = 0; i < producerCount; i++) {
+                    if (sender.offer("session-stress", new Frame.RegisterFrame('C'))) {
+                        producerAccepted.incrementAndGet();
+                    } else {
+                        Thread.sleep(1);
+                        i--;   // retry until accepted; capacity 64 + draining handles this
+                    }
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                producerDone.countDown();
+            }
+        });
+
+        Thread.startVirtualThread(() -> {
+            try {
+                for (int i = 0; i < keepaliveCount; i++) {
+                    try {
+                        synchronized (s) {
+                            s.sendMessage(new org.springframework.web.socket.TextMessage("k|ping"));
+                        }
+                        keepaliveSent.incrementAndGet();
+                    } catch (Exception ex) {
+                        keepaliveErrors.incrementAndGet();
+                    }
+                }
+            } finally {
+                keepaliveDone.countDown();
+            }
+        });
+
+        assertThat(producerDone.await(30, TimeUnit.SECONDS)).isTrue();
+        assertThat(keepaliveDone.await(30, TimeUnit.SECONDS)).isTrue();
+
+        awaitUntil(() -> s.captured.size() >= producerAccepted.get() + keepaliveSent.get(), 10_000);
+
+        assertThat(keepaliveErrors.get()).isZero();
+        assertThat(s.captured.size())
+                .isEqualTo(producerAccepted.get() + keepaliveSent.get());
+        sender.detachSession("session-stress");
+    }
+
+    @Test
     void reattachAfterDetachIsIdempotent() throws Exception {
         FakeSession s1 = new FakeSession("session-x");
         sender.attachSession(s1, 4);
