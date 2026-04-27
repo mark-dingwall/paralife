@@ -79,6 +79,34 @@ Bit layout (D-38 `cellStatus` / D-39 `entityStatus`): OVERCROWDED=bit 0, TOXIN_P
 - `WorldWebSocketHandler` — Client connections at `/ws/world`
 
 **Error handling:** Graceful degradation. WebSocket errors send `Error` message to client. Tick loop catches exceptions and continues. No exception bubbling.
+
+### Outbound concurrency (Phase 17, D-10)
+
+Each connected WebSocket session is paired with one virtual thread that loops
+`queue.take(); session.sendMessage(...)` over a per-session bounded
+`ArrayBlockingQueue<Frame>` (capacity from `paralife.admission.backpressure.outbound-queue-size`).
+
+**Why VT-per-session and not Jetty native async write:**
+- Matches Paralife's stated philosophy — simple blocking code, virtual threads do concurrency.
+- Per-session isolation is structural — one slow socket cannot block the tick thread or any other session.
+- `queue.size()` is the explicit backpressure signal — observable as
+  `paralife.backpressure.stalled.sessions` gauge and per-session via `OutboundSender.queueDepth(sessionId)`.
+- Java 21 VTs scheduled on shared carriers; per-VT cost is a few KB heap. 1000+ VTs is acceptable.
+- Slow-client detection becomes implicit with Jetty native async (write-Future latency / Jetty internals);
+  the API surface differs across Jetty 12 minor versions.
+
+When the queue overflows, the session transitions to STALLED:
+- `OutboundSender.offer` invokes the overflow callback registered by `WorldWebSocketHandler`.
+- `WorldWebSocketHandler.markStalled` removes `ATTR_ENTITY_ID`, sets `ATTR_STALL_TICK`,
+  issues a resume token via `ResumeTokenRegistry.issue`, and detaches the sender VT.
+- The next inbound frame from the stalled session receives `E|408|reconnect-required` and the WS is closed.
+- The entity is held on the grid for `paralife.admission.backpressure.grace-window-ticks` ticks.
+- If the client reconnects with `r|<species>|<resumeToken>` within the grace window, `AdmissionGate` consults
+  `ResumeTokenRegistry.tryRebind` and re-binds the new session to the preserved entityId.
+
+Single-writer invariant: only the per-session VT calls `session.sendMessage`. Error frames built on the
+inbound Jetty thread are routed through `OutboundSender.offer` rather than direct `sendMessage`. The
+fallback path in `WorldWebSocketHandler.sendFrame` (post-detach) uses a `synchronized(session)` guard.
 <!-- GSD:architecture-end -->
 
 <!-- GSD:skills-start -->
