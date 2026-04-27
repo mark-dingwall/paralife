@@ -1,7 +1,9 @@
 package com.paralife.websocket;
 
+import com.paralife.admission.OutboundSender;
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -43,6 +45,9 @@ class WorldWebSocketHandlerTest {
     @Autowired
     WorldWebSocketHandler handler;
 
+    @Autowired
+    OutboundSender outboundSender;
+
     private WebSocketSession session;
     private Map<String, Object> attrs;
 
@@ -53,6 +58,14 @@ class WorldWebSocketHandlerTest {
         when(session.getAttributes()).thenReturn(attrs);
         when(session.getId()).thenReturn("s1");
         when(session.isOpen()).thenReturn(true);
+        // Phase 17: outbound now flows through OutboundSender's per-session VT drain loop.
+        // Attach the mock so offer() succeeds and the drain loop calls session.sendMessage.
+        outboundSender.attachSession(session, 16);
+    }
+
+    @AfterEach
+    void tearDown() {
+        outboundSender.detachSession("s1");
     }
 
     @Test
@@ -62,7 +75,8 @@ class WorldWebSocketHandlerTest {
         handler.handleMessage(session, new TextMessage("GARBAGE"));
 
         ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
-        verify(session, atLeastOnce()).sendMessage(captor.capture());
+        // timeout() polls — VT drain loop sends asynchronously.
+        verify(session, timeout(2000).atLeastOnce()).sendMessage(captor.capture());
         String out = captor.getValue().getPayload();
         Frame decoded = PerceptionCodec.decode(out);
         assertTrue(decoded instanceof Frame.ErrorFrame err && err.code() == 400,
@@ -83,7 +97,7 @@ class WorldWebSocketHandlerTest {
         handler.handleMessage(session, new TextMessage("r|C"));
 
         ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
-        verify(session, atLeastOnce()).sendMessage(captor.capture());
+        verify(session, timeout(2000).atLeastOnce()).sendMessage(captor.capture());
         boolean sawCap = captor.getAllValues().stream()
                 .anyMatch(m -> m.getPayload().startsWith("E|429"));
         assertTrue(sawCap, "Expected E|429 after respawn cap exceeded");

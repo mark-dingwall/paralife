@@ -8,6 +8,7 @@ build/
 *.iml
 .vscode/
 *.swp
+bin/
 
 # OS
 .DS_Store
