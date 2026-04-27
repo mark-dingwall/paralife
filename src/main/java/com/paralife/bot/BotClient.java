@@ -162,6 +162,7 @@ public class BotClient {
         try {
             if (client != null) {
                 client.stop();
+                client = null;
             }
         } catch (Exception e) {
             log.warn("Error stopping client: {}", e.getMessage());
