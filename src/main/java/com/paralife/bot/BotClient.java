@@ -110,8 +110,16 @@ public class BotClient {
      * {@code r|<species>} register frame.
      */
     public void connect() throws Exception {
-        client = new WebSocketClient();
-        client.start();
+        // Phase 17: reuse the WebSocketClient across reconnects. Originally a fresh
+        // client+pool was created per connect(); STALLED-pivot reconnects then leaked
+        // selector + executor + scheduler thread pools (200+ threads after 100 reconnects).
+        // Stopping the old client per-reconnect was even worse — `stop()` blocks during
+        // the very thundering-herd conditions a stall produces. Lazy-init once; reuse
+        // for subsequent connect() calls.
+        if (client == null) {
+            client = new WebSocketClient();
+            client.start();
+        }
 
         ClientUpgradeRequest req = new ClientUpgradeRequest();
         req.addExtensions("permessage-deflate; server_no_context_takeover");
@@ -392,7 +400,9 @@ public class BotClient {
             log.info("WS closed: status={} reason={}", statusCode, reason);
             if (resumeToken != null && !shutdown.get()) {
                 // Phase 17 STALLED-pivot: reconnect on a fresh WS to attempt re-bind within grace window.
-                long delayMs = 100L;
+                // Jittered 100–300ms — anti-thundering-herd when many sessions stall together
+                // (e.g., GC pause hits the server, cascade of overflows, all clients reconnect at once).
+                long delayMs = 100L + rng.nextLong(200L);
                 CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS).execute(BotClient.this::reconnect);
             }
         }
