@@ -11,8 +11,8 @@ Prove the architecture handles large-scale externally driven load without losing
 
 ### Admission Control
 
-- [ ] **SCALE-01**: Server admission control replaces the temporary `max-active-entities` stopgap with a durable world-level policy that explains register and respawn rejection reasons.
-- [ ] **SCALE-02**: Overload and slow-client paths apply explicit backpressure or shedding rules without causing unbounded tick drift or silent session churn.
+- [x] **SCALE-01**: Server admission control replaces the temporary `max-active-entities` stopgap with a durable world-level policy that explains register and respawn rejection reasons.
+- [x] **SCALE-02**: Overload and slow-client paths apply explicit backpressure or shedding rules without causing unbounded tick drift or silent session churn.
 
 ### Load Generation
 
@@ -51,8 +51,8 @@ Prove the architecture handles large-scale externally driven load without losing
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SCALE-01 | Phase 17 | Pending |
-| SCALE-02 | Phase 17 | Pending |
+| SCALE-01 | Phase 17 | Satisfied (2026-04-28) |
+| SCALE-02 | Phase 17 | Satisfied (2026-04-28) |
 | SCALE-03 | Phase 18 | Pending |
 | SCALE-04 | Phase 18 | Pending |
 | SCALE-05 | Phase 18 | Pending |
@@ -69,4 +69,4 @@ Prove the architecture handles large-scale externally driven load without losing
 
 ---
 *Requirements defined: 2026-04-22*
-*Last updated: 2026-04-22 after M4 milestone initialization*
+*Last updated: 2026-04-28 — SCALE-01 / SCALE-02 marked satisfied after Phase 17 verification (passed; see `phases/17-durable-admission-control-backpressure/17-VERIFICATION.md`)*

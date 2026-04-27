@@ -31,7 +31,8 @@ Internal milestone tracker. `v1.0` / `v2.0` are milestone IDs, not release versi
 
 Prove the architecture handles large-scale externally driven load without losing simulation correctness, operational control, or reproducibility.
 
-### Phase 17: Durable Admission Control & Backpressure
+### Phase 17: Durable Admission Control & Backpressure ✅
+**Status:** Verified 2026-04-28 — see `phases/17-durable-admission-control-backpressure/17-VERIFICATION.md` (passed; 4/4 SC; 12/12 must-haves; 662 tests green; SLI item carried forward to Phase 21)
 **Goal:** Replace the temporary world cap with a durable admission-control policy and explicit overload/backpressure behavior that preserves tick health under stress.
 **Depends on:** Phase 16 (baseline emergence stack and temporary cap behavior)
 **Requirements:** SCALE-01, SCALE-02
