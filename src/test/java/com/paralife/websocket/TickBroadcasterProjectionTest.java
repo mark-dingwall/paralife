@@ -1,5 +1,6 @@
 package com.paralife.websocket;
 
+import com.paralife.admission.OutboundSender;
 import com.paralife.codec.CellEntry;
 import com.paralife.codec.Coord;
 import com.paralife.codec.Frame;
@@ -24,7 +25,6 @@ import com.paralife.world.WorldGrid;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.util.List;
@@ -33,6 +33,8 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -56,6 +58,7 @@ class TickBroadcasterProjectionTest {
     private SimulationConfig simConfig;
     private AlarmQueue alarmQueue;
     private EnvironmentEngine envEngineMock;
+    private OutboundSender outboundSenderMock;
     private TickBroadcaster broadcaster;
 
     @BeforeEach
@@ -71,8 +74,13 @@ class TickBroadcasterProjectionTest {
         envEngineMock = mock(EnvironmentEngine.class);
         when(envEngineMock.getCellStatus(any())).thenReturn((byte) 0);
         when(envEngineMock.getEntityStatus(any())).thenReturn((byte) 0);
+        // Phase 17 Plan 08: inject mock OutboundSender — tick broadcast now enqueues
+        // via offer() rather than calling session.sendMessage() directly.
+        outboundSenderMock = mock(OutboundSender.class);
+        when(outboundSenderMock.offer(anyString(), any(Frame.class))).thenReturn(true);
         broadcaster = new TickBroadcaster(botRegistry, sessionRegistry, worldGrid,
                 compositeRegistry, envEngineMock, buffRegistry, simConfig, alarmQueue, metrics);
+        broadcaster.setOutboundSender(outboundSenderMock);
     }
 
     // ── Frame-shape tests (formerly "self" entity state + radius) ──────
@@ -217,10 +225,11 @@ class TickBroadcasterProjectionTest {
     // ── onTick end-to-end (mocked session) ─────────────────────────────
 
     @Test
-    void onTickSendsFrameToRegisteredBots() throws Exception {
+    void onTickEnqueuesFrameToRegisteredBots() {
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getId()).thenReturn("s1");
         when(session.isOpen()).thenReturn(true);
+        when(session.getAttributes()).thenReturn(new java.util.concurrent.ConcurrentHashMap<>());
         sessionRegistry.register(session);
 
         Particle particle = Particle.spawn("e1", ParticleType.CATALYST);
@@ -229,11 +238,12 @@ class TickBroadcasterProjectionTest {
 
         broadcaster.onTick(new TickEvent(1));
 
-        verify(session).sendMessage(any(TextMessage.class));
+        // Phase 17 Plan 08: tick broadcast enqueues via OutboundSender.offer, not sendMessage.
+        verify(outboundSenderMock).offer(eq("s1"), any(Frame.class));
     }
 
     @Test
-    void onTickSkipsClosedSessions() throws Exception {
+    void onTickSkipsClosedSessions() {
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getId()).thenReturn("s1");
         when(session.isOpen()).thenReturn(false);
@@ -243,7 +253,7 @@ class TickBroadcasterProjectionTest {
 
         broadcaster.onTick(new TickEvent(1));
 
-        verify(session, never()).sendMessage(any());
+        verify(outboundSenderMock, never()).offer(anyString(), any());
     }
 
     @Test
@@ -464,27 +474,30 @@ class TickBroadcasterProjectionTest {
     // ── Phase 15.2: death frame (vD) ───────────────────────────────────
 
     @Test
-    void deathNoticeEmitsTerminalVDFrame() throws Exception {
+    void deathNoticeEnqueuesTerminalVDFrameViaOutboundSender() {
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getId()).thenReturn("s1");
         when(session.isOpen()).thenReturn(true);
+        when(session.getAttributes()).thenReturn(new java.util.concurrent.ConcurrentHashMap<>());
         sessionRegistry.register(session);
 
         // Register then unregister — unregisterByEntity queues a DeathNotice.
         botRegistry.register("s1", "e1", new Position(5, 5));
         botRegistry.unregisterByEntity("e1");
 
-        org.mockito.ArgumentCaptor<TextMessage> captor =
-                org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        org.mockito.ArgumentCaptor<Frame> captor =
+                org.mockito.ArgumentCaptor.forClass(Frame.class);
         broadcaster.onTick(new TickEvent(42));
 
-        verify(session).sendMessage(captor.capture());
-        String payload = captor.getValue().getPayload();
-        // SCHEMA §8.4 "Died" event: lone D in the v block. The v-block marker
-        // `v` is followed immediately by the event code (no separator); the
-        // block itself is preceded by a `|`. So the wire substring is `|vD`.
-        assertThat(payload).contains("|vD");
-        assertThat(payload).startsWith("T|");
+        // Phase 17 Plan 08: death frame is enqueued via OutboundSender.offer.
+        verify(outboundSenderMock).offer(eq("s1"), captor.capture());
+        Frame captured = captor.getValue();
+        assertThat(captured).isInstanceOf(Frame.TickFrame.class);
+        Frame.TickFrame tf = (Frame.TickFrame) captured;
+        // SCHEMA §8.4 "Died" event: single D event in the v block.
+        assertThat(tf.events()).hasSize(1);
+        assertThat(tf.events().get(0).code()).isEqualTo('D');
+        assertThat(tf.tickId()).isEqualTo(42L);
     }
 
     @Test
@@ -503,10 +516,11 @@ class TickBroadcasterProjectionTest {
     }
 
     @Test
-    void onTickWithNoDeathsDoesNotBlockLiveBots() throws Exception {
+    void onTickWithNoDeathsEnqueuesOnlyLiveBotFrame() {
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getId()).thenReturn("s1");
         when(session.isOpen()).thenReturn(true);
+        when(session.getAttributes()).thenReturn(new java.util.concurrent.ConcurrentHashMap<>());
         sessionRegistry.register(session);
 
         Particle particle = Particle.spawn("e1", ParticleType.CATALYST);
@@ -514,8 +528,8 @@ class TickBroadcasterProjectionTest {
         botRegistry.register("s1", "e1", new Position(5, 5));
 
         broadcaster.onTick(new TickEvent(1));
-        // One message for the live bot, zero death frames (no notices queued).
-        verify(session, times(1)).sendMessage(any(TextMessage.class));
+        // Phase 17 Plan 08: one offer for the live bot, zero death frames (no notices queued).
+        verify(outboundSenderMock, times(1)).offer(eq("s1"), any(Frame.class));
     }
 
     // ── Helpers ────────────────────────────────────────────────────────

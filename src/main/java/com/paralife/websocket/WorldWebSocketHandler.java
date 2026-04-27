@@ -87,6 +87,13 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
     private static final String ATTR_ENTITY_ID = "entityId";
     private static final String ATTR_ENTITY_TYPE = "entityType";
     private static final String ATTR_RESPAWN_COUNT = "respawnCount";
+    /**
+     * Phase 17 D-11: set by {@link #markStalled} when the session's outbound queue overflows.
+     * Presence of this attribute on a session means the entity is in STALLED grace.
+     * Plan 08 {@code TickBroadcaster} checks this via {@link #isStalled(WebSocketSession)} to
+     * skip enqueueing frames to a detached VT session.
+     */
+    static final String ATTR_STALL_TICK = "stallTick";
 
     private final SessionRegistry sessionRegistry;
     private final WorldGrid worldGrid;
@@ -95,6 +102,14 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
     private final ActionResolver actionResolver;
     private final MetabolicProfile metabolicProfile;
     private final SpawnConfig spawnConfig;
+    /**
+     * Phase 17 Plan 08 (Rule 3 prerequisite for integration tests): setter-injected
+     * to allow optional wiring. When present, each new session gets a per-session VT
+     * sender attached on connect and detached on close. Full Plan 07 wires this via
+     * the main @Autowired constructor; this setter keeps the Phase 15/16 direct-
+     * instantiation tests compiling without change.
+     */
+    private com.paralife.admission.OutboundSender outboundSender;
     /**
      * Phase 16 Plan 01: seeded placement RNG. Non-final so {@link #resetSeed()}
      * can reassign it between test runs. Bound from {@link SpawnConfig#seed()}
@@ -163,9 +178,27 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         this.spawnRng = buildRng();
     }
 
+    /**
+     * Phase 17 Plan 08 (Rule 3 prerequisite): setter-injected OutboundSender.
+     * Full Plan 07 wires this in the @Autowired constructor. This setter allows
+     * the integration tests (which boot via @SpringBootTest) to receive the bean
+     * once the Spring context is assembled, without breaking the Phase 15/16
+     * direct-instantiation unit tests that don't provide an OutboundSender.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setOutboundSender(com.paralife.admission.OutboundSender sender) {
+        this.outboundSender = sender;
+    }
+
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         sessionRegistry.register(session);
+        // Phase 17 Plan 08: attach a per-session VT sender so TickBroadcaster.offer
+        // has a queue to enqueue into. Queue size 16 (default BackpressureConfig).
+        // Full Plan 07 replaces this with admissionConfig.backpressure().outboundQueueSize().
+        if (outboundSender != null) {
+            outboundSender.attachSession(session, 16);
+        }
         // Plan 15-06: no Welcome frame — the protocol no longer has one.
         // First `r|` from the client returns an `S|<entityId>` sync frame.
         log.info("Client connected: {} (total: {})", session.getId(), sessionRegistry.getSessionCount());
@@ -195,6 +228,10 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        // Phase 17 Plan 08: detach sender VT before cleanup (joins for up to 100ms).
+        if (outboundSender != null) {
+            outboundSender.detachSession(session.getId());
+        }
         cleanupBot(session.getId());
         sessionRegistry.unregister(session.getId());
         log.info("Client disconnected: {} (status: {}, total: {})",
@@ -335,6 +372,18 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
     /** Convenience wrapper for send-error-frame callers. */
     public void sendErrorFrame(WebSocketSession session, int code, String msg) {
         sendFrame(session, new Frame.ErrorFrame(code, Optional.ofNullable(msg)));
+    }
+
+    /**
+     * Phase 17 D-11: returns {@code true} if the session is in the STALLED grace state.
+     * REQUIRED by Plan 08 {@code TickBroadcaster} — the tick broadcast hot path skips
+     * STALLED sessions because their OutboundSender VT has been detached.
+     *
+     * <p>Full STALLED FSM is implemented in Plan 07 ({@code WorldWebSocketHandler} refactor).
+     * This minimal overload is the compile gate for Plan 08.
+     */
+    public boolean isStalled(WebSocketSession session) {
+        return session != null && session.getAttributes().containsKey(ATTR_STALL_TICK);
     }
 
     /**

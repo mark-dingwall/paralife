@@ -1,5 +1,7 @@
 package com.paralife.websocket;
 
+import com.paralife.admission.AdmissionMetrics;
+import com.paralife.admission.OutboundSender;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.TickEvent;
 import com.paralife.metrics.WebSocketMetrics;
@@ -24,14 +26,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
 
 /**
- * Plan 15-10 Task 4: end-to-end meter wiring. Proves that
+ * Plan 15-10 Task 4 (updated by Plan 17-08): end-to-end meter wiring. Proves that
  * {@link SessionRegistry#register}/{@code unregister} and
  * {@link TickBroadcaster#onTick(TickEvent)} actually drive the meters, rather
  * than only bean-level priming (which would show reachability but not wiring).
  *
- * <p>Addresses cross-AI review consensus #6 (Claude + Codex MEDIUM): the bean
- * is exercised through its real call paths; no {@code metrics.recordFrameSize}
- * or {@code metrics.setActiveSessions} is called directly in this test.
+ * <p><b>Plan 17-08 update:</b> {@code recordFrameSize} moved from
+ * {@code TickBroadcaster} to {@link OutboundSender} drain loop. The frame-size
+ * metric is now {@link AdmissionMetrics#M_FRAME_SIZE}
+ * ({@code paralife.outbound.frame.size.bytes}), recorded after the VT drain loop
+ * encodes and sends each frame. The test attaches the mock session to
+ * {@link OutboundSender} so the VT drain path runs, then waits up to 2s for
+ * the metric to increment.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @TestPropertySource(properties = {
@@ -46,6 +52,7 @@ class WebSocketMetricsWiringTest {
     @Autowired BotRegistry botRegistry;
     @Autowired WebSocketMetrics metrics;
     @Autowired MeterRegistry meterRegistry;
+    @Autowired OutboundSender outboundSender;
 
     @AfterEach
     void cleanupBots() {
@@ -70,17 +77,19 @@ class WebSocketMetricsWiringTest {
     }
 
     @Test
-    void broadcasterTickDrivesTickFrameBytesDistribution() {
-        DistributionSummary ds = meterRegistry.find(WebSocketMetrics.M_TICK_FRAME_BYTES).summary();
-        assertNotNull(ds, "tick.frame.bytes DistributionSummary should be registered");
+    void broadcasterTickDrivesFrameSizeDistribution() throws InterruptedException {
+        // Phase 17 Plan 08: frame-size metric is now in AdmissionMetrics (OutboundSender
+        // drain loop), not WebSocketMetrics. Assert on the new metric name.
+        DistributionSummary ds = meterRegistry.find(AdmissionMetrics.M_FRAME_SIZE).summary();
+        assertNotNull(ds, "paralife.outbound.frame.size.bytes DistributionSummary should be registered");
         long countBefore = ds.count();
 
-        // Drive a real tick. Register at least one bot so TickBroadcaster
-        // iterates and reaches metrics.recordFrameSize. The mock session's
-        // sendMessage is a no-op — the metric is still recorded right after.
         String sid = "wiring-s2";
         WebSocketSession mock = mockSession(sid);
         sessionRegistry.register(mock);
+        // Attach the session to OutboundSender so the VT drain loop runs and
+        // calls metrics.recordFrameSize after encoding each frame.
+        outboundSender.attachSession(mock, 16);
         // BotRegistry.register needs (sessionId, entityId, Position). The bot
         // doesn't need a live Particle in WorldGrid — buildTickFrame handles
         // null occupants by emitting a zero-energy alive-check frame.
@@ -88,11 +97,18 @@ class WebSocketMetricsWiringTest {
 
         broadcaster.onTick(new TickEvent(1L));
 
+        // Give the VT drain loop up to 2s to encode + record the metric.
+        long deadline = System.currentTimeMillis() + 2000L;
+        while (ds.count() <= countBefore && System.currentTimeMillis() < deadline) {
+            Thread.sleep(10);
+        }
+
         long countAfter = ds.count();
         assertTrue(countAfter > countBefore,
-                "tick.frame.bytes count should have incremented (before="
+                "paralife.outbound.frame.size.bytes count should have incremented (before="
                         + countBefore + " after=" + countAfter + ")");
 
+        outboundSender.detachSession(sid);
         sessionRegistry.unregister(sid);
     }
 
