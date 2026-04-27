@@ -200,6 +200,11 @@ public class ResumeTokenRegistry {
             Map.Entry<String, ResumeEntry> e = it.next();
             ResumeEntry entry = e.getValue();
             if (entry.state == State.STALLED && entry.expiresAtTick <= currentTick) {
+                // Atomic compare-and-remove FIRST: if a concurrent tryRebind already consumed
+                // this entry, we must NOT run cleanup — the rebound session owns the entity now.
+                if (!tokenMap.remove(e.getKey(), entry)) {
+                    continue;
+                }
                 String entityId = entry.entityId;
                 if (cleanup != null) {
                     try {
@@ -213,7 +218,6 @@ public class ResumeTokenRegistry {
                 }
                 log.info("BACKPRESSURE expired tick={} entity={} session={}",
                         currentTick, entityId, entry.originalSessionId);
-                it.remove();
                 reaped++;
             }
         }
