@@ -1,5 +1,6 @@
 package com.paralife.websocket;
 
+import com.paralife.admission.OutboundSender;
 import com.paralife.codec.ActiveEffect;
 import com.paralife.codec.CellEntry;
 import com.paralife.codec.Coord;
@@ -32,13 +33,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
-import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -110,10 +109,18 @@ public class TickBroadcaster {
     private final AlarmQueue alarmQueue;
     private final WebSocketMetrics metrics;
     /**
-     * Phase 15.2: injected lazily to avoid a bean cycle (Handler already
-     * depends on TickBroadcaster indirectly via bean graph). Nullable in
-     * mock-only unit tests that construct TickBroadcaster via the legacy
-     * ctor; guarded before use.
+     * Phase 17 Plan 08: non-blocking outbound sender. Frames are enqueued here
+     * rather than sent synchronously — the per-session VT drains the queue.
+     * Nullable in legacy unit-test constructions that don't exercise the
+     * broadcast path; guarded before use.
+     */
+    private OutboundSender outboundSender;
+    /**
+     * Phase 15.2 / Phase 17: injected lazily to avoid a bean cycle (Handler
+     * already depends on TickBroadcaster indirectly via bean graph). Used for
+     * {@link WorldWebSocketHandler#markDead} and (Phase 17) for
+     * {@link WorldWebSocketHandler#isStalled} STALLED-skip. Nullable in
+     * mock-only unit tests; guarded before use.
      */
     private WorldWebSocketHandler worldWebSocketHandler;
 
@@ -143,16 +150,26 @@ public class TickBroadcaster {
     }
 
     /**
-     * Phase 15.2: setter-injected to avoid the constructor cycle with
-     * {@link WorldWebSocketHandler} (the handler is a high-level bean, the
-     * broadcaster is low-level; setter on the low-level side is the standard
-     * Spring break-cycle pattern). {@code required = false} keeps the legacy
-     * mock-only unit tests working — they construct via the ctor and skip
-     * this setter.
+     * Phase 17 Plan 08: setter-injected to avoid a constructor cycle.
+     * {@code required = false} keeps legacy mock-only unit tests working —
+     * they construct via the primary ctor and skip this setter. When null,
+     * offer is attempted without the STALLED check (safe: OutboundSender
+     * returns false for detached sessions harmlessly).
      */
     @Autowired(required = false)
-    public void setWorldWebSocketHandler(@org.springframework.context.annotation.Lazy
-                                          WorldWebSocketHandler handler) {
+    public void setOutboundSender(OutboundSender sender) {
+        this.outboundSender = sender;
+    }
+
+    /**
+     * Phase 15.2 / Phase 17: setter-injected to avoid the constructor cycle
+     * with {@link WorldWebSocketHandler} (the handler is a high-level bean,
+     * the broadcaster is low-level; setter on the low-level side is the
+     * standard Spring break-cycle pattern). {@code required = false} keeps
+     * legacy mock-only unit tests working.
+     */
+    @Autowired(required = false)
+    public void setWorldWebSocketHandler(@Lazy WorldWebSocketHandler handler) {
         this.worldWebSocketHandler = handler;
     }
 
@@ -168,36 +185,40 @@ public class TickBroadcaster {
         var bots = botRegistry.getAllBots();
         if (bots.isEmpty()) return;
 
-        int sent = 0;
-        int failed = 0;
+        int enqueued = 0;
+        int skipped = 0;
 
         for (BotRegistry.BotState bot : bots) {
             WebSocketSession session = sessionRegistry.getSession(bot.sessionId());
             if (session == null || !session.isOpen()) continue;
+            // Phase 17 (D-11): skip sessions in STALLED grace — OutboundSender VT detached.
+            if (worldWebSocketHandler != null && worldWebSocketHandler.isStalled(session)) {
+                skipped++;
+                continue;
+            }
 
             try {
                 Frame.TickFrame frame = buildTickFrame(bot, event.tickNumber());
-                String encoded = PerceptionCodec.encode(frame);
-                synchronized (session) {
-                    session.sendMessage(new TextMessage(encoded));
+                // Phase 17 Plan 08: non-blocking enqueue; encode + recordFrameSize happen
+                // inside OutboundSender.drainLoop — that is the sole measurement point
+                // (codex MEDIUM: do NOT call recordFrameSize here).
+                if (outboundSender != null) {
+                    outboundSender.offer(bot.sessionId(), frame);
                 }
-                // Plan 15-10: record raw pre-deflate UTF-8 byte length on the
-                // DistributionSummary. No bytes-saved estimate — deferred per
-                // SCHEMA §13 until Jetty exposes a stable post-deflate hook.
-                metrics.recordFrameSize(encoded.getBytes(StandardCharsets.UTF_8).length);
-                sent++;
-            } catch (IOException e) {
-                failed++;
-                log.warn("Failed to send tick to session {}: {}", bot.sessionId(), e.getMessage());
+                // outboundSender == null only in legacy unit tests that don't exercise
+                // the broadcast path (they call buildTickFrame directly). In those cases
+                // the frame is intentionally dropped — the test asserts on frame shape,
+                // not on delivery.
+                enqueued++;
             } catch (RuntimeException e) {
-                failed++;
+                skipped++;
                 log.warn("Tick frame build failed for session {}: {}", bot.sessionId(), e.getMessage(), e);
             }
         }
 
         if (log.isDebugEnabled()) {
-            log.debug("Tick {} broadcast: sent={} failed={} bots={}",
-                    event.tickNumber(), sent, failed, bots.size());
+            log.debug("Tick {} broadcast: enqueued={} skipped={} bots={}",
+                    event.tickNumber(), enqueued, skipped, bots.size());
         }
     }
 
@@ -217,6 +238,8 @@ public class TickBroadcaster {
         for (BotRegistry.DeathNotice dn : deaths) {
             WebSocketSession session = sessionRegistry.getSession(dn.sessionId());
             if (session == null || !session.isOpen()) continue;
+            // Phase 17 (D-11): skip sessions in STALLED grace — sender VT detached.
+            if (worldWebSocketHandler != null && worldWebSocketHandler.isStalled(session)) continue;
             // Clear the session's ATTR_ENTITY_ID so the next r| from this
             // session is accepted as a respawn (not rejected E|409). In
             // production DI this is always available; null only in legacy
@@ -226,13 +249,13 @@ public class TickBroadcaster {
             }
             try {
                 Frame.TickFrame frame = buildDeathFrame(tickId, dn.position());
-                String encoded = PerceptionCodec.encode(frame);
-                synchronized (session) {
-                    session.sendMessage(new TextMessage(encoded));
+                // Phase 17 Plan 08: non-blocking enqueue; recordFrameSize is in
+                // OutboundSender.drainLoop — sole measurement point (codex MEDIUM).
+                if (outboundSender != null) {
+                    outboundSender.offer(dn.sessionId(), frame);
                 }
-                metrics.recordFrameSize(encoded.getBytes(StandardCharsets.UTF_8).length);
-            } catch (IOException e) {
-                log.warn("Failed to send death frame to session {}: {}", dn.sessionId(), e.getMessage());
+                // outboundSender == null only in legacy unit tests that call
+                // buildDeathFrame directly. Frame is intentionally dropped in that path.
             } catch (RuntimeException e) {
                 log.warn("Death frame build failed for session {}: {}", dn.sessionId(), e.getMessage(), e);
             }

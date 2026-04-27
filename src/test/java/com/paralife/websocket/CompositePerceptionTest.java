@@ -1,7 +1,7 @@
 package com.paralife.websocket;
 
+import com.paralife.admission.OutboundSender;
 import com.paralife.codec.Frame;
-import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.AlarmQueue;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.BuffRegistry;
@@ -19,14 +19,16 @@ import com.paralife.world.WorldGrid;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -60,6 +62,7 @@ class CompositePerceptionTest {
     private SimulationConfig simConfig;
     private AlarmQueue alarmQueue;
     private EnvironmentEngine envEngineMock;
+    private OutboundSender outboundSenderMock;
     private TickBroadcaster broadcaster;
 
     @BeforeEach
@@ -75,8 +78,12 @@ class CompositePerceptionTest {
         envEngineMock = mock(EnvironmentEngine.class);
         when(envEngineMock.getCellStatus(any())).thenReturn((byte) 0);
         when(envEngineMock.getEntityStatus(any())).thenReturn((byte) 0);
+        // Phase 17 Plan 08: inject mock OutboundSender — broadcast now enqueues via offer().
+        outboundSenderMock = mock(OutboundSender.class);
+        when(outboundSenderMock.offer(anyString(), any(Frame.class))).thenReturn(true);
         broadcaster = new TickBroadcaster(botRegistry, sessionRegistry, worldGrid,
                 compositeRegistry, envEngineMock, buffRegistry, simConfig, alarmQueue, metrics);
+        broadcaster.setOutboundSender(outboundSenderMock);
     }
 
     // ── Passive members → minimal form ─────────────────────────────────
@@ -184,7 +191,7 @@ class CompositePerceptionTest {
     // ── onTick delivery ────────────────────────────────────────────────
 
     @Test
-    void onTickSendsCodecEncodedFrame() throws Exception {
+    void onTickEnqueuesCodecFrameViaOutboundSender() {
         var sensor = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.SENSOR, 50, 100);
         worldGrid.setEntity(5, 5, sensor);
         compositeRegistry.register("c1", List.of("m1"),
@@ -194,23 +201,23 @@ class CompositePerceptionTest {
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getId()).thenReturn("s1");
         when(session.isOpen()).thenReturn(true);
+        when(session.getAttributes()).thenReturn(new ConcurrentHashMap<>());
         sessionRegistry.register(session);
 
         broadcaster.onTick(new TickEvent(1));
 
-        var captor = org.mockito.ArgumentCaptor.forClass(TextMessage.class);
-        verify(session).sendMessage(captor.capture());
-
-        Frame decoded = PerceptionCodec.decode(captor.getValue().getPayload());
-        assertThat(decoded).isInstanceOf(Frame.TickFrame.class);
-        Frame.TickFrame tf = (Frame.TickFrame) decoded;
+        // Phase 17 Plan 08: delivery is via outboundSender.offer, not session.sendMessage.
+        var captor = org.mockito.ArgumentCaptor.forClass(Frame.class);
+        verify(outboundSenderMock).offer(eq("s1"), captor.capture());
+        assertThat(captor.getValue()).isInstanceOf(Frame.TickFrame.class);
+        Frame.TickFrame tf = (Frame.TickFrame) captor.getValue();
         assertThat(tf.isMinimal())
                 .as("SENSOR → minimal form")
                 .isTrue();
     }
 
     @Test
-    void allMembersReceiveTickFrames() throws Exception {
+    void allMembersReceiveTickFramesViaOutboundSender() {
         var sensor = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.SENSOR, 50, 100);
         var loco = new CompositeMember("m2", "c1", ParticleType.MEMBRANE, Role.LOCOMOTOR, 50, 100);
         worldGrid.setEntity(5, 5, sensor);
@@ -222,23 +229,22 @@ class CompositePerceptionTest {
         botRegistry.register("s1", "m1", new Position(5, 5));
         botRegistry.register("s2", "m2", new Position(6, 5));
 
-        WebSocketSession session1 = mockSession("s1");
-        WebSocketSession session2 = mockSession("s2");
+        mockSession("s1");
+        mockSession("s2");
 
         broadcaster.onTick(new TickEvent(1));
 
-        var cap1 = org.mockito.ArgumentCaptor.forClass(TextMessage.class);
-        var cap2 = org.mockito.ArgumentCaptor.forClass(TextMessage.class);
-        verify(session1).sendMessage(cap1.capture());
-        verify(session2).sendMessage(cap2.capture());
+        // Phase 17 Plan 08: each bot's frame is enqueued via offer, not sendMessage.
+        var cap1 = org.mockito.ArgumentCaptor.forClass(Frame.class);
+        var cap2 = org.mockito.ArgumentCaptor.forClass(Frame.class);
+        verify(outboundSenderMock).offer(eq("s1"), cap1.capture());
+        verify(outboundSenderMock).offer(eq("s2"), cap2.capture());
 
-        Frame f1 = PerceptionCodec.decode(cap1.getValue().getPayload());
-        Frame f2 = PerceptionCodec.decode(cap2.getValue().getPayload());
-        assertThat(f1).isInstanceOf(Frame.TickFrame.class);
-        assertThat(f2).isInstanceOf(Frame.TickFrame.class);
+        assertThat(cap1.getValue()).isInstanceOf(Frame.TickFrame.class);
+        assertThat(cap2.getValue()).isInstanceOf(Frame.TickFrame.class);
 
-        Frame.TickFrame t1 = (Frame.TickFrame) f1;
-        Frame.TickFrame t2 = (Frame.TickFrame) f2;
+        Frame.TickFrame t1 = (Frame.TickFrame) cap1.getValue();
+        Frame.TickFrame t2 = (Frame.TickFrame) cap2.getValue();
         assertThat(t1.isMinimal())
                 .as("m1 SENSOR → minimal")
                 .isTrue();
@@ -272,6 +278,7 @@ class CompositePerceptionTest {
         WebSocketSession s = mock(WebSocketSession.class);
         when(s.getId()).thenReturn(id);
         when(s.isOpen()).thenReturn(true);
+        when(s.getAttributes()).thenReturn(new ConcurrentHashMap<>());
         sessionRegistry.register(s);
         return s;
     }
