@@ -52,8 +52,8 @@ Plans:
 - [x] 17-07-PLAN.md — WorldWebSocketHandler refactor: delegate admission, retoken errors, STALLED FSM
 - [x] 17-08-PLAN.md — TickBroadcaster refactor: enqueue via OutboundSender, remove synchronized(session)
 - [x] 17-09-PLAN.md — BotClient resume-token storage + STALLED-pivot reconnect
-- [ ] 17-10-PLAN.md — Migration: delete PopulationCapConfig, migrate application.yml + LoadTest, ActionResolver D-09 counter, CLAUDE.md Outbound concurrency
-- [ ] 17-11-PLAN.md — Integration tests: STALLED recovery, hysteresis gate, log markers
+- [x] 17-10-PLAN.md — Migration: delete PopulationCapConfig, migrate application.yml + LoadTest, ActionResolver D-09 counter, CLAUDE.md Outbound concurrency
+- [x] 17-11-PLAN.md — Integration tests: STALLED recovery, hysteresis gate, log markers
 
 ### Phase 18: External Load Harness & Harness Identity
 **Goal:** Build the first-class external load harness that scales past `BotRunner`'s single-process limit and attributes sessions and metrics per harness instance.

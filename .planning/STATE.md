@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering (M4)
 status: executing
-stopped_at: Phase 17 context gathered
-last_updated: "2026-04-26T23:12:59.890Z"
-last_activity: 2026-04-26 -- Phase 17 execution started
+stopped_at: Phase 17 wave 4 complete + post-merge hardening
+last_updated: "2026-04-27T16:15:00.000Z"
+last_activity: 2026-04-27 -- Phase 17 wave 4 merged + backpressure SLI hardening landed
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 11
-  completed_plans: 9
-  percent: 82
+  completed_plans: 11
+  percent: 100
 ---
 
 # Project State
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md
 ## Current Position
 
 Milestone: v3.0 (Scale Engineering / M4) — active
-Phase: 17 (durable-admission-control-backpressure) — EXECUTING
-Plan: 1 of 11
-Status: Executing Phase 17
-Last activity: 2026-04-26 -- Phase 17 execution started
+Phase: 17 (durable-admission-control-backpressure) — ALL PLANS EXECUTED, AWAITING VERIFICATION
+Plan: 11 of 11
+Status: Phase 17 ready for verification gate
+Last activity: 2026-04-27 -- Wave 4 merged + backpressure SLI hardening landed (full suite green)
 
-Progress: [----------] v3.0 not started
+Progress: [##--------] phase 17 done, 4 phases pending
 
 ## Deferred Items
 
