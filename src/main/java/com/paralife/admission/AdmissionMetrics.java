@@ -45,9 +45,13 @@ public class AdmissionMetrics {
     public static final String M_TICK_WORK_MS       = "paralife.tick.health.work-time-ms";
     public static final String M_STALLED_SESSIONS   = "paralife.backpressure.stalled.sessions";
     public static final String M_FRAME_SIZE         = "paralife.outbound.frame.size.bytes";
+    public static final String M_REBOUND            = "paralife.backpressure.rebound";
+    public static final String M_TERMINAL_DROPOUT   = "paralife.backpressure.terminal.dropouts";
 
     private final MeterRegistry registry;
     private final Counter ingressOverwrites;
+    private final Counter rebound;
+    private final Counter terminalDropouts;
     private final DistributionSummary frameSize;
 
     private final AtomicInteger activeEntities  = new AtomicInteger();
@@ -59,6 +63,14 @@ public class AdmissionMetrics {
         this.registry = registry;
         this.ingressOverwrites = Counter.builder(M_INGRESS_OVERWRITES)
                 .description("Action-frame ingress overwrites (last-write-wins collapse per D-09)")
+                .register(registry);
+        this.rebound = Counter.builder(M_REBOUND)
+                .description("STALLED sessions that successfully reconnected with their resume token within the grace window. "
+                        + "Operator SLI: rebound / (rebound + terminal_dropouts) is the recovery rate.")
+                .register(registry);
+        this.terminalDropouts = Counter.builder(M_TERMINAL_DROPOUT)
+                .description("STALLED sessions whose resume token expired before reconnect; entity reaped by ResumeTokenRegistry sweep. "
+                        + "Operator SLI: rising terminal dropouts indicate either widespread slow-consumer conditions or grace-window mis-tuning.")
                 .register(registry);
         this.frameSize = DistributionSummary.builder(M_FRAME_SIZE)
                 .description("Encoded outbound frame size in bytes; recorded by OutboundSender drain loop (Plan 06). "
@@ -96,6 +108,16 @@ public class AdmissionMetrics {
     /** Increment the aggregate ingress-overwrite counter (D-09 last-write-wins). */
     public void incIngressOverwrite() {
         ingressOverwrites.increment();
+    }
+
+    /** Increment when a STALLED session reconnects and rebinds its entity within the grace window. */
+    public void incRebound() {
+        rebound.increment();
+    }
+
+    /** Increment when a STALLED session's grace window expires before reconnect — entity is reaped. */
+    public void incTerminalDropout() {
+        terminalDropouts.increment();
     }
 
     /**

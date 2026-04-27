@@ -47,7 +47,7 @@ class AdmissionConfigTest {
         assertThat(d.tickOverload().highWaterPct()).isEqualTo(80);
         assertThat(d.tickOverload().lowWaterPct()).isEqualTo(60);
         assertThat(d.tickOverload().windowTicks()).isEqualTo(10);
-        assertThat(d.backpressure().outboundQueueSize()).isEqualTo(16);
+        assertThat(d.backpressure().outboundQueueSize()).isEqualTo(128);
         assertThat(d.backpressure().graceWindowTicks()).isEqualTo(10);
     }
 

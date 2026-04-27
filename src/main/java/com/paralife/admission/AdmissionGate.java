@@ -93,6 +93,7 @@ public class AdmissionGate {
                     resumeTokenRegistry.tryRebind(token.get(), req.sessionId(), req.tickNumber());
             if (rebind.isPresent()) {
                 ResumeTokenRegistry.RebindOutcome outcome = rebind.get();
+                metrics.incRebound();
                 return new AdmissionResult.Rebind(outcome.entityId(), outcome.freshResumeToken());
             }
             // Unknown or expired token → fall through to fresh-registration path (D-13 back-compat).

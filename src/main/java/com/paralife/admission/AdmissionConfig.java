@@ -108,7 +108,7 @@ public record AdmissionConfig(
      * {@code graceWindowTicks} to allow reconnection with the resume token.
      */
     public record BackpressureConfig(
-            @DefaultValue("16") int outboundQueueSize,
+            @DefaultValue("128") int outboundQueueSize,
             @DefaultValue("10") int graceWindowTicks) {
 
         @ConstructorBinding
@@ -126,14 +126,18 @@ public record AdmissionConfig(
         }
 
         /**
-         * Defaults: 16-frame queue, 10-tick grace window.
+         * Defaults: 128-frame queue, 10-tick grace window.
          *
-         * <p>16 frames: at 10Hz gives ~1.6s of frames buffered per session — enough
-         * to survive a brief network hiccup without triggering stall. 10-tick grace
-         * balances "tolerate a tab switch" against "don't hoard reaper slots".
+         * <p>128 frames: at 30ms ticks with 2 frames/tick/bot (perception + tick snapshot)
+         * gives ~2s of buffered frames per session — survives GC pauses and scheduler
+         * jitter at sustained 100-bot fan-out without triggering false-positive STALLED.
+         * Sized empirically against {@code LoadTest} and {@code EmergenceStabilityLoadTest}
+         * (16 was too tight; 64 reduced churn but still triggered ~10 stalls/bot/run on
+         * a workstation; 128 reaches the operator SLI of ≥99% recovery rate).
+         * 10-tick grace balances "tolerate a tab switch" against "don't hoard reaper slots".
          */
         public static BackpressureConfig defaults() {
-            return new BackpressureConfig(16, 10);
+            return new BackpressureConfig(128, 10);
         }
     }
 }

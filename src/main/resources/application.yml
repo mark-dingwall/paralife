@@ -53,7 +53,7 @@ paralife:
       low-water-pct: 60
       window-ticks: 10
     backpressure:
-      outbound-queue-size: 16
+      outbound-queue-size: 128
       grace-window-ticks: 10
   simulation:
     energy-decay-per-tick: 1

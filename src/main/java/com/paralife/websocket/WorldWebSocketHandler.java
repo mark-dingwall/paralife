@@ -511,6 +511,10 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
      */
     public void cleanupByEntityId(String entityId) {
         if (entityId == null) return;
+        // Phase 17: terminal dropout — STALLED token expired before reconnect.
+        // Operator SLI: rising counter indicates either widespread slow-consumer conditions
+        // or grace-window mis-tuning.
+        if (admissionMetrics != null) admissionMetrics.incTerminalDropout();
         String sessionId = botRegistry.getSessionByEntity(entityId).orElse(null);
         if (sessionId == null) {
             log.debug("cleanupByEntityId: entityId={} has no bound session (already reaped?)", entityId);
