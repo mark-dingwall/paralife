@@ -269,7 +269,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         // STALLED guard: any inbound frame from a STALLED session gets an out-of-band 408.
         if (isStalled(session.getAttributes())) {
             sendOutOfBand(session, new Frame.ErrorFrame(408, Optional.of(RejectionToken.RECONNECT_REQUIRED)));
-            if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.RECONNECT_REQUIRED);
+            if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.RECONNECT_REQUIRED, session);
             try { session.close(CloseStatus.SERVICE_RESTARTED); } catch (IOException ignored) {}
             return;
         }
@@ -280,7 +280,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         } catch (CodecException e) {
             log.warn("Malformed frame from {}: {}", session.getId(), e.getMessage());
             sendFrame(session, new Frame.ErrorFrame(400, Optional.of(RejectionToken.MALFORMED)));
-            if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.MALFORMED);
+            if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.MALFORMED, session);
             return;
         }
 
@@ -289,11 +289,11 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
             case Frame.ActionFrame a -> handleAction(session, a);
             case Frame.SyncFrame ignored -> {
                 sendFrame(session, new Frame.ErrorFrame(400, Optional.of(RejectionToken.MALFORMED)));
-                if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.MALFORMED);
+                if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.MALFORMED, session);
             }
             case Frame.TickFrame ignored -> {
                 sendFrame(session, new Frame.ErrorFrame(400, Optional.of(RejectionToken.MALFORMED)));
-                if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.MALFORMED);
+                if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.MALFORMED, session);
             }
             case Frame.ErrorFrame ignored -> { /* ignore client-sent errors */ }
         }
@@ -323,6 +323,16 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
 
         if (result instanceof AdmissionResult.Rebind rebind) {
             // Resume-token re-bind: preserve entityId, swap session in BotRegistry, restore respawn count.
+            // Round 2 Claude MEDIUM: rebind decrements OLD stalled bucket via the snapshot.
+            // Active bucket is NOT modified — it stays incremented from the original Allow path.
+            // Do NOT call incActiveBucket here — that would double-count.
+            if (admissionMetrics != null) {
+                io.micrometer.core.instrument.Tags oldTags =
+                        admissionMetrics.lookupBucketTags(rebind.entityId());
+                if (oldTags != null) {
+                    admissionMetrics.decStalledBucketByTags(oldTags);
+                }
+            }
             attrs.remove(ATTR_STALL_TICK);
             attrs.put(ATTR_ENTITY_ID, rebind.entityId());
             attrs.put(ATTR_ENTITY_TYPE, register.entityType());
@@ -379,7 +389,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         if (!placed) {
             // Only fresh registrations consumed a slot at admission; respawn reuses existing slot.
             if (!isRespawn && admissionGate != null) admissionGate.releaseSlot();
-            if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.GRID_FULL);
+            if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.GRID_FULL, session);
             sendFrame(session, new Frame.ErrorFrame(503, Optional.of(RejectionToken.GRID_FULL)));
             return;
         }
@@ -407,7 +417,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         sendFrame(session, new Frame.SyncFrame(entityId, Optional.of(resumeToken), List.of()));
 
         if (admissionMetrics != null) {
-            admissionMetrics.setActiveEntities(worldGrid.livingEntityCount());
+            admissionMetrics.incActiveBucket(session);
         }
         log.info("Entity registered: {} at ({},{}) type={} respawnCount={}",
                 entityId, x, y, particleType, attrs.get(ATTR_RESPAWN_COUNT));
@@ -417,7 +427,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         Object entityId = session.getAttributes().get(ATTR_ENTITY_ID);
         if (entityId == null) {
             sendFrame(session, new Frame.ErrorFrame(404, Optional.of(RejectionToken.NO_ACTIVE_ENTITY)));
-            if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.NO_ACTIVE_ENTITY);
+            if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.NO_ACTIVE_ENTITY, session);
             return;
         }
         actionResolver.queueAction(session.getId(), action);
@@ -477,9 +487,19 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         // SLI denominator: count this real stall transition (post-idempotency guard).
         if (admissionMetrics != null) admissionMetrics.incStalledTotal();
 
+        // === ROUND 2 CLAUDE HIGH AMENDMENT ===
+        // Read entityId BEFORE attrs.remove. Pass explicitly to incStalledBucket so
+        // bucketTagsByEntityId snapshot is captured with the real entityId — NOT null.
+        Object entityIdObj = attrs.get(ATTR_ENTITY_ID);
+        String entityId = entityIdObj != null ? entityIdObj.toString() : null;
+        if (admissionMetrics != null && entityId != null) {
+            admissionMetrics.incStalledBucket(session, entityId);
+        }
+        // === END AMENDMENT ===
+
         attrs.put(ATTR_STALL_TICK, stallTick);
-        Object entityIdObj = attrs.remove(ATTR_ENTITY_ID);
-        String entityId = entityIdObj == null ? null : entityIdObj.toString();
+        // NOW the existing remove proceeds.
+        attrs.remove(ATTR_ENTITY_ID);
         Object tokenObj = attrs.get(ATTR_RESUME_TOKEN);
         String activeToken = tokenObj == null ? null : tokenObj.toString();
 
@@ -524,8 +544,25 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         String sessionId = botRegistry.getSessionByEntity(entityId).orElse(null);
         if (sessionId == null) {
             log.debug("cleanupByEntityId: entityId={} has no bound session (already reaped?)", entityId);
+            // No session: decrement both buckets via snapshot (STALLED entity already gone).
+            if (admissionMetrics != null) {
+                io.micrometer.core.instrument.Tags bucketTags =
+                        admissionMetrics.lookupBucketTags(entityId);
+                if (bucketTags != null) {
+                    admissionMetrics.decActiveBucketByTags(bucketTags);
+                    admissionMetrics.decStalledBucketByTags(bucketTags);
+                }
+            }
             respawnCountAtStall.remove(entityId);
             return;
+        }
+        // Session exists: decrement stalled bucket via snapshot; cleanupBot handles active decrement.
+        if (admissionMetrics != null) {
+            io.micrometer.core.instrument.Tags bucketTags =
+                    admissionMetrics.lookupBucketTags(entityId);
+            if (bucketTags != null) {
+                admissionMetrics.decStalledBucketByTags(bucketTags);
+            }
         }
         respawnCountAtStall.remove(entityId);
         cleanupBot(sessionId);
@@ -558,8 +595,11 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         if (wasRegistered && admissionGate != null) {
             admissionGate.releaseSlot();
         }
-        if (admissionMetrics != null) {
-            admissionMetrics.setActiveEntities(worldGrid.livingEntityCount());
+        // Per-bucket decrement (Phase 18 D-12): replaces scalar setActiveEntities.
+        // Guarded by wasRegistered to prevent double-decrement on repeated cleanupBot calls
+        // (handleTransportError → afterConnectionClosed idempotency).
+        if (wasRegistered && admissionMetrics != null) {
+            admissionMetrics.decActiveBucket(s);
         }
     }
 

@@ -289,10 +289,13 @@ public class ActionResolver {
         if (action == null) return;
         Frame.ActionFrame previous = pendingActions.get().put(sessionId, action);
         if (previous != null && admissionMetrics != null) {
-            // D-09: last-write-wins collapse — increment the aggregate ingress-overwrite
+            // D-09: last-write-wins collapse — increment the two-tag ingress-overwrite
             // counter (paralife.admission.ingress.overwrites). Observational only; the
             // collapse itself is the protective behavior. No auto-disconnect.
-            admissionMetrics.incIngressOverwrite();
+            // Round 2 Codex HIGH: O(1) lookup via getById instead of O(N) stream.
+            org.springframework.web.socket.WebSocketSession session =
+                    sessionRegistry.getById(sessionId);   // O(1) — Round 2 Codex HIGH
+            admissionMetrics.incIngressOverwrite(session);   // session may be null → tagger handles it
         }
         if (action.verb() == 'V' && action.arg().isPresent()) {
             pendingVoteBallots.get().put(sessionId, action.arg().get());

@@ -29,13 +29,17 @@ class AdmissionGateTest {
     void setup() {
         cfg = new AdmissionConfig(2, false,
                 AdmissionConfig.TickOverloadConfig.defaults(),
-                AdmissionConfig.BackpressureConfig.defaults());
+                AdmissionConfig.BackpressureConfig.defaults(),
+                AdmissionConfig.AttributionConfig.defaults());
         respawnCfg = new RespawnConfig(3);
         worldGrid = Mockito.mock(WorldGrid.class);
         tickHealth = Mockito.mock(TickHealthMonitor.class);
         resumeRegistry = Mockito.mock(ResumeTokenRegistry.class);
         registry = new SimpleMeterRegistry();
-        metrics = new AdmissionMetrics(registry);
+        com.paralife.engine.TickEngine mockTickEngine = Mockito.mock(com.paralife.engine.TickEngine.class);
+        when(mockTickEngine.currentTick()).thenReturn(0L);
+        AttributionTagger tagger = new AttributionTagger(64, mockTickEngine);
+        metrics = new AdmissionMetrics(registry, cfg, mockTickEngine, tagger);
         gate = new AdmissionGate(cfg, respawnCfg, worldGrid, tickHealth, resumeRegistry, metrics);
 
         when(tickHealth.isOverloaded()).thenReturn(false);
@@ -57,7 +61,7 @@ class AdmissionGateTest {
 
     @Test
     void rejectsMaintenanceFirst() {
-        cfg = new AdmissionConfig(2, true, cfg.tickOverload(), cfg.backpressure());
+        cfg = new AdmissionConfig(2, true, cfg.tickOverload(), cfg.backpressure(), cfg.attribution());
         gate = new AdmissionGate(cfg, respawnCfg, worldGrid, tickHealth, resumeRegistry, metrics);
         AdmissionResult r = gate.evaluate(req(false, false, 0, Optional.empty()));
         assertThat(r).isInstanceOf(AdmissionResult.Reject.class);
@@ -143,11 +147,13 @@ class AdmissionGateTest {
 
     @Test
     void counterIncrementsOnEachRejection() {
-        cfg = new AdmissionConfig(2, true, cfg.tickOverload(), cfg.backpressure());
+        cfg = new AdmissionConfig(2, true, cfg.tickOverload(), cfg.backpressure(), cfg.attribution());
         gate = new AdmissionGate(cfg, respawnCfg, worldGrid, tickHealth, resumeRegistry, metrics);
         gate.evaluate(req(false, false, 0, Optional.empty()));
         gate.evaluate(req(false, false, 0, Optional.empty()));
-        assertThat(registry.counter(AdmissionMetrics.M_REJECTED, "reason", RejectionToken.MAINTENANCE).count())
+        // Phase 18: rejected counter now includes source tag (D-12); back-compat shim uses source=unknown.
+        assertThat(registry.counter(AdmissionMetrics.M_REJECTED,
+                "reason", RejectionToken.MAINTENANCE, "source", "unknown").count())
                 .isEqualTo(2.0);
     }
 }

@@ -1,42 +1,62 @@
 package com.paralife.admission;
 
+import com.paralife.engine.TickEngine;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
+import io.micrometer.core.instrument.config.MeterFilter;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.WebSocketSession;
 
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Operator-visibility metrics bean for Phase 17 admission control (D-17 / D-18).
+ * Operator-visibility metrics bean for Phase 18 attribution (D-12 / D-17 / D-18).
  *
- * <h2>Counter</h2>
+ * <h2>Two-tag counters and gauges</h2>
+ * <p>All admission and backpressure metrics gain {@code source[, harness]} tags
+ * derived from session attributes via {@link AttributionTagger}. Exceptions (D-12):
  * <ul>
- *   <li>{@link #M_REJECTED} — tagged counter with {@code reason=<token>} per D-17.
- *       Single counter name; tags distinguish reasons. Call {@link #incRejected(String)}.</li>
- *   <li>{@link #M_INGRESS_OVERWRITES} — aggregate counter for last-write-wins collapses
- *       in {@code ActionResolver} (D-09). Call {@link #incIngressOverwrite()}.</li>
+ *   <li>{@link #M_MAINTENANCE} — stays scalar (server-global, not per-source)</li>
+ *   <li>{@link #M_TICK_WORK_MS} — stays scalar (tick health is a server property)</li>
  * </ul>
  *
- * <h2>Gauges (D-18)</h2>
+ * <h2>Per-bucket gauge lifecycle</h2>
+ * <p>Active and stalled session counts are tracked per attribution bucket:
  * <ul>
- *   <li>{@link #M_ACTIVE_ENTITIES} — cap-relevant live occupants. Caller: {@link #setActiveEntities(int)}.</li>
- *   <li>{@link #M_MAINTENANCE} — 0/1 mirror of {@code AdmissionConfig.maintenance()}. Caller: {@link #setMaintenance(boolean)}.</li>
- *   <li>{@link #M_TICK_WORK_MS} — most-recently-completed tick wall-clock work time in ms. Caller: {@link #setLastTickWorkMs(long)}.</li>
- *   <li>{@link #M_STALLED_SESSIONS} — sessions currently in STALLED grace window (STALLED entries only, ACTIVE armed tokens excluded per codex/opencode HIGH review). Caller: {@link #setStalledSessions(int)}.</li>
+ *   <li>{@link #incActiveBucket(WebSocketSession)} — called at Allow path; reads entityId from session attrs.</li>
+ *   <li>{@link #decActiveBucket(WebSocketSession)} / {@link #decActiveBucketByTags(Tags)} — called at cleanup.</li>
+ *   <li>{@link #incStalledBucket(WebSocketSession, String)} — Round 2 Claude HIGH: entityId param is explicit
+ *       so callers can pass it BEFORE {@code attrs.remove(ATTR_ENTITY_ID)} in markStalled.</li>
+ *   <li>{@link #decStalledBucket(WebSocketSession)} / {@link #decStalledBucketByTags(Tags)} — called at rebind/expiry.</li>
+ *   <li>{@link #lookupBucketTags(String)} — returns the Tags captured at incActiveBucket/incStalledBucket time;
+ *       used by grace-expiry reapers that have no WebSocketSession.</li>
  * </ul>
  *
- * <h2>DistributionSummary</h2>
+ * <h2>MeterFilter defense-in-depth</h2>
+ * <p>{@link MeterFilter#maximumAllowableTags} is registered on both
+ * {@code paralife.admission.*} and {@code paralife.backpressure.*} prefixes as a
+ * second line of defense after {@link AttributionTagger}'s primary overflow folding.
+ *
+ * <h2>Round 2 amendments</h2>
  * <ul>
- *   <li>{@link #M_FRAME_SIZE} — outbound encoded frame size in bytes. Recorded by
- *       {@code OutboundSender.drainLoop} (Plan 06) after encode. Restored here to address
- *       codex MEDIUM operational-regression review. Call {@link #recordFrameSize(int)}.</li>
+ *   <li><b>Claude HIGH:</b> {@code incStalledBucket(WebSocketSession, String)} takes explicit entityId
+ *       so the {@code bucketTagsByEntityId} snapshot is captured with the real entityId even if
+ *       {@code attrs.remove(ATTR_ENTITY_ID)} has already run in the caller.</li>
+ *   <li><b>OpenCode HIGH:</b> Constructor is 4-arg; all six existing test files updated accordingly.</li>
+ *   <li><b>Codex HIGH:</b> {@link AttributionTagger#foldHarnessIfOverCap} emits the warn-once log
+ *       with the raw 65th harness id before folding to "overflow" — not surfaced here.</li>
  * </ul>
  */
 @Component
 public class AdmissionMetrics {
+
+    // ── Metric names ─────────────────────────────────────────────────────────
 
     public static final String M_REJECTED           = "paralife.admission.rejected";
     public static final String M_INGRESS_OVERWRITES = "paralife.admission.ingress.overwrites";
@@ -49,106 +69,289 @@ public class AdmissionMetrics {
     public static final String M_TERMINAL_DROPOUT   = "paralife.backpressure.terminal.dropouts";
     public static final String M_STALLED_TOTAL      = "paralife.backpressure.stalled.total";
 
+    /** Session attribute key for entity id — shared constant for callers that need it. */
+    public static final String ATTR_ENTITY_ID = "entityId";
+
+    // ── Dependencies ─────────────────────────────────────────────────────────
+
     private final MeterRegistry registry;
-    private final Counter ingressOverwrites;
+    private final AttributionTagger tagger;
+
+    // ── Scalar gauges (D-12: maintenance and tick-work stay scalar) ───────────
+
+    private final AtomicInteger maintenance    = new AtomicInteger();
+    private final AtomicLong    lastTickWorkMs = new AtomicLong();
+
+    // ── Per-bucket gauge state ────────────────────────────────────────────────
+
+    /** Maps Tags → active entity count per attribution bucket. */
+    private final ConcurrentHashMap<Tags, AtomicInteger> activeBuckets  = new ConcurrentHashMap<>();
+    /** Maps Tags → stalled session count per attribution bucket. */
+    private final ConcurrentHashMap<Tags, AtomicInteger> stalledBuckets = new ConcurrentHashMap<>();
+
+    /**
+     * Snapshot of attribution Tags per entityId. Written at
+     * {@link #incActiveBucket}/{@link #incStalledBucket} time; consulted by
+     * {@link #cleanupByEntityId}-style callers and grace-expiry reapers that have no
+     * WebSocketSession available. Mirrors {@code respawnCountAtStall} pattern from Phase 17.
+     */
+    private final ConcurrentHashMap<String, Tags> bucketTagsByEntityId = new ConcurrentHashMap<>();
+
+    // ── Scalar counters ──────────────────────────────────────────────────────
+
     private final Counter rebound;
     private final Counter terminalDropouts;
     private final Counter stalledTotal;
     private final DistributionSummary frameSize;
 
-    private final AtomicInteger activeEntities  = new AtomicInteger();
-    private final AtomicInteger maintenance     = new AtomicInteger();
-    private final AtomicLong    lastTickWorkMs  = new AtomicLong();
-    private final AtomicInteger stalledSessions = new AtomicInteger();
+    // ── Constructor ──────────────────────────────────────────────────────────
 
-    public AdmissionMetrics(MeterRegistry registry) {
+    /**
+     * Four-arg constructor (Round 2 OpenCode HIGH — constructor breaking change).
+     *
+     * <p>Registers:
+     * <ol>
+     *   <li>{@link MeterFilter#maximumAllowableTags} on {@code paralife.admission.*} and
+     *       {@code paralife.backpressure.*} as defense-in-depth against cardinality explosion.</li>
+     *   <li>Scalar gauges for maintenance and tick-work (D-12 invariants).</li>
+     *   <li>Scalar counters for rebound, terminal-dropout, stalled-total, frame-size.</li>
+     * </ol>
+     */
+    @Autowired
+    public AdmissionMetrics(MeterRegistry registry,
+                            AdmissionConfig admissionConfig,
+                            TickEngine tickEngine,
+                            AttributionTagger tagger) {
         this.registry = registry;
-        this.ingressOverwrites = Counter.builder(M_INGRESS_OVERWRITES)
-                .description("Action-frame ingress overwrites (last-write-wins collapse per D-09)")
-                .register(registry);
-        this.rebound = Counter.builder(M_REBOUND)
-                .description("STALLED sessions that successfully reconnected with their resume token within the grace window. "
-                        + "Operator SLI: recovery rate = rebound / stalled.total. (In steady state, stalled.total ≈ rebound + terminal_dropouts; "
-                        + "stalled.total is the right denominator — counts stalls in flight at sample time without miscount.)")
-                .register(registry);
-        this.stalledTotal = Counter.builder(M_STALLED_TOTAL)
-                .description("Sessions that transitioned into STALLED grace; terminal counter complementing the stalled.sessions gauge. "
-                        + "Operator alert: rate-of-change = stall storms in progress. SLI denominator for recovery rate.")
-                .register(registry);
-        this.terminalDropouts = Counter.builder(M_TERMINAL_DROPOUT)
-                .description("STALLED sessions whose resume token expired before reconnect; entity reaped by ResumeTokenRegistry sweep. "
-                        + "Operator SLI: rising terminal dropouts indicate either widespread slow-consumer conditions or grace-window mis-tuning.")
-                .register(registry);
-        this.frameSize = DistributionSummary.builder(M_FRAME_SIZE)
-                .description("Encoded outbound frame size in bytes; recorded by OutboundSender drain loop (Plan 06). "
-                        + "Restored to address codex MEDIUM operational regression — TickBroadcaster no longer records frame size directly (Plan 08).")
-                .baseUnit("bytes")
-                .register(registry);
-        Gauge.builder(M_ACTIVE_ENTITIES, activeEntities, AtomicInteger::get)
-                .description("Live cap-relevant occupants (D-18)")
-                .register(registry);
+        this.tagger   = tagger;
+
+        int cap = admissionConfig.attribution().maxHarnessCardinality();
+
+        // MeterFilter defense-in-depth: cap harness tag cardinality on both prefixes.
+        // The primary folding lives in AttributionTagger.foldHarnessIfOverCap; this filter
+        // is a second safety net. We allow cap+1 so the "overflow" bucket can register
+        // alongside the cap legitimate harness buckets — the tagger ensures no more than
+        // cap+1 distinct harness values ever reach the registry.
+        registry.config()
+                .meterFilter(MeterFilter.maximumAllowableTags(
+                        "paralife.admission", "harness", cap + 1, MeterFilter.deny()))
+                .meterFilter(MeterFilter.maximumAllowableTags(
+                        "paralife.backpressure", "harness", cap + 1, MeterFilter.deny()));
+
+        // Scalar D-12 gauges (no source/harness tags).
         Gauge.builder(M_MAINTENANCE, maintenance, AtomicInteger::get)
-                .description("Maintenance flag mirror: 0=off, 1=on (D-18)")
+                .description("Maintenance flag mirror: 0=off, 1=on (D-18 scalar)")
                 .register(registry);
         Gauge.builder(M_TICK_WORK_MS, lastTickWorkMs, AtomicLong::get)
-                .description("Most-recently-completed tick wall-clock work time in ms (D-18); lags by 1 tick — see 17-ADMISSION.md §5 operator caveat")
+                .description("Most-recently-completed tick wall-clock work time in ms (D-18 scalar)")
                 .register(registry);
-        Gauge.builder(M_STALLED_SESSIONS, stalledSessions, AtomicInteger::get)
-                .description("Sessions currently in STALLED grace window; ACTIVE armed tokens excluded (D-18, codex/opencode HIGH fix)")
+
+        // Scalar counters.
+        this.rebound = Counter.builder(M_REBOUND)
+                .description("STALLED sessions that successfully reconnected with their resume token")
+                .register(registry);
+        this.stalledTotal = Counter.builder(M_STALLED_TOTAL)
+                .description("Sessions that transitioned into STALLED grace")
+                .register(registry);
+        this.terminalDropouts = Counter.builder(M_TERMINAL_DROPOUT)
+                .description("STALLED sessions whose resume token expired before reconnect")
+                .register(registry);
+        this.frameSize = DistributionSummary.builder(M_FRAME_SIZE)
+                .description("Encoded outbound frame size in bytes")
+                .baseUnit("bytes")
                 .register(registry);
     }
 
     /**
-     * Increment the tagged rejection counter. Single counter name; {@code reason} tag
-     * distinguishes the cause (D-17 design: one counter per taxonomy, not one per reason).
-     *
-     * @param reason Token from {@link RejectionToken}.
+     * Back-compat single-arg constructor for pre-Phase-18 tests.
+     * Delegates with {@link AdmissionConfig#defaults()}, null tickEngine, and a default tagger.
      */
-    public void incRejected(String reason) {
+    public AdmissionMetrics(MeterRegistry registry) {
+        this(registry, AdmissionConfig.defaults(), null,
+                new AttributionTagger(64, null));
+    }
+
+    // ── Rejected counter (two-tag) ────────────────────────────────────────────
+
+    /**
+     * Increment the tagged rejection counter. Emits {@code reason + source[, harness]} tags
+     * (extends Phase 17 D-17 single-tag shape).
+     */
+    public void incRejected(String reason, WebSocketSession session) {
         Counter.builder(M_REJECTED)
                 .tag("reason", reason)
-                .description("Admission rejections by reason token (Phase 17 D-17)")
+                .tags(tagger.tagsFor(session))
+                .description("Admission rejections by reason+source (Phase 18 D-12)")
                 .register(registry)
                 .increment();
     }
 
-    /** Increment the aggregate ingress-overwrite counter (D-09 last-write-wins). */
+    /** Back-compat single-arg shim → {@link #incRejected(String, WebSocketSession)} with null session. */
+    public void incRejected(String reason) {
+        incRejected(reason, null);
+    }
+
+    // ── Ingress overwrites counter (two-tag) ─────────────────────────────────
+
+    /**
+     * Increment the aggregate ingress-overwrite counter with source/harness tags (D-09 / D-12).
+     * Session may be null (→ source=unknown).
+     */
+    public void incIngressOverwrite(WebSocketSession session) {
+        Counter.builder(M_INGRESS_OVERWRITES)
+                .tags(tagger.tagsFor(session))
+                .description("Action-frame ingress overwrites (last-write-wins collapse per D-09)")
+                .register(registry)
+                .increment();
+    }
+
+    /** Back-compat no-arg shim → {@link #incIngressOverwrite(WebSocketSession)} with null. */
     public void incIngressOverwrite() {
-        ingressOverwrites.increment();
+        incIngressOverwrite(null);
     }
 
-    /** Increment when a STALLED session reconnects and rebinds its entity within the grace window. */
-    public void incRebound() {
-        rebound.increment();
+    // ── Active bucket (per attribution bucket gauge) ──────────────────────────
+
+    /**
+     * Increment the active-entities gauge for this session's attribution bucket.
+     * Also captures entityId → Tags snapshot in {@link #bucketTagsByEntityId}.
+     * Called at the Allow/register path.
+     */
+    public void incActiveBucket(WebSocketSession session) {
+        Tags tags = tagger.tagsFor(session);
+        activeBuckets.computeIfAbsent(tags, t -> {
+            AtomicInteger ai = new AtomicInteger();
+            Gauge.builder(M_ACTIVE_ENTITIES, ai, AtomicInteger::get)
+                    .tags(t)
+                    .description("Live cap-relevant occupants per source[, harness] (D-18)")
+                    .register(registry);
+            return ai;
+        }).incrementAndGet();
+
+        // Capture entityId → Tags snapshot for cleanupByEntityId/grace-expiry reapers.
+        if (session != null) {
+            Object eidObj = session.getAttributes().get(ATTR_ENTITY_ID);
+            if (eidObj instanceof String eid) {
+                bucketTagsByEntityId.put(eid, tags);
+            }
+        }
     }
 
-    /** Increment when a STALLED session's grace window expires before reconnect — entity is reaped. */
-    public void incTerminalDropout() {
-        terminalDropouts.increment();
-    }
-
-    /** Increment when a session transitions into STALLED. SLI denominator for recovery rate (B3/D1). */
-    public void incStalledTotal() {
-        stalledTotal.increment();
+    /** Decrement active bucket for this session's attribution bucket. */
+    public void decActiveBucket(WebSocketSession session) {
+        decActiveBucketByTags(tagger.tagsFor(session));
     }
 
     /**
-     * Record an outbound encoded frame size in bytes.
-     * Called by {@code OutboundSender.drainLoop} in Plan 06 after encode.
+     * Decrement active bucket by previously-captured Tags.
+     * Used by {@code cleanupByEntityId} and grace-expiry reapers that have no session.
      */
-    public void recordFrameSize(int bytes) {
-        frameSize.record(bytes);
+    public void decActiveBucketByTags(Tags tags) {
+        if (tags == null) return;
+        AtomicInteger ai = activeBuckets.get(tags);
+        if (ai != null) ai.decrementAndGet();
     }
 
-    /** Set the cap-relevant live occupant count (D-18). */
-    public void setActiveEntities(int n)   { activeEntities.set(n); }
+    // ── Stalled bucket (per attribution bucket gauge) ─────────────────────────
 
-    /** Mirror the maintenance flag as 0 (off) or 1 (on) in the gauge (D-18). */
+    /**
+     * Increment the stalled-sessions gauge for this session's attribution bucket.
+     *
+     * <p><b>Round 2 Claude HIGH amendment:</b> takes {@code entityId} explicitly.
+     * Caller ({@code WorldWebSocketHandler.markStalled}) MUST pass entityId
+     * BEFORE calling {@code attrs.remove(ATTR_ENTITY_ID)}, otherwise the
+     * {@link #bucketTagsByEntityId} snapshot would receive null and the grace-expiry
+     * reaper would have no Tags to decrement.
+     *
+     * @param session  the STALLED session (provides attribution tags)
+     * @param entityId the entity id captured by the caller BEFORE attrs.remove
+     */
+    public void incStalledBucket(WebSocketSession session, String entityId) {
+        Tags tags = tagger.tagsFor(session);
+        stalledBuckets.computeIfAbsent(tags, t -> {
+            AtomicInteger ai = new AtomicInteger();
+            Gauge.builder(M_STALLED_SESSIONS, ai, AtomicInteger::get)
+                    .tags(t)
+                    .description("STALLED sessions in grace window per source[, harness] (D-18)")
+                    .register(registry);
+            return ai;
+        }).incrementAndGet();
+
+        // Use the EXPLICIT entityId param — session attrs may have already been cleared.
+        if (entityId != null) {
+            bucketTagsByEntityId.put(entityId, tags);
+        }
+    }
+
+    /** Decrement stalled bucket for this session's attribution bucket. */
+    public void decStalledBucket(WebSocketSession session) {
+        decStalledBucketByTags(tagger.tagsFor(session));
+    }
+
+    /**
+     * Decrement stalled bucket by previously-captured Tags.
+     * Used by rebind path and grace-expiry reapers.
+     */
+    public void decStalledBucketByTags(Tags tags) {
+        if (tags == null) return;
+        AtomicInteger ai = stalledBuckets.get(tags);
+        if (ai != null) ai.decrementAndGet();
+    }
+
+    /**
+     * Look up the attribution Tags captured at {@link #incActiveBucket} or
+     * {@link #incStalledBucket} time for the given entityId.
+     *
+     * @param entityId the entity id
+     * @return captured Tags, or {@code null} if not found
+     */
+    public Tags lookupBucketTags(String entityId) {
+        return entityId == null ? null : bucketTagsByEntityId.get(entityId);
+    }
+
+    // ── Scalar gauges (D-12: no source/harness tags) ─────────────────────────
+
+    /** Mirror the maintenance flag as 0 (off) or 1 (on) in the gauge (D-18 scalar). */
     public void setMaintenance(boolean on) { maintenance.set(on ? 1 : 0); }
 
-    /** Set the most-recently-completed tick work time in ms (D-18). Lags by 1 tick relative to dispatching TickEvent. */
+    /** Set the most-recently-completed tick work time in ms (D-18 scalar). */
     public void setLastTickWorkMs(long ms) { lastTickWorkMs.set(ms); }
 
-    /** Set the count of sessions in STALLED grace window (STALLED entries only, per D-18). */
-    public void setStalledSessions(int n)  { stalledSessions.set(n); }
+    // ── Legacy scalar setters (back-compat — kept for setMaintenance/setLastTickWorkMs callers) ──
+
+    /**
+     * @deprecated Replaced by per-bucket {@link #incActiveBucket}/{@link #decActiveBucket}.
+     *             Retained as no-op back-compat for callers updating from Phase 17.
+     *             Remove after Phase 18 wave completion.
+     */
+    @Deprecated
+    public void setActiveEntities(int n) {
+        // No-op: per-bucket gauges replace the scalar gauge.
+    }
+
+    /**
+     * @deprecated Replaced by per-bucket {@link #incStalledBucket}/{@link #decStalledBucket}.
+     *             Retained as no-op back-compat. Remove after Phase 18 wave completion.
+     */
+    @Deprecated
+    public void setStalledSessions(int n) {
+        // No-op: per-bucket gauges replace the scalar gauge.
+    }
+
+    // ── Scalar counters ──────────────────────────────────────────────────────
+
+    /** Increment when a STALLED session reconnects and rebinds its entity. */
+    public void incRebound()          { rebound.increment(); }
+
+    /** Increment when a STALLED session's grace window expires before reconnect. */
+    public void incTerminalDropout()  { terminalDropouts.increment(); }
+
+    /** Increment when a session transitions into STALLED (SLI denominator). */
+    public void incStalledTotal()     { stalledTotal.increment(); }
+
+    /**
+     * Record an outbound encoded frame size in bytes.
+     * Called by {@code OutboundSender.drainLoop}.
+     */
+    public void recordFrameSize(int bytes) { frameSize.record(bytes); }
 }

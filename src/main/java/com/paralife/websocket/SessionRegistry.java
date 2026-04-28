@@ -51,4 +51,19 @@ public class SessionRegistry {
     public WebSocketSession getSession(String sessionId) {
         return sessions.get(sessionId);
     }
+
+    /**
+     * O(1) lookup by session id (Round 2 Codex HIGH amendment).
+     *
+     * <p>ActionResolver's session lookup previously streamed over {@link #getActiveSessions()}
+     * — O(active sessions) on the action hot-path = scale regression at 1000+ bots.
+     * This method provides an O(1) alternative backed by the same
+     * {@code ConcurrentHashMap} already used for broadcast.
+     *
+     * @param sessionId the WebSocket session id
+     * @return the session, or {@code null} if not registered
+     */
+    public WebSocketSession getById(String sessionId) {
+        return sessions.get(sessionId);
+    }
 }

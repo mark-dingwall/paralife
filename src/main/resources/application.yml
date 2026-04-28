@@ -55,6 +55,8 @@ paralife:
     backpressure:
       outbound-queue-size: 128
       grace-window-ticks: 10
+    attribution:
+      max-harness-cardinality: 64
   simulation:
     energy-decay-per-tick: 1
     combat-energy-transfer: 10

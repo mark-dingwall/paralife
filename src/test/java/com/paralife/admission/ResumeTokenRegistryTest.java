@@ -26,30 +26,35 @@ class ResumeTokenRegistryTest {
         admissionConfig = new AdmissionConfig(
                 256, false,
                 AdmissionConfig.TickOverloadConfig.defaults(),
-                new AdmissionConfig.BackpressureConfig(16, 5));   // grace=5
+                new AdmissionConfig.BackpressureConfig(16, 5),   // grace=5
+                AdmissionConfig.AttributionConfig.defaults());
         meterReg = new SimpleMeterRegistry();
-        metrics = new AdmissionMetrics(meterReg);
+        com.paralife.engine.TickEngine mockTickEngine = org.mockito.Mockito.mock(com.paralife.engine.TickEngine.class);
+        org.mockito.Mockito.when(mockTickEngine.currentTick()).thenReturn(0L);
+        AttributionTagger tagger = new AttributionTagger(64, mockTickEngine);
+        metrics = new AdmissionMetrics(meterReg, admissionConfig, mockTickEngine, tagger);
         registry = new ResumeTokenRegistry(admissionConfig, metrics);
     }
 
     @Test
-    void issueActiveMatchesFormatAndDoesNotIncrementGauge() {
+    void issueActiveMatchesFormatAndDoesNotIncrementStalledSize() {
         String token = registry.issueActive("entity-1", "session-1");
         assertThat(token).matches(TOKEN_FORMAT);
         assertThat(registry.size()).isEqualTo(1);
         assertThat(registry.stalledSize()).isEqualTo(0);
-        assertThat(meterReg.get(AdmissionMetrics.M_STALLED_SESSIONS).gauge().value()).isEqualTo(0.0);
+        // Phase 18: M_STALLED_SESSIONS is now per-bucket (no scalar gauge); ResumeTokenRegistry
+        // no longer drives the gauge directly — WorldWebSocketHandler.markStalled does.
     }
 
     @Test
-    void convertToStalledFlipsStateAndIncrementsGauge() {
+    void convertToStalledFlipsStateAndUpdatesStalledSize() {
         String t = registry.issueActive("entity-1", "session-1");
         registry.convertToStalled(t, 100L);
         assertThat(registry.peek(t)).isPresent();
         assertThat(registry.peek(t).get().state()).isEqualTo(ResumeTokenRegistry.State.STALLED);
         assertThat(registry.peek(t).get().expiresAtTick()).isEqualTo(105L);
         assertThat(registry.stalledSize()).isEqualTo(1);
-        assertThat(meterReg.get(AdmissionMetrics.M_STALLED_SESSIONS).gauge().value()).isEqualTo(1.0);
+        // Per-bucket gauge is driven by WorldWebSocketHandler.markStalled, not ResumeTokenRegistry.
     }
 
     @Test
@@ -89,7 +94,7 @@ class ResumeTokenRegistryTest {
         ResumeTokenRegistry.ResumeEntry fresh = registry.peek(result.get().freshResumeToken()).orElseThrow();
         assertThat(fresh.state()).isEqualTo(ResumeTokenRegistry.State.ACTIVE);
         assertThat(registry.stalledSize()).isEqualTo(0);   // STALLED consumed; new token is ACTIVE
-        assertThat(meterReg.get(AdmissionMetrics.M_STALLED_SESSIONS).gauge().value()).isEqualTo(0.0);
+        // Phase 18: per-bucket gauge is driven by WorldWebSocketHandler, not ResumeTokenRegistry.
     }
 
     @Test
@@ -185,14 +190,18 @@ class ResumeTokenRegistryTest {
 
     @Test
     void gaugeFiltersToStalledOnly() {
+        // Phase 18: M_STALLED_SESSIONS is now per-bucket; no scalar gauge exists.
+        // ResumeTokenRegistry tracks stalled count internally; per-bucket gauge is driven by
+        // WorldWebSocketHandler.markStalled → AdmissionMetrics.incStalledBucket, not this class.
         registry.issueActive("e1", "s1");
         registry.issueActive("e2", "s2");
         registry.issueActive("e3", "s3");
-        assertThat(meterReg.get(AdmissionMetrics.M_STALLED_SESSIONS).gauge().value()).isEqualTo(0.0);
+        // No stalled entries yet — stalledSize should be 0.
+        assertThat(registry.stalledSize()).isEqualTo(0);
         // Stall one of them
         String t4 = registry.issueActive("e4", "s4");
         registry.convertToStalled(t4, 100L);
-        assertThat(meterReg.get(AdmissionMetrics.M_STALLED_SESSIONS).gauge().value()).isEqualTo(1.0);
+        assertThat(registry.stalledSize()).isEqualTo(1);
         assertThat(registry.size()).isEqualTo(4);   // 4 entries total, only 1 STALLED
     }
 }

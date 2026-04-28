@@ -28,7 +28,11 @@ class OutboundSenderTest {
     @BeforeEach
     void setup() {
         meterReg = new SimpleMeterRegistry();
-        metrics = new AdmissionMetrics(meterReg);
+        AdmissionConfig admissionConfig = AdmissionConfig.defaults();
+        com.paralife.engine.TickEngine mockTickEngine = org.mockito.Mockito.mock(com.paralife.engine.TickEngine.class);
+        org.mockito.Mockito.when(mockTickEngine.currentTick()).thenReturn(0L);
+        AttributionTagger tagger = new AttributionTagger(64, mockTickEngine);
+        metrics = new AdmissionMetrics(meterReg, admissionConfig, mockTickEngine, tagger);
         sender = new OutboundSender(metrics);
     }
 
