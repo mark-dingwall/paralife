@@ -93,25 +93,22 @@ class BotRunnerRegressionTest {
     }
 
     @Test
-    void stdoutContainsBotRunnerStarting() {
-        PrintStream originalOut = System.out;
+    void stderrContainsUsageMessage_onBadArgs() {
+        // BotRunner prints usage to stderr when args are wrong.
+        // BotRunner.run() returns 1 for arg errors — verify that AND that it doesn't throw.
+        PrintStream originalErr = System.err;
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
-        System.setOut(new PrintStream(captured));
+        System.setErr(new PrintStream(captured));
+        int rc;
         try {
-            BotRunner.run(new String[]{serverUri(), "1", "1"},
-                    BotFleet::new, BotFactory::new);
+            rc = BotRunner.run(new String[]{}, BotFleet::new, BotFactory::new);
         } finally {
-            System.setOut(originalOut);
+            System.setErr(originalErr);
         }
-        // BotRunner uses SLF4J not System.out — so the "BotRunner starting" message goes to
-        // the log, not stdout. The stdout output is just the error lines for bad args.
-        // The key verification is that the run method completes without throwing.
-        assertThat(rc()).isEqualTo(0); // trivially true here since run completes
-    }
-
-    /** Helper to get exit code without side-effecting System.out */
-    private int rc() {
-        return 0; // placeholder — stdoutContainsBotRunnerStarting just verifies it doesn't throw
+        assertThat(rc).isEqualTo(1);
+        // The stderr output should contain the usage line.
+        String output = captured.toString();
+        assertThat(output).contains("Usage: BotRunner");
     }
 
     @Test

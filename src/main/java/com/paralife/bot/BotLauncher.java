@@ -1,25 +1,34 @@
 package com.paralife.bot;
 
-import com.paralife.world.Entity.ParticleType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Optional;
 
 /**
- * Launches N bot clients with balanced particle types.
- * Each bot connects via WebSocket and runs autonomously using {@link HeuristicBrain}.
+ * Thin deprecated facade over {@link BotFleet} (Phase 18 D-04).
+ *
+ * <p><b>Why retained rather than deleted:</b> three existing test files
+ * ({@code LoadTest}, {@code PopulationDynamicsTest}, {@code MetabolismIntegrationTest})
+ * import and use {@code BotLauncher} directly. Deleting it would break those tests.
+ * The facade preserves the original observable contract (launch + waitForRegistered timeout,
+ * shutdown, getBots) while delegating to {@link BotFleet} internally.
+ *
+ * <p><b>Migration path:</b> callers should migrate to {@link BotFleet} directly.
+ * The old 30s ceiling ({@code allDone.await(30, TimeUnit.SECONDS)}) is preserved
+ * for backwards compatibility — {@code BotFleet.awaitAllSettled().get(30, ...)} replicates
+ * the same behaviour.
+ *
+ * @deprecated Use {@link BotFleet} directly. This facade will be removed in a future phase.
  */
+@Deprecated(since = "0.18", forRemoval = true)
 public class BotLauncher {
 
     private static final Logger log = LoggerFactory.getLogger(BotLauncher.class);
 
-    private final List<BotClient> bots = new CopyOnWriteArrayList<>();
+    private final BotFleet fleet = new BotFleet();
+    private volatile String serverUri;
 
     /**
      * Launch N bots connecting to the given server URI.
@@ -31,63 +40,40 @@ public class BotLauncher {
      * @return list of BotClient instances (some may not be registered)
      */
     public List<BotClient> launch(String serverUri, int count) throws Exception {
-        ParticleType[] types = ParticleType.values();
-        List<BotClient> launched = new CopyOnWriteArrayList<>();
-        CountDownLatch allDone = new CountDownLatch(count);
-        AtomicInteger registered = new AtomicInteger(0);
+        this.serverUri = serverUri;
+        BotFactory factory = new BotFactory(serverUri);
+        List<BotClient> bots = fleet.launch(
+                serverUri, count,
+                BotIdentity.unknown(),   // back-compat: old BotLauncher had no identity
+                RampUpSpec.instant(),
+                SpeciesMix.balanced(),
+                factory);
 
-        for (int i = 0; i < count; i++) {
-            ParticleType type = types[i % types.length];
-            // Map the ParticleType enum to SCHEMA §6.1 species char (C/M/S).
-            char species = switch (type) {
-                case CATALYST -> 'C';
-                case MEMBRANE -> 'M';
-                case SPORE -> 'S';
-            };
-            BotClient bot = new BotClient(serverUri, species,
-                    new HeuristicBrain(HeuristicBrain.REPRODUCE_THRESHOLD));
-            launched.add(bot);
-            bots.add(bot);
-
-            Thread.startVirtualThread(() -> {
-                try {
-                    bot.connect();
-                    if (bot.waitForRegistered(10, TimeUnit.SECONDS)) {
-                        registered.incrementAndGet();
-                    }
-                } catch (Exception e) {
-                    log.warn("Bot failed to connect: {}", e.getMessage());
-                } finally {
-                    allDone.countDown();
-                }
-            });
-        }
-
-        // Wait for all bots to finish connecting + registering
-        if (!allDone.await(30, TimeUnit.SECONDS)) {
+        // Preserve the old 30s ceiling for back-compat with existing callers.
+        try {
+            fleet.awaitAllSettled().get(30, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
             log.warn("Not all bots finished connecting within timeout");
+        } catch (Exception e) {
+            log.warn("Error awaiting bots: {}", e.getMessage());
         }
 
-        log.info("BotLauncher: {}/{} bots registered", registered.get(), count);
-
-        return new ArrayList<>(launched);
+        log.info("BotLauncher: {}/{} bots registered", fleet.currentRegistered(), count);
+        return bots;
     }
 
     /**
      * Disconnect all launched bots.
      */
     public void shutdown() {
-        for (BotClient bot : bots) {
-            bot.disconnect();
-        }
-        log.info("BotLauncher: {} bots disconnected", bots.size());
-        bots.clear();
+        fleet.shutdown();
+        log.info("BotLauncher: shutdown complete");
     }
 
     /**
      * Get all launched bots.
      */
     public List<BotClient> getBots() {
-        return List.copyOf(bots);
+        return fleet.getBots();
     }
 }
