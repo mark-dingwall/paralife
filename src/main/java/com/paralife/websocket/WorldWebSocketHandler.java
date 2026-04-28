@@ -4,9 +4,12 @@ import com.paralife.admission.AdmissionConfig;
 import com.paralife.admission.AdmissionGate;
 import com.paralife.admission.AdmissionMetrics;
 import com.paralife.admission.AdmissionResult;
+import com.paralife.admission.AttributionSanitizer;
+import com.paralife.admission.AttributionTagger;
 import com.paralife.admission.OutboundSender;
 import com.paralife.admission.RejectionToken;
 import com.paralife.admission.ResumeTokenRegistry;
+import com.paralife.bot.BotIdentity;
 import com.paralife.codec.CodecException;
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
@@ -31,6 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.http.HttpHeaders;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -195,9 +199,10 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
             long currentTick = tickEngine.currentTick();
             WebSocketSession s = sessionRegistry.getSession(sessionId);
             if (s == null) return;
-            log.info("BACKPRESSURE stalled tick={} session={} queue-depth={} limit={}",
+            log.info("BACKPRESSURE stalled tick={} session={} queue-depth={} limit={} {}",
                     currentTick, sessionId, depth,
-                    admissionConfig.backpressure().outboundQueueSize());
+                    admissionConfig.backpressure().outboundQueueSize(),
+                    AttributionTagger.formatLogFields(s));
             markStalled(s, currentTick);
         });
 
@@ -217,6 +222,35 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         if (outboundSender != null) {
             outboundSender.attachSession(session, admissionConfig.backpressure().outboundQueueSize());
         }
+
+        // Phase 18 D-06: read handshake identity. Spring's HttpHeaders is case-insensitive.
+        HttpHeaders headers = session.getHandshakeHeaders();
+        String rawSource = headers.getFirst("X-Paralife-Source");
+        String rawHarnessId = headers.getFirst("X-Paralife-Harness");
+
+        // Source: bounded-taxonomy filter (T-18-01). Values outside taxonomy fold to "unknown".
+        String source = (rawSource == null || rawSource.isBlank())
+                ? "unknown"
+                : rawSource.trim();
+        if (!BotIdentity.SOURCE_TAXONOMY.contains(source)) {
+            source = "unknown";
+        }
+        session.getAttributes().put(AttributionTagger.ATTR_SOURCE, source);
+
+        // Harness: server-side sanitization via the shared helper (Round 2 Codex HIGH).
+        // Only stash if source=harness AND sanitizer accepts the value. Sanitizer rejects
+        // ASCII control chars including CR/LF; truncates to 32 chars.
+        if ("harness".equals(source)) {
+            AttributionSanitizer.sanitizeHarnessId(rawHarnessId).ifPresent(sanitized ->
+                    session.getAttributes().put(AttributionTagger.ATTR_HARNESS, sanitized));
+        }
+
+        long currentTick = tickEngine.currentTick();
+        Object harnessAttr = session.getAttributes().get(AttributionTagger.ATTR_HARNESS);
+        log.info("HARNESS connected tick={} session={} harness={} source={} active={}",
+                currentTick, session.getId(),
+                harnessAttr != null ? harnessAttr : "-", source,
+                sessionRegistry.getSessionCount());
         log.info("Client connected: {} (total: {})", session.getId(), sessionRegistry.getSessionCount());
     }
 
@@ -225,20 +259,32 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         String sessionId = session.getId();
         boolean wasStalled = isStalled(session.getAttributes());
 
+        // Capture attribution fields before any attribute removal.
+        String closeReason = wasStalled ? "stalled-held" : "graceful";
+        Object harnessAttr = session.getAttributes().get(AttributionTagger.ATTR_HARNESS);
+        String harnessField = harnessAttr != null ? harnessAttr.toString() : "-";
+        Object sourceAttr = session.getAttributes().get(AttributionTagger.ATTR_SOURCE);
+        String sourceField = sourceAttr instanceof String s ? s : "unknown";
+
         // ALWAYS detach sender VT and unregister the WebSocket session.
         if (outboundSender != null) {
             outboundSender.detachSession(sessionId);
         }
         sessionRegistry.unregister(sessionId);
 
+        // Phase 18 D-14: HARNESS disconnected marker emitted on every exit path.
+        log.info("HARNESS disconnected tick={} session={} harness={} source={} reason={}",
+                tickEngine.currentTick(), sessionId, harnessField, sourceField, closeReason);
+
         if (wasStalled) {
             // Phase 17 D-12: do NOT reap entity — it is held in grace by ResumeTokenRegistry.
             // sweep @Order(1) is the sole reaper. The BotRegistry binding stays in place until
             // (a) client reconnects with the resume token (rebind swaps sessionId), or
             // (b) grace expires and cleanupByEntityId fires.
-            log.info("BACKPRESSURE held-on-close tick={} session={} status={} entity={}",
+            log.info("BACKPRESSURE held-on-close tick={} session={} status={} entity={} {}",
                     tickEngine.currentTick(), sessionId, status,
-                    session.getAttributes().get(ATTR_ENTITY_ID));
+                    session.getAttributes().get(ATTR_ENTITY_ID),
+                    AttributionTagger.formatLogFields(session));
             return;
         }
 
@@ -345,8 +391,9 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
             botRegistry.rebindSession(session.getId(), rebind.entityId());
             sendFrame(session, new Frame.SyncFrame(rebind.entityId(),
                     Optional.of(rebind.freshResumeToken()), List.of()));
-            log.info("BACKPRESSURE resumed tick={} session={} entity={} respawnCountRestored={}",
-                    currentTick, session.getId(), rebind.entityId(), snapshot);
+            log.info("BACKPRESSURE resumed tick={} session={} entity={} respawnCountRestored={} {}",
+                    currentTick, session.getId(), rebind.entityId(), snapshot,
+                    AttributionTagger.formatLogFields(session));
             return;
         }
 
