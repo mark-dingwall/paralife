@@ -18,9 +18,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -79,6 +81,19 @@ public class BotClient {
     private final AtomicReference<BotState> state;
 
     private final AtomicBoolean shutdown = new AtomicBoolean(false);
+
+    // Phase 18 Plan 04: close callback support (D-04 BotFleet liveCount tracking).
+    // CopyOnWriteArrayList for safe iteration while new callbacks may be registered.
+    private final CopyOnWriteArrayList<Runnable> closeCallbacks = new CopyOnWriteArrayList<>();
+
+    /**
+     * Round 2 Codex HIGH amendment: CAS gate so close callbacks fire EXACTLY ONCE per
+     * BotClient lifetime. Without this, {@code disconnect()} from the owning thread and
+     * Jetty's {@code @OnWebSocketClose} from the read thread can both call
+     * {@code fireCloseCallbacks()}, decrementing {@code BotFleet.liveCount} twice and
+     * causing it to go negative.
+     */
+    private final AtomicBoolean closedFired = new AtomicBoolean(false);
 
     private WebSocketClient client;
     private volatile Session session;
@@ -198,6 +213,10 @@ public class BotClient {
         } catch (Exception e) {
             log.warn("Error stopping client: {}", e.getMessage());
         }
+        // Phase 18 D-04: fire close callbacks AFTER the session is closed so callers
+        // (e.g. BotFleet.liveCount decrement) see consistent state. CAS-guarded so
+        // concurrent calls from disconnect() + Jetty @OnWebSocketClose fire exactly once.
+        fireCloseCallbacks();
     }
 
     public boolean isConnected() {
@@ -208,6 +227,40 @@ public class BotClient {
     /** Phase 18 D-06: returns the harness identity carried in the handshake headers. */
     public BotIdentity identity() {
         return identity;
+    }
+
+    /**
+     * Register a callback to be invoked when this BotClient closes (either via explicit
+     * {@link #disconnect()} or remote close from the server). Phase 18 D-04: {@link BotFleet}
+     * uses this hook to track {@code liveCount} for {@code BotFleet.currentRegistered()}.
+     *
+     * <p><b>Fire-once contract (Round 2 Codex HIGH):</b> regardless of how many close paths
+     * trigger ({@code disconnect()} from the owning thread + Jetty {@code @OnWebSocketClose}
+     * from the read thread), each registered Runnable runs at most once per BotClient lifetime.
+     * The gate is an {@link AtomicBoolean} compare-and-set; only the first close path wins.
+     *
+     * <p><b>Note:</b> STALLED-pivot reconnects (Phase 17 D-13) are NOT reported via this hook —
+     * the BotClient internal reconnect loop handles those transparently.
+     */
+    public void onClose(Runnable r) {
+        closeCallbacks.add(Objects.requireNonNull(r, "close callback must not be null"));
+    }
+
+    /**
+     * CAS-guarded fire — runs all registered close callbacks EXACTLY ONCE per BotClient
+     * lifetime, regardless of how many close paths call this method concurrently.
+     */
+    private void fireCloseCallbacks() {
+        if (!closedFired.compareAndSet(false, true)) {
+            return; // another close path already fired the callbacks
+        }
+        for (Runnable r : closeCallbacks) {
+            try {
+                r.run();
+            } catch (RuntimeException e) {
+                log.warn("close callback failed: {}", e.getMessage());
+            }
+        }
     }
 
     public boolean isRegistered() {
@@ -435,6 +488,11 @@ public class BotClient {
         @OnWebSocketClose
         public void onClose(int statusCode, String reason) {
             log.info("WS closed: status={} reason={}", statusCode, reason);
+            // Phase 18 D-04: fire close callbacks BEFORE reconnect logic so callers
+            // (e.g. BotFleet.liveCount decrement) see the close event.
+            // CAS gate in fireCloseCallbacks() ensures this fires EXACTLY ONCE even if
+            // disconnect() and this Jetty path both trigger (Round 2 Codex HIGH).
+            fireCloseCallbacks();
             if (resumeToken != null && !shutdown.get()) {
                 // Phase 17 STALLED-pivot: reconnect on a fresh WS to attempt re-bind within grace window.
                 // Jittered 100–300ms — anti-thundering-herd when many sessions stall together
