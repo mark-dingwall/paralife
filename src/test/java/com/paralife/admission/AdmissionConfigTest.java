@@ -56,7 +56,8 @@ class AdmissionConfigTest {
         assertThatThrownBy(() ->
                 new AdmissionConfig(0, false,
                         AdmissionConfig.TickOverloadConfig.defaults(),
-                        AdmissionConfig.BackpressureConfig.defaults()))
+                        AdmissionConfig.BackpressureConfig.defaults(),
+                        AdmissionConfig.AttributionConfig.defaults()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("paralife.admission.cap");
     }

@@ -26,7 +26,8 @@ class ResumeTokenRegistryTest {
         admissionConfig = new AdmissionConfig(
                 256, false,
                 AdmissionConfig.TickOverloadConfig.defaults(),
-                new AdmissionConfig.BackpressureConfig(16, 5));   // grace=5
+                new AdmissionConfig.BackpressureConfig(16, 5),   // grace=5
+                AdmissionConfig.AttributionConfig.defaults());
         meterReg = new SimpleMeterRegistry();
         metrics = new AdmissionMetrics(meterReg);
         registry = new ResumeTokenRegistry(admissionConfig, metrics);

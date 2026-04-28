@@ -24,7 +24,8 @@ public record AdmissionConfig(
         @DefaultValue("256") int cap,
         @DefaultValue("false") boolean maintenance,
         @DefaultValue TickOverloadConfig tickOverload,
-        @DefaultValue BackpressureConfig backpressure) {
+        @DefaultValue BackpressureConfig backpressure,
+        @DefaultValue AttributionConfig attribution) {
 
     /**
      * Conservative default: 2.5x the validated 100-bot operator envelope,
@@ -41,12 +42,14 @@ public record AdmissionConfig(
         }
         if (tickOverload == null) tickOverload = TickOverloadConfig.defaults();
         if (backpressure == null) backpressure = BackpressureConfig.defaults();
+        if (attribution == null) attribution = AttributionConfig.defaults();
     }
 
     /** Convenience for tests that instantiate without Spring. */
     public static AdmissionConfig defaults() {
         return new AdmissionConfig(DEFAULT_CAP, false,
-                TickOverloadConfig.defaults(), BackpressureConfig.defaults());
+                TickOverloadConfig.defaults(), BackpressureConfig.defaults(),
+                AttributionConfig.defaults());
     }
 
     /**
@@ -141,6 +144,35 @@ public record AdmissionConfig(
          */
         public static BackpressureConfig defaults() {
             return new BackpressureConfig(128, 10);
+        }
+    }
+
+    /**
+     * Attribution cardinality configuration (Phase 18, D-10).
+     *
+     * <p>Controls the maximum number of unique {@code harness} tag values tracked in
+     * Micrometer gauges/counters. The 65th-and-beyond unique harness id folds to
+     * {@code harness=overflow}; a one-time WARN log is emitted from
+     * {@link AttributionTagger#foldHarnessIfOverCap} so the real 65th harness id is
+     * captured (not just "overflow").
+     *
+     * <p>Bound to {@code paralife.admission.attribution.*}.
+     */
+    public record AttributionConfig(
+            @DefaultValue("64") int maxHarnessCardinality) {
+
+        @ConstructorBinding
+        public AttributionConfig {
+            if (maxHarnessCardinality < 1) {
+                throw new IllegalArgumentException(
+                        "paralife.admission.attribution.max-harness-cardinality must be >= 1 (got "
+                                + maxHarnessCardinality + ")");
+            }
+        }
+
+        /** Defaults: cap=64 covering realistic multi-harness-JVM deployments. */
+        public static AttributionConfig defaults() {
+            return new AttributionConfig(64);
         }
     }
 }

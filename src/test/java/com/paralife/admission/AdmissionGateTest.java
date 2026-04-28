@@ -29,7 +29,8 @@ class AdmissionGateTest {
     void setup() {
         cfg = new AdmissionConfig(2, false,
                 AdmissionConfig.TickOverloadConfig.defaults(),
-                AdmissionConfig.BackpressureConfig.defaults());
+                AdmissionConfig.BackpressureConfig.defaults(),
+                AdmissionConfig.AttributionConfig.defaults());
         respawnCfg = new RespawnConfig(3);
         worldGrid = Mockito.mock(WorldGrid.class);
         tickHealth = Mockito.mock(TickHealthMonitor.class);
@@ -57,7 +58,7 @@ class AdmissionGateTest {
 
     @Test
     void rejectsMaintenanceFirst() {
-        cfg = new AdmissionConfig(2, true, cfg.tickOverload(), cfg.backpressure());
+        cfg = new AdmissionConfig(2, true, cfg.tickOverload(), cfg.backpressure(), cfg.attribution());
         gate = new AdmissionGate(cfg, respawnCfg, worldGrid, tickHealth, resumeRegistry, metrics);
         AdmissionResult r = gate.evaluate(req(false, false, 0, Optional.empty()));
         assertThat(r).isInstanceOf(AdmissionResult.Reject.class);
@@ -143,7 +144,7 @@ class AdmissionGateTest {
 
     @Test
     void counterIncrementsOnEachRejection() {
-        cfg = new AdmissionConfig(2, true, cfg.tickOverload(), cfg.backpressure());
+        cfg = new AdmissionConfig(2, true, cfg.tickOverload(), cfg.backpressure(), cfg.attribution());
         gate = new AdmissionGate(cfg, respawnCfg, worldGrid, tickHealth, resumeRegistry, metrics);
         gate.evaluate(req(false, false, 0, Optional.empty()));
         gate.evaluate(req(false, false, 0, Optional.empty()));

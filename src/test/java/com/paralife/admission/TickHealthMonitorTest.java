@@ -27,7 +27,8 @@ class TickHealthMonitorTest {
         admissionConfig = new AdmissionConfig(
                 256, false,
                 new AdmissionConfig.TickOverloadConfig(80, 60, 5),  // window=5
-                AdmissionConfig.BackpressureConfig.defaults());
+                AdmissionConfig.BackpressureConfig.defaults(),
+                AdmissionConfig.AttributionConfig.defaults());
         metrics = new AdmissionMetrics(new SimpleMeterRegistry());
         monitor = new TickHealthMonitor(tickEngine, admissionConfig, tickConfig, metrics);
     }
