@@ -1,339 +1,555 @@
 ---
 phase: 18
 reviewers: [gemini, claude, codex, opencode]
-reviewed_at: 2026-04-28T06:12:21Z
-plans_reviewed: [18-01-PLAN.md, 18-02-PLAN.md, 18-03-PLAN.md, 18-04-PLAN.md, 18-05-PLAN.md, 18-06-PLAN.md]
+reviewed_at: 2026-04-28T07:05:00Z
+plans_reviewed:
+  - 18-01-PLAN.md
+  - 18-02-PLAN.md
+  - 18-03-PLAN.md
+  - 18-04-PLAN.md
+  - 18-05-PLAN.md
+  - 18-06-PLAN.md
 models:
-  gemini: gemini-3.1-pro-preview
-  codex: gpt-5.5 (reasoning_effort=high)
-  claude: opus (effort=xhigh)
+  gemini: gemini-2.5-pro (3.1-pro-preview/3-flash-preview both 429 MODEL_CAPACITY_EXHAUSTED)
+  claude: opus --effort xhigh
+  codex: gpt-5.5 reasoning_effort=high
   opencode: openrouter/moonshotai/kimi-k2.6
+round: 2 (post-replan; supersedes earlier 18-REVIEWS.md from 2026-04-28T06:12:21Z)
 ---
 
-# Cross-AI Plan Review — Phase 18
+# Cross-AI Plan Review — Phase 18 (Round 2)
 
-External load harness + harness-identity attribution. Four independent reviewers, top-tier models with maximum capability/effort flags.
+## Gemini Review
 
----
-
-## Gemini Review (gemini-3.1-pro-preview)
-
-# Cross-AI Plan Review
+# Plan Review: Phase 18 - External Load Harness & Harness Identity
 
 ## 1. Summary
-The implementation plans for Phase 18 provide a highly robust, well-sequenced integration of an external load harness and per-instance identity attribution. The architecture correctly isolates the standalone `LoadHarness` JVM from the server's Spring context, leans on standard ecosystem tooling (Picocli, Jackson, Micrometer `MeterFilter`), and introduces a clean `BotFleet` abstraction to bypass the legacy 30-second registration ceiling. The rigorous attention to metric safety—specifically the bounded-cardinality cap and the true high-water-mark tracking—is excellent.
+
+The implementation plans for Phase 18 are exceptionally well-structured, detailed, and robust. They demonstrate a thorough understanding of the requirements (SCALE-03, SCALE-04, SCALE-05) and provide a clear, phased execution path. The incorporation of feedback from the initial cross-AI review has been exemplary; all identified high and medium-severity concerns have been addressed through thoughtful amendments, significantly de-risking the phase. The plans now present a low-risk, high-confidence path to delivering a scalable load harness with end-to-end identity attribution, while respecting existing project architecture and conventions.
 
 ## 2. Strengths
-- **Zero-Spring Harness (Plan 05):** Keeping `LoadHarness` as a pure `public static void main` avoids unnecessary startup costs and cleanly enforces architectural separation between the client process and server-side dependencies.
-- **Cardinality Blast-Radius Protection (Plan 03):** Using Micrometer's `MeterFilter.maximumAllowableTags` with an inline mapper to fold over-cap values to `overflow` (and warning exactly once) elegantly prevents metric-explosion DoS (T-18-02) without triggering the known `deny()` memory leak.
-- **High-Water Mark Accuracy (Plan 04):** The paired-atomic approach (`liveCount` and `highWater`) in `BotFleet` perfectly captures the peak registration count, systematically avoiding the common cumulative-counter anti-pattern.
-- **Dependency Sequencing:** The wave ordering is flawless. It sequences the foundational identity schema and metric helpers (Wave 1: Plans 01/03) before the server ingestion (Wave 2: Plan 02) and fleet refactor (Wave 2: Plan 04), culminating in the harness execution (Wave 3: Plan 05) and E2E documentation/verification (Wave 4: Plan 06).
-- **STALLED-Pivot Rebind Preservation (Plan 06):** Explicitly validating that `BotClient` re-sends headers on reconnect and permanently locking this attribution persistence through `AttributionRebindTest` addresses the phase's most subtle failure mode (T-18-04).
+
+The plans exhibit numerous strengths, making them a model for phase execution:
+
+- **Systematic Decomposition:** The breakdown into six plans across four waves is logical and enforces dependencies correctly. Foundational work on client-side identity (Plan 01) and server-side metrics APIs (Plan 03) is completed in Wave 1, enabling parallel work and clean integration in subsequent waves.
+- **Robustness and Safety:** The design excels in defensive programming. The multi-layered approach to cardinality management (client-side validation in `BotIdentity`, server-side taxonomy filtering, and a `MeterFilter` cap in `AdmissionMetrics`) provides a costless and effective safety net against metric-explosion DoS (T-18-02).
+- **Correctness by Construction:** The plans systematically address subtle but critical failure modes. The "STALLED-pivot" attribution loss (T-18-04) is mitigated by design in Plan 01 (`BotClient` re-sends headers) and locked by a dedicated integration test (`AttributionRebindTest`) in Plan 06. Likewise, amendments to Plan 03 to handle gauge lifecycle and idempotency prevent silent metric drift.
+- **Excellent Test Coverage:** Every significant behavior is paired with a specific test, from unit-level validation of Picocli converters to complex integration tests for STALLED-rebind lifecycle. The addition of `ListAppender` tests to lock log-marker format contracts is a significant improvement over brittle `grep` checks.
+- **Clear Documentation and Forward Compatibility:** The plans treat documentation (`18-HARNESS.md`, `CLAUDE.md`) as a key deliverable, ensuring Phase 21 can build upon this work. The `BotFactory` seam (Plan 04) is a textbook example of correctly-sized forward compatibility, enabling future work (backlog 999.2) without over-engineering.
 
 ## 3. Concerns
-- **MEDIUM - Potential Metric Drift on Idempotent Cleanup (Plan 03):** `decActiveBucket(session)` is wired into `WorldWebSocketHandler.cleanupBot`. However, `cleanupBot` can be invoked multiple times for the same session (e.g., `handleTransportError` followed immediately by `afterConnectionClosed`). If `decActiveBucket` is called unconditionally on every `cleanupBot` invocation, the tag-keyed gauge bucket will double-decrement, causing the active entity metric to drift below the true grid count.
-- **LOW - JSONL File Contention on Windows (Plan 05):** The report writer relies on `StandardOpenOption.APPEND + SYNC` for the JSONL counter lines. While this is crash-safe, concurrent reads (e.g., from an operator running `tail -f` or a dashboarding tool) on Windows might occasionally throw a `FileSystemException` due to mandatory locking during the write.
-- **LOW - `BotClient.onClose` Hook Threading (Plan 04):** Plan 04 adds an `onClose(Runnable)` hook to `BotClient` to decrement `BotFleet`'s `liveCount`. Ensure this hook is invoked consistently regardless of whether the disconnect is initiated locally (via `disconnect()`) or remotely by the server.
+
+The amended plans have successfully resolved all original high-severity concerns. The remaining concerns are minor execution details rather than design flaws.
+
+- **LOW - Manual Test Refactoring:** Plan 18-03 correctly identifies that the `AdmissionMetrics` constructor change is a breaking change for tests that instantiate it directly. The plan relies on the executor to "audit all test sites and update". While correct, this manual step carries a small risk of a missed update, which would only be caught during a full `./gradlew test` run.
+- **LOW - Concurrency Complexity in `AttributionTagger`:** The implementation for `foldHarnessIfOverCap` in Plan 18-03 uses `putIfAbsent` and a potential `remove` to handle concurrent registration attempts at the cardinality cap boundary. While the logic appears sound, this is a complex concurrent pattern. For the current use case (internal load harness), the risk is negligible, but it's a piece of code that would warrant significant stress testing in a more hostile, multi-tenant environment.
 
 ## 4. Suggestions
-- **Guard Metric Decrements (Plan 03):** Instruct the executor to wrap the `admissionMetrics.decActiveBucket(session)` call inside `WorldWebSocketHandler.cleanupBot` within the same `if (wasRegistered)` block that currently guards `admissionGate.releaseSlot()`. This guarantees the gauge bucket is decremented exactly once per session, preserving the single-source-of-truth invariant.
-- **Add JSONL Write Retries (Plan 05):** In `ReportWriter.appendJsonlCounter`, consider wrapping the `Files.writeString` call in a brief retry loop (e.g., 3 attempts with a 50ms sleep) to gracefully handle transient file locks from external readers on Windows filesystems.
-- **Ensure Strict `BotClient` Cleanup (Plan 04):** When adding the `onClose` hook to `BotClient`, ensure the callbacks are executed inside a `finally` block or guaranteed execution path within the Jetty `@OnWebSocketClose` handler and the manual `disconnect()` method.
+
+The plans are already in excellent condition. The following are minor suggestions to further harden execution:
+
+- **Explicitly Identify Test Refactoring Sites (Plan 18-03):** To mitigate the manual risk of the `AdmissionMetrics` constructor change, the plan could be enhanced with a `verify` step that runs `grep -l 'new AdmissionMetrics(' src/test/java/` to list the files that the executor must update. This turns an implicit audit task into an explicit checklist.
+- **Document `BotLauncher` Deletion/Deprecation Decision:** Plan 18-04's action to either delete or deprecate `BotLauncher.java` is contingent on the output of a `grep` command. The plan should instruct the executor to document the outcome (e.g., "Deleted `BotLauncher.java` as no external dependencies were found") in the `18-04-SUMMARY.md` for future reference.
 
 ## 5. Risk Assessment
-**LOW.** 
-The architecture relies on stable, well-understood patterns and standard libraries rather than hand-rolled abstractions. The threat model is explicitly defined and mitigated appropriately for an internal-network boundary. The E2E validation strategy (Plan 06) is comprehensive. The identified concern regarding metric drift is easily addressable during the execution phase by applying existing idempotency guards.
+
+**LOW.**
+
+The initial MEDIUM-HIGH risk assessment was driven by plan contradictions, ownership conflicts, and subtle logic bugs (e.g., metric drift, report header loss). The amended plans have systematically and effectively addressed every one of these points.
+
+- **Plan Conflicts Resolved:** Ownership of `AdmissionGate.java` is now cleanly assigned to Plan 02, and the `TICK-HEALTH` scalar invariant is consistently enforced.
+- **Logic Bugs Fixed:** The per-bucket gauge lifecycle, JSON report overwrite behavior, and `BotFleet` counter semantics have all been corrected and locked with specific tests and documentation notes.
+- **Invariants are Test-Locked:** The most critical risk, silent attribution loss on rebind (T-18-04), is now directly covered by `AttributionRebindTest`.
+
+The remaining risks are procedural and well-contained. The phase is grounded in solid research, leverages existing project patterns correctly, and has a comprehensive validation strategy. Execution can proceed with high confidence.
 
 ---
 
-## Claude Review (opus, effort=xhigh)
+## Claude Review
 
-# Phase 18 Plan Review
+# Phase 18 Plan Review — Round 2 (Post-Replan)
 
 ## 1. Summary
 
-Phase 18 plans cover SCALE-03/04/05 cleanly with 6 plans across 4 waves. Decisions (D-01..D-21) traced to code. Research solid: Jetty/Micrometer/Spring Boot APIs verified. Big risks concentrate in Plan 03 (metric correctness) and a handful of file-list/dependency oversights that will bite during execution. Plans 01, 02, 04, 05, 06 mostly tight; Plan 03 has two real semantic gaps in per-bucket gauge lifecycle plus a MeterFilter/in-memory-map race. Overall well-structured; needs Plan 03 hardening before execute.
+Plans absorbed Round-1 reviewer feedback well. AdmissionGate ownership consolidated to Plan 02, TICK-HEALTH scalar locked via `ListAppender` test, `--duration` int-seconds, ReportSnapshot.merge for overwrite-mode, BotFleet idempotent shutdown, BotIdentity invariant tightened. Bucket-keying race fixed by co-locating overflow folding inside `AttributionTagger`. Snapshot map (`bucketTagsByEntityId`) wires no-session decrement paths.
+
+Remaining issues concentrate in Plan 03 (markStalled ordering creates a snapshot-loss bug; rebind-path inc/dec prose ambiguous) and a couple of file-list omissions in Plan 05. None are architectural — all mechanical fixes during execute. Phase risk drops to **MEDIUM** from the Round-1 MEDIUM-HIGH.
 
 ## 2. Strengths
 
-- **Clear wave ordering and Pitfall 1 lock** — Plan 01 stores `BotIdentity` in BotClient final field; Plan 06 `AttributionRebindTest` end-to-end-locks T-18-04. Reconnect re-emits headers proven by integration test.
-- **Bounded-cardinality defense-in-depth** — `BotIdentity.harness(...)` truncates 32 chars + rejects CR/LF (Plan 01); server taxonomy-folds unknown to "unknown" (Plan 02); MeterFilter caps registry (Plan 03). Three layers, costless.
-- **Constructor-sprawl avoided** — `BotClientOptions` record (Plan 01 Task 2) sidesteps 7-arg ctor landmine cited in RESEARCH.md Pitfall 2.
-- **Picocli + BootJar reuse** — no Shadow plugin, no Spring context in harness JVM (Plan 05). Pure `public static void main`. Matches RESEARCH.md A3.
-- **D-12 scalar invariants enforced via grep checks** — `paralife.admission.maintenance` and `paralife.tick.health.work-time-ms` stay scalar; AttributionTagTest asserts `null` gauge with source tags. Locked at three layers (test, grep acceptance, source-comment).
-- **18-HARNESS.md spec mirrors 17-ADMISSION.md style** — §1–§10 sections discoverable; sample 100/500/1000 commands copy-paste-ready for Phase 21.
-- **Async per-bot tracking** — Plan 04 `BotFleet` lifts 30s `allDone.await` ceiling (Pitfall 3). True high-water-mark via paired `liveCount`/`highWater` atomics; broken `incrementAndGet` cumulative pattern explicitly called out.
+- **Plan 03 bucket-keying race fix** — folding moved into `AttributionTagger.tagsFor` so map and registry share Tags. Includes the 100-id sum-equality lock test. Properly locked.
+- **Plan 03 every-release-path test** — `AdmissionMetricsLifecycleTest` covers all six paths (graceful, stalled-hold, stalled-expiry, rebind, post-placement-reject, duplicate-close). Strong regression net.
+- **Plan 02 TICK-HEALTH scalar lock via ListAppender** — Codex+Claude amendment good. Brittle grep replaced with assert-no-`source=`-on-TICK-HEALTH-line. Survives format drift.
+- **Plan 04 paired-atomic peak** — `liveCount`+`highWater` shape, with `currentRegistered()` Javadoc explicitly flagging STALLED-pivot drift and pointing at server-side gauge as authoritative. Honest engineering doc.
+- **Plan 01 BotIdentity invariant** — symmetric source⇔harnessId enforced in compact ctor; normalization on every construction path; ASCII control-char rejection broader than just CR/LF. Codex amendment fully absorbed.
+- **Plan 06 Awaitility 5s budget + verified `getActiveSessions()`/`markStalled` public** — flake risk managed; no test-only accessor needed.
+- **Plan 05 ReportSnapshot.merge** — header retention bug (OpenCode catch) fixed cleanly with explicit factory.
+- **Wave ordering serializes WorldWebSocketHandler edits** — Plan 03 (Wave 1) wires inc/dec, Plan 02 (Wave 2) reads post-state. Safe under sequential wave execution.
 
 ## 3. Concerns
 
 ### HIGH
 
-- **Plan 03: MeterFilter ↔ in-memory bucket-map race (gauge correctness bug).** `incActiveBucket(session)` keys `activeBuckets` by `Tags = AttributionTagger.tagsFor(session)` (carries actual harness id). `Gauge.builder(...).tags(t).register(registry)` triggers the filter, which folds `harness=<65th>` to `harness=overflow` in the registered Meter.Id. Result: 65th and beyond mint NEW AtomicIntegers in `activeBuckets` (keyed by original tags), but the registry only has ONE gauge for `harness=overflow` bound to the FIRST overflow bucket's AtomicInteger. Subsequent overflow buckets become orphaned — increments don't show up in metrics. Fix: key the bucket map by post-filter tags, or fold to "overflow" in `AttributionTagger` itself when over cap.
-
-- **Plan 03: Stalled-bucket lifecycle gap — orphaned buckets after grace expiry.** Plan 03 says "decStalledBucket on graceful-disconnect of a stalled session" but `cleanupByEntityId` (called by `ResumeTokenRegistry` sweep) has NO `WebSocketSession` — the session is long-gone. To decrement the right bucket, plan must snapshot Tags at `markStalled` time alongside the existing `respawnCountAtStall` map (e.g. `bucketTagsByEntityId`). Without this, `paralife.backpressure.stalled.sessions{source=harness, harness=A}` gauge will drift upward over time as terminal-dropouts accumulate without dec. Same problem on `active.entities` reaped path. Reference: WorldWebSocketHandler.java:518 `cleanupByEntityId`.
-
-- **Plan 03: `WorldWebSocketHandler.java` missing from `files_modified`.** Plan 03 task 2 explicitly wires `incActiveBucket` / `decActiveBucket` / `incStalledBucket` / `decStalledBucket` calls in `WorldWebSocketHandler` (handleRegister Allow, cleanupBot, cleanupByEntityId, markStalled, afterConnectionClosed wasStalled branch). But `files_modified` only lists `AdmissionGate.java`, `OutboundSender.java`, `ActionResolver.java`. Compounds with Plan 02 also editing `WorldWebSocketHandler.java` — both Wave 1 (Plan 03) and Wave 2 (Plan 02) hit the same file. Wave 1 must finish first for Plan 02 acceptance to compile.
+- **Plan 03 markStalled ordering bug — snapshot lost.** `incStalledBucket(session)` snapshots tags via `session.getAttributes().get("entityId")`. But Phase 17 `markStalled` does `Object entityIdObj = attrs.remove(ATTR_ENTITY_ID);` near the top (line 481). If `incStalledBucket` runs AFTER that remove, `eid == null` → `bucketTagsByEntityId.put` skipped → grace-expiry reaper has no Tags → silent stalled-bucket drift (the exact bug Plan 03 was supposed to fix). Plan must mandate: call `incStalledBucket(session)` BEFORE `attrs.remove(ATTR_ENTITY_ID)`, OR pass `entityId` explicitly: `incStalledBucket(session, entityId)`.
 
 ### MEDIUM
 
-- **Plan 04: hidden dependency on Plan 02.** `depends_on: ["18-01"]` only. But `BotRunnerOperatorTagTest` asserts `session.getAttributes().get(AttributionTagger.ATTR_SOURCE).equals("operator")` — that attribute is populated by Plan 02's `afterConnectionEstablished` edit. Plan 04 says "Wave ordering ensures Plan 02 lands before this test runs" — both are Wave 2. If wave runs in parallel, Plan 04 breaks. Fix: add `18-02` to `depends_on`, or move `BotRunnerOperatorTagTest` to Wave 3.
+- **Plan 03 rebind-path prose misleading.** Plan says "the existing `incActiveBucket(session)` above wires the NEW session's active bucket." But rebind branch returns early before reaching the Allow path's inc — and active bucket was never decremented at STALLED time, so no inc needed. Test `stalledRebindDecrementsStalledIncrementsActive` expects active==1 which already holds without inc. Implementer may add a redundant inc and double-count. Fix prose: "rebind path decrements stalled bucket only; active bucket stays incremented from the original Allow."
 
-- **Plan 04: `BotClient.java` missing from `files_modified`.** Plan 04 Step 2 ("BotClient `onClose` hook") explicitly says "add a minimal `public void onClose(Runnable r)` method backed by a `CopyOnWriteArrayList<Runnable>` invoked from `BotClient.disconnect()` and from the WebSocket `onClose` path." That's a source modification to `BotClient.java` — file not listed.
+- **Plan 05 BotFleet.java edit not in files_modified.** Step 2 edits `BotFleet.shutdown()` for idempotency (`shutdownDone.compareAndSet`) but `BotFleet.java` isn't listed. Either add it or move idempotency to Plan 04 (cleaner — property of BotFleet, not LoadHarness). Recommend Plan 04.
 
-- **Plan 05: `--duration` UX deviates from CONTEXT.md.** CONTEXT.md says `--duration=<seconds>` (integer). Plan 05 declares `public Duration duration` with `defaultValue = "${PARALIFE_HARNESS_DURATION:-PT0S}"` — ISO-8601. Operators expect `--duration 600` not `--duration PT10M`. Fix: type as `int durationSeconds` and convert to `Duration` internally, or document ISO-8601 prominently in `18-HARNESS.md` §3.
+- **Plan 03 OutboundSender edit underspecified.** OutboundSender listed in files_modified but no line numbers / call-site spec for what to delete or replace. The legacy `setStalledSessions` caller path needs explicit guidance — likely just deleting the call, since per-bucket inc/dec lives in `WorldWebSocketHandler.markStalled` now.
 
-- **Plan 06: `sessionRegistry.getSessions()` likely doesn't exist.** AttributionRebindTest iterates server-side sessions via `sessionRegistry.getSessions().stream()`. Plan 06 says "If not currently a public method, either add a package-private getSessions() helper". That's a `SessionRegistry.java` source modification not in `files_modified`. Verify before execute.
+- **Plan 05 shutdown hook leak in tests.** `Runtime.getRuntime().addShutdownHook(...)` is called in `runInternal()`. Tests calling `runInternal()` accumulate hooks across test runs. Need `Runtime.getRuntime().removeShutdownHook(hook)` in a finally or after exitLatch resolves to keep test JVM clean.
 
-- **Plan 03: AdmissionMetrics constructor breaking change.** New ctor takes `(MeterRegistry, AdmissionConfig, TickEngine)`. Phase 17 ctor took only `MeterRegistry`. Spring DI handles production wiring, but any test that constructs `new AdmissionMetrics(registry)` directly breaks. Audit existing tests; either add a no-args fallback or update all sites.
-
-- **Plan 03: ActionResolver SessionRegistry injection unspecified.** "look up via `SessionRegistry.getSession(sessionId)`" — requires injecting SessionRegistry into ActionResolver. Plan 03 lists ActionResolver in `files_modified` but doesn't show ctor change or @Autowired wiring detail. Risk of circular bean dependency (SessionRegistry is in `websocket` package, ActionResolver in `engine`).
+- **Plan 03 AttributionTagger overflow-folding race window.** Concurrent first-time observers of harness ids 64 and 65: both pass `containsKey` check (false), both `putIfAbsent` succeed, both `incrementAndGet` race. One returns harness id, one rolls back to overflow. Mostly fine but the rollback's `remove(harnessId, TRUE)` and `decrementAndGet` aren't atomic together — a third concurrent observer could see `observedCount > maxCardinality` briefly. Use a single mutex around the slot-claim, or accept the tiny race (same id always returns same answer; only the boundary id may flip between "kept" and "overflow" across observers in a narrow window). Document or fix.
 
 ### LOW
 
-- **Plan 05: `paralife.build.sha` system property never set.** `ReportSnapshot.header` reads `System.getProperty("paralife.build.sha", "unknown")` — always "unknown" unless Gradle injects it via `bootJar` manifest. Either wire Gradle to set it, or delete the field for now.
+- **Plan 05 LoadHarness `validateAndDefault` mutates Picocli-injected fields.** Works but unusual. Picocli's `defaultValue` could be set on the `@Option` to do the auto-generation declaratively (`defaultValue = "${PARALIFE_HARNESS_HARNESS_ID}"` then null-check in run is fine, but generation belongs after parse — current shape is OK, just non-idiomatic).
 
-- **Plan 05: double `fleet.shutdown()` on signal path.** Shutdown hook calls `fleet.shutdown()`, then main `run()` calls it again after exitLatch. `BotClient.disconnect()` should be idempotent (current Phase 17 code uses `shutdown.set(true)` guard) but worth a once-only guard on `BotFleet.shutdown()`.
+- **Plan 02 `closeReason="stalled-held"` introduces new token outside D-14 taxonomy.** D-14 specifies `reason=<token|graceful>`. Plan 02 emits `stalled-held` for the `wasStalled` close branch. Either update 18-HARNESS.md §5 to document `stalled-held` as a valid token, or normalize to `graceful` (loses signal). Recommend documenting.
 
-- **Plan 05: `signal-int` vs `signal-term`.** Shutdown hook always sets `"signal-term"`. JVM's `Runtime.addShutdownHook` doesn't expose which signal triggered it. Either drop the distinction in `exitReason` taxonomy or document this gap.
+- **Plan 04 SpeciesMix.pickFor weighted-mode boundary test missing.** Test covers parsing but not the position-based partitioning correctness. With `0.4:0.3:0.3` and 10 bots, expected 4 C / 3 M / 3 S — add an assertion.
 
-- **Plan 06: AttributionRebindTest timing brittleness.** Forces STALLED via `handler.markStalled(...)`, polls Awaitility for `getE408ReconnectRequiredCount() >= 1`. Reconnect jitter is 100–300ms (BotClient.java:406). Test budget is `Duration.ofSeconds(3)` — tight on slow CI. Consider 5s.
+- **Plan 06 LoadTest migration doesn't gate on `paralife.admission.attribution.max-harness-cardinality`.** LoadTest uses 1 harness id; well within cap. No issue today but if Phase 21 reuses LoadTest infrastructure with multiple ids, no protection. Comment-document that LoadTest is single-harness.
 
-- **Plan 02: case-sensitivity test relies on Spring's HttpHeaders behavior.** Mixed-case test (`X-paralife-source`) verifies Spring's `LinkedCaseInsensitiveMap`. RESEARCH.md A1 verified. If Spring future changes this, test catches it. Good defensive lock.
-
-- **Plan 04: BotFleet.launch RampUpSpec.awaitNext blocks the launcher thread.** Per `RampUpSpec.Rate(50)`, launcher sleeps 20ms × 1000 = 20s for 1000 bots. Acceptable per design (D-03 default `rate:50`), but harness operators should know launcher thread is busy during ramp. Document in 18-HARNESS.md §3.
-
-- **Plan 03 active bucket count doesn't include placement-failure releases via `admissionGate.releaseSlot()`.** When GRID_FULL occurs, AdmissionGate's reservedSlots decrements but no per-bucket gauge change is needed (entity never placed → never inc'd). Verify the order is: reserve → place → incBucket → ... so a failed-placement path naturally avoids inc. Plan 03 says "after `worldGrid.placeEntity` succeeds" — correct order.
+- **Plan 05 dry-run smoke check timing not asserted.** `--help` < 1s startup is documented as a Pitfall 5 invariant but no assertion. Spring banner check is also manual. Could add: `time java -jar ... --help 2>&1 | grep -v "Spring Boot" | wc -l` style guard. Acceptable as manual.
 
 ## 4. Suggestions
 
-- **Plan 03: switch bucket-map key strategy to defeat the MeterFilter race.**
-  Either:
+- **Plan 03 markStalled fix.** Specify call ordering explicitly:
   ```java
-  // Option A: pre-compute Tags through filter (cleanest)
-  Tags effective = applyOverflowIfOverCap(tags);
-  activeBuckets.computeIfAbsent(effective, t -> register(t));
+  // BEFORE attrs.remove(ATTR_ENTITY_ID):
+  if (admissionMetrics != null) admissionMetrics.incStalledBucket(session);
+  attrs.put(ATTR_STALL_TICK, stallTick);
+  Object entityIdObj = attrs.remove(ATTR_ENTITY_ID);
+  // ...
   ```
-  OR move overflow folding into `AttributionTagger.tagsFor(session, registry)` so the tags stored in attrs match what the registry sees. Add a test: register 100 unique harness ids; assert `Σ(activeBuckets values) == sum of all gauge.value()` across registered gauges including the overflow gauge.
+  OR change signature to `incStalledBucket(WebSocketSession session, String entityId)` and pass entityId explicitly.
 
-- **Plan 03: add `bucketTagsByEntityId` snapshot.**
-  Mirror the `respawnCountAtStall` pattern. Snapshot Tags at `markStalled` and at `incActiveBucket`, keyed by entityId. `cleanupByEntityId` and grace-expiry reaper consult this map to call `decStalledBucket` / `decActiveBucket` with the original tags.
+- **Plan 03 rebind prose.** Rewrite as: "Rebind decrements OLD stalled bucket via `decStalledBucketByTags(lookupBucketTags(rebind.entityId()))`. Active bucket NOT modified — it stayed incremented during STALLED hold."
 
-- **Plan 03: add `WorldWebSocketHandler.java` to `files_modified`.** Update Wave 1/Wave 2 contention plan: Plan 03 first writes the inc/dec-call sites and the legacy setter deletion; Plan 02 then reads/edits same file for handshake header logic. Either serialize the file edit (Wave 1 fully completes Plan 03 → Wave 2 starts Plan 02), or merge the WorldWebSocketHandler.java surface into one plan.
+- **Move BotFleet idempotency to Plan 04.** Cleaner — property of fleet abstraction. Plan 04 already owns BotFleet.java.
 
-- **Plan 04: add `18-02` to `depends_on`.** Or split BotRunnerOperatorTagTest into Wave 3.
+- **Plan 03 OutboundSender spec.** Add concrete delete-this-line guidance after grep'ing for `setStalledSessions` call sites.
 
-- **Plan 04: add `src/main/java/com/paralife/bot/BotClient.java` to `files_modified`.** onClose hook is a real source change.
+- **Plan 05 hook cleanup.** Capture hook reference; remove on cleanup. Test fixture in `@AfterEach`.
 
-- **Plan 05: `--duration` switch to `int` seconds.** Aligns with CONTEXT.md D-16 ("`--duration=<seconds>`"). Operators don't expect ISO-8601.
+- **Plan 02 doc `stalled-held` token in 18-HARNESS.md §5.** Trivial doc change.
 
-- **Plan 06: add `src/main/java/com/paralife/websocket/SessionRegistry.java` to `files_modified`** if `getSessions()` doesn't exist. Verify with `grep -n 'public.*getSessions\|public.*streamSessions' src/main/java/com/paralife/websocket/SessionRegistry.java` before execute.
-
-- **Plan 02: factor TICK-HEALTH grep into a unit test, not a build-time check.** Acceptance criterion `grep -E 'TICK-HEALTH.*source=' ... returns nothing` is fragile (formats change, regex drifts). A test that registers a workload, captures TickHealthMonitor logs via ListAppender, and asserts `noneMatch(line -> line.contains("source="))` is more durable.
-
-- **Plan 05: pin Picocli version compatibility note.** RESEARCH.md verified 4.7.7; pin in version catalog or `dependency-management` block, not just `implementation` declaration. Phase 21 benchmarks should not float.
-
-- **Plan 06: add 5s budget to AttributionRebindTest awaitility.** Reduce flake risk on slow runners.
-
-- **Cross-plan: add a "dry-run" smoke task.** `./gradlew loadHarnessJar && java -jar build/libs/*-load-harness.jar --help` should be a Wave 4 acceptance check, not just Plan 05 manual. Lock the Pitfall 5 invariant (no Spring banner in `--help`, < 1s startup).
+- **Plan 03 AttributionTagger thread-safety.** Add a comment acknowledging boundary race or wrap slot-claim in `synchronized` block. Cap=64 makes contention negligible.
 
 ## 5. Risk Assessment
 
-**Overall: MEDIUM-HIGH**
+**Overall: MEDIUM**
 
 Justification:
-- HIGH risks all in Plan 03: cardinality/bucket race + stalled-bucket lifecycle + missing files. These cause silent gauge corruption — exactly the kind of bug Phase 21 benchmarks would surface late after operators trust the dashboards. Fix before execute.
-- MEDIUM risks (Plan 04/05/06 dependency + UX issues) are mechanical fixes during plan amendment; low chance of surfacing as runtime bugs but high chance of breaking the plan's own acceptance criteria during execute.
-- Per-plan goal achievement: Plans 01, 02, 04, 05, 06 achieve their phase-goal slice cleanly given the noted fixes. Plan 03 currently does NOT achieve "metrics correctly tagged + bounded" without the bucket-keying fix.
-- Phase goal (SCALE-03/04/05): once Plan 03 hardened, plans collectively close the requirements with end-to-end attribution lock via Plan 06 AttributionRebindTest.
+- HIGH risk (Plan 03 markStalled ordering) is one-line fix specifying call ordering. Locked by `AdmissionMetricsLifecycleTest::stalledExpiryDecrementsBothBuckets` which would fail if snapshot is lost.
+- All MEDIUM risks are mechanical: file list additions, prose clarifications, hook cleanup. No architectural rework.
+- Plan 02/03/05 reviewer-driven amendments comprehensively absorbed; AdmissionGate ownership clear; --duration int-seconds; bucket race fixed; header retention fixed.
+- Plan 06 STALLED-pivot attribution lock + LoadTest harness-tagged migration provides end-to-end coverage of T-18-04.
+- Phase goal achievement: SCALE-03/04/05 closed cleanly with the markStalled ordering fix in place.
 
-Recommend: amend Plan 03 (bucket-keying + stalled lifecycle + files_modified), amend Plan 04/05/06 file lists and `depends_on`, then execute.
-
----
-
-## Codex Review (gpt-5.5, reasoning=high)
-
-## Summary
-
-The phase is well-scoped around the right dependency chain: client identity headers, server attribution, metrics, fleet refactor, standalone harness, then end-to-end docs/tests. The plans are unusually thorough, with strong traceability to SCALE-03/04/05 and good attention to cardinality, STALLED rebinds, and BotRunner compatibility. Main risks are over-specification in implementation details, a few contradictions between plans, and some likely brittle test designs. I would approve the overall direction, but tighten the contracts before execution so implementers do not build conflicting behavior.
-
-## Strengths
-
-- **Clear phase decomposition:** `18-01` and `18-03` can land independently, `18-02` consumes both, `18-04` prepares the fleet, `18-05` builds the harness, and `18-06` closes the loop.
-- **Good cardinality discipline:** `18-03-PLAN.md / Task 2` correctly treats harness IDs as an operational risk and requires bounded tags plus overflow behavior.
-- **Good forward-compat seam:** `18-04-PLAN.md / Task 1` keeps 999.2 support to a `BotFactory` seam instead of redesigning bot/entity ownership now.
-- **BotRunner preservation is explicit:** `18-04-PLAN.md / Task 2` keeps the 100-bot operator path in scope, satisfying SCALE-05 rather than letting the harness replace it implicitly.
-- **STALLED rebind risk is recognized:** `18-06-PLAN.md / Task 1` targets the subtle failure mode where attribution could silently degrade to `unknown`.
-- **Docs are treated as deliverables:** `18-06-PLAN.md / Task 2` gives Phase 21 enough operational surface to run repeatable harness sweeps.
-
-## Concerns
-
-- **HIGH — Contradictory TICK-HEALTH requirement in `18-02-PLAN.md`:** The plan’s `must_haves` says TICK-HEALTH log markers gain `source=server`, while Task 2 says TICK-HEALTH stays scalar and no `source=` should appear. This must be resolved before execution.
-
-- **HIGH — `BotIdentity` invariants are incomplete in `18-01-PLAN.md / Task 1`:** The proposed public record allows invalid combinations such as `new BotIdentity("operator", Optional.of("h1"))`, which would make `BotClient` send a harness header for an operator source. The compact constructor also validates but does not normalize/truncate direct-constructor harness IDs.
-
-- **HIGH — `18-03-PLAN.md / Task 2` may be too invasive for Wave 1:** Replacing scalar active/stalled gauges with inc/dec bucket mutation touches admission, cleanup, stalled, rebind, and action paths. That is correctness-sensitive and depends on exact lifecycle accounting. A missed decrement will make gauges drift.
-
-- **HIGH — AdmissionGate ownership conflict between `18-02` and `18-03`:** `18-02-PLAN.md / Task 2` says Plan 03 owns `AdmissionMetrics`, but also changes `AdmissionGate.evaluate` and rejection flow. `18-03-PLAN.md / Task 2` also edits `AdmissionGate` call sites. This is likely to cause merge and sequencing confusion.
-
-- **MEDIUM — MeterFilter overflow design may not actually “fold 65th+” as written:** `MeterFilter.maximumAllowableTags` behavior needs careful verification. The plan assumes `onMaxReached.map` can rewrite over-cap IDs into `harness=overflow`, but Micrometer filter ordering and already-registered meters can be subtle. `CardinalityCapTest` is essential, but the plan should not over-prescribe an implementation until proven.
-
-- **MEDIUM — Append JSONL behavior conflicts with D-17 wording:** `18-05-PLAN.md / Task 1` uses atomic rename only for the header and append+SYNC for counters, while the context says reports are “always” written by temp+rename. This is reasonable engineering, but it should be documented as an intentional interpretation, not hidden in implementation.
-
-- **MEDIUM — Picocli parsing in `18-05-PLAN.md` is likely wrong:** `CommandLine.execute(args)` only works on a `@Command` with `Runnable`/`Callable` or subcommands. `LoadHarnessOptions` is only an option holder, so tests using `execute` may not behave as intended. Use `parseArgs`/`populateCommand`, or make `LoadHarness` the `@Command`.
-
-- **MEDIUM — Duration format inconsistency:** Context says `--duration=<seconds>`, but `18-05-PLAN.md` uses ISO-8601 `Duration` values like `PT5S`. Pick one. Operators will expect `--duration=300` from the spec examples.
-
-- **MEDIUM — Tests may be brittle or slow:** Several plans use real WebSocket servers, logback appenders, direct lifecycle forcing, and slow load runs. That is appropriate for a few integration tests, but too many such tests will make the phase hard to execute quickly.
-
-- **LOW — Harness ID validation differs by layer:** Plans mention alphanumeric+dash for generated IDs, but only CR/LF rejection is enforced. Decide whether arbitrary printable IDs are allowed or whether `[A-Za-z0-9-]` is the actual contract.
-
-- **LOW — Docs target may be excessive:** `18-06-PLAN.md / Task 2` asks for 350-500 lines. The spec should be complete, but line-count targets encourage filler and drift.
-
-## Suggestions
-
-- Fix the TICK-HEALTH decision globally: either no `source=` anywhere for TICK-HEALTH, or a constant `source=server`; the current plans say both. Given D-12, I recommend keeping it scalar and untouched.
-
-- Strengthen `BotIdentity`:
-  - Enforce `source=harness` iff `harnessId` is present.
-  - Normalize/truncate in the compact constructor, not just `harness()`.
-  - Reject CR/LF and other control characters.
-  - Consider a regex for harness IDs if docs promise alphanumeric plus dash.
-
-- Move all admission metric API edits into `18-03`, and let `18-02` only consume `AttributionTagger.formatLogFields`. Avoid having both plans reshape `AdmissionGate`.
-
-- Reconsider per-bucket active/stalled gauge implementation. If possible, derive buckets from session registry/world state snapshots instead of manual inc/dec lifecycle accounting. If inc/dec remains, add tests for every release path: graceful close, stalled hold, stalled expiry, rebind success, reject after placement failure, and duplicate close.
-
-- In `18-05`, make CLI syntax match docs:
-  - Prefer `--duration=300` seconds if that is the operator contract.
-  - Accept ISO-8601 as an optional convenience only if low-cost.
-  - Ensure env-var defaults are tested with Picocli’s actual behavior.
-
-- Keep the harness integration test modest. A 10- or 20-bot embedded test is enough for CI; leave 200/1000-bot runs as manual or slow-gated Phase 21 checks.
-
-- Clarify JSONL durability in `18-HARNESS.md`: overwrite is atomic temp+rename; JSONL header is atomic; counter lines are append+SYNC and readers must tolerate a truncated final line.
-
-## Risk Assessment
-
-**Overall risk: MEDIUM-HIGH.**
-
-The architecture is sound and aligned with the milestone goals, but implementation risk is elevated because the plans touch session lifecycle, admission accounting, WebSocket reconnect behavior, metrics cardinality, Gradle packaging, and a new CLI tool in one phase. The highest-risk area is `18-03` active/stalled per-source gauge accounting, followed by the plan contradictions around TICK-HEALTH and AdmissionGate ownership. Resolve those before execution and the phase drops closer to **MEDIUM** risk.
+Recommend: amend Plan 03 (markStalled call ordering, rebind prose, OutboundSender spec, AttributionTagger race comment); move BotFleet idempotency from Plan 05 to Plan 04; doc `stalled-held` in 18-HARNESS.md; then execute.
 
 ---
 
-## OpenCode Review (kimi-k2.6 via OpenRouter)
+## Codex Review
 
-## Summary
+## Overall
 
-The six plans for Phase 18 form a thorough, well-structured implementation of the external load harness and server-side attribution infrastructure. The design correctly elevates `BotClient` handshake identity, introduces a `BotFleet` async abstraction to break the 100-bot ceiling, and builds a bounded-cardinality Micrometer safety net. Documentation and forward-compatibility (the `BotFactory` seam, `source=offspring` reservation) are treated as first-class deliverables. However, there is a dependency-ordering ambiguity between **Plan 02** and **Plan 03** around `AdmissionGate.java`, and **Plan 05** contains a functional bug in its JSON overwrite report implementation where static header fields are dropped after the first interval.
+### Summary
+The phase plan is unusually thorough and mostly aligned with SCALE-03/04/05: it builds a standalone harness, preserves BotRunner, and adds per-harness attribution. The strongest parts are the explicit identity model, bounded-cardinality thinking, rebind-attribution test, and documentation closure.
 
-## Strengths
+The biggest risks are not conceptual; they are execution risks from overly prescriptive implementation details that contain several lifecycle, metric, CLI, and ordering bugs.
 
-* **Clear architectural layering.** Plans are split cleanly: client identity (01), server ingress (02), metrics plumbing (03), fleet refactor (04), harness main/CLI (05), and integration lock/docs (06). This makes parallel execution mostly safe.
-* **Constructor-sprawl mitigation.** **Plan 01** introduces `BotClientOptions` and `BotIdentity` so the new identity field can be injected without breaking every existing test call site.
-* **Defensive header handling.** Source values are taxonomy-filtered, harness IDs are truncated to 32 chars, and CR/LF are rejected before the values touch the Micrometer registry (**Plan 02** + **Plan 01**).
-* **Cardinality safety net.** **Plan 03** uses `MeterFilter.maximumAllowableTags` with `replaceTagValues` (not `deny()`, avoiding Micrometer issue #4971) and a warn-once log. This directly mitigates T-18-02.
-* **End-to-end rebind verification.** **Plan 06**'s `AttributionRebindTest` targets the phase's highest-risk invariant: STALLED-pivot rebind silently losing attribution. The negative assertion (`source=unknown` must not absorb the rebound bot) is exactly the right shape.
-* **Forward-compat seam.** **Plan 04**'s `BotFactory.create(..., claimEntityId, claimToken)` is minimal but correctly positioned for backlog 999.2 without over-engineering Brain×Entity decoupling.
+### Strengths
+- Clear requirement mapping to SCALE-03, SCALE-04, SCALE-05.
+- Good separation between client identity carriage, server attribution, fleet refactor, harness CLI, and docs.
+- Strong attention to hidden failure modes: cardinality explosion, STALLED rebind attribution loss, BotRunner regression, header spoofing.
+- Good decision to keep wire grammar unchanged and use handshake headers.
+- Good validation intent, especially the final rebind test.
 
-## Concerns
+### Cross-Plan Concerns
 
-* **Plan 03 and Plan 02 overlapping on `AdmissionGate.java` (HIGH).**  
-  **Plan 03** (wave 1) lists `AdmissionGate.java` in `files_modified` and instructs updating `AdmissionGate.reject(...)` to call `metrics.incRejected(token, session)`. **Plan 02** (wave 2, which *depends on* 03) also edits `AdmissionGate.java` to add `evaluate(req, session)` and change the `reject` helper signature. Because Plan 03 runs first, it cannot assume the session-bearing `reject` helper exists yet. This creates either a compilation break or duplicated/conflicting changes.  
-  *Reference: 18-03-PLAN.md Task 2 action step "Update incRejected call sites" and 18-02-PLAN.md Task 2 Step 1.*
+- **HIGH: Wave ordering is inconsistent.** Plan 04 is wave 2 but depends on Plan 02, which is also wave 2. If waves are parallel execution units, that is invalid. Plan 04 should move to wave 3, Plan 05 to wave 4, Plan 06 to wave 5, or wave 2 must explicitly support serial sub-ordering.
 
-* **Plan 05 overwrite report loses header fields after first interval (MEDIUM).**  
-  In **Plan 05**, `computeSnapshot` calls `ReportSnapshot.counters(...)` which sets all header fields (`harnessId`, `serverUri`, `targetCount`, etc.) to `null`. In overwrite mode, the first periodic reporter VT write replaces the initial header object with a counters-only object. After the first 30-second tick, the report permanently loses its static config.  
-  *Reference: 18-05-PLAN.md Task 2 Step 2 `computeSnapshot` method.*
+- **HIGH: Plans prescribe buggy implementation details.** The plans include code-level skeletons that are sometimes wrong: `LoadHarness.run()` calling `System.exit`, signal handling that cannot distinguish SIGINT/SIGTERM, `ReportSnapshot` camelCase fields despite required snake_case, `BotClient.onClose` likely double-decrementing, and STALLED rebind active-bucket double-counting.
 
-* **Plan 04 `BotFleet.currentRegistered()` drifts on STALLED-pivot reconnect (MEDIUM).**  
-  `liveCount` is incremented only inside the launch VT when `awaitRegistered` succeeds. It is decremented via `bot.onClose(...)`. When a BotClient reconnects after a STALLED-pivot (Phase 17), it does so inside its own internal loop—not through `BotFleet`—so `liveCount` is never re-incremented. `currentRegistered()` will undercount for long-running harnesses. The JSON report mitigates this by also polling `b.isRegistered()`, but the Plan should document that `BotFleet`'s counters are best-effort for the ramp window only.  
-  *Reference: 18-04-PLAN.md Task 1 BotFleet implementation.*
+- **HIGH: Metric bucket lifecycle is the hardest part and still under-specified.** Plan 03 recognizes most lifecycle paths, but the proposed `bucketTagsByEntityId` map and rebind flow can still drift or double-count. This needs a simpler state model before implementation.
 
-* **Plan 03 per-bucket gauge map never evicts entries (LOW).**  
-  `activeBuckets` and `stalledBuckets` in `AdmissionMetrics` grow unbounded for every unique `(source, harness)` tag combo observed. While the cardinality cap limits this to ~256 entries, stalled-session buckets for transient harness IDs could accumulate briefly. The map is short-lived (JVM lifetime) and small; acceptable, but worth noting.
+- **MEDIUM: Optional `harness` tag may be incompatible with future Prometheus export.** Micrometer/Prometheus commonly expects consistent tag keys for a metric name. The D-11 optional-tag shape may be acceptable in the current registry, but it should be explicitly tested or reconsidered with `harness="none"`/`"-"`.
 
-* **Plan 06 `AttributionRebindTest` assumes direct handler access (LOW).**  
-  The test invokes `handler.markStalled(session, tick)` directly. If `markStalled` is private, the test (in `com.paralife.admission`) cannot access it without reflection or a package move. The plan should verify visibility or add a test-only accessor.  
-  *Reference: 18-06-PLAN.md Task 1.*
+- **MEDIUM: Scope is large for one phase.** The test matrix is valuable but heavy. Many tests are full Spring integration tests, several are slow, and some overlap. Execution may spend more time fighting brittle test harnesses than delivering the harness.
 
-* **Plan 05 Picocli `Duration` conversion unverified (LOW).**  
-  `LoadHarnessOptions` declares `public Duration duration;` with a default of `PT0S`. Picocli 4.7 does not ship a built-in `Duration` converter by default (unlike `File`, `Path`, etc.). If absent, this will throw at runtime. A custom `ITypeConverter<Duration>` should be provided or verified.  
-  *Reference: 18-05-PLAN.md Task 1 Step 2.*
+### Suggestions
+- Fix wave sequencing before execution.
+- Convert prescriptive code blocks into behavioral contracts where implementation is uncertain.
+- Add a pre-implementation "metric lifecycle design checkpoint" for Plan 03.
+- Decide whether Micrometer tag keys must be consistent across all meters now, before M5 Prometheus work.
+- Keep harness signal handling simple unless true SIGINT/SIGTERM distinction is implemented deliberately.
+- Make report JSON field naming explicit with Jackson `SNAKE_CASE` or `@JsonProperty`.
 
-## Suggestions
+### Risk Assessment: **HIGH**
+The architecture is sound, but the current plan text contains enough implementation-level defects that a literal executor could produce broken lifecycle accounting, brittle tests, or a harness that exits the JVM during tests. Risk falls to MEDIUM after fixing ordering, metric lifecycle, CLI/report details, and shutdown semantics.
 
-* **Disentangle `AdmissionGate.java` ownership.** Let **Plan 02** own *all* edits to `AdmissionGate.java` (adding the session-bearing `evaluate`/`reject` signatures). **Plan 03** should own `AdmissionMetrics.java` and call-site updates in `WorldWebSocketHandler`, `ActionResolver`, and `OutboundSender` *only*. The `AdmissionGate` call site update should move to **Plan 02** (where it compiles naturally against the new metric API).
-* **Fix overwrite-mode header retention in `ReportWriter`.** Store the initial header snapshot in `LoadHarness` and merge it with live counters in `computeSnapshot` for overwrite mode, so every snapshot includes `harnessId`, `serverUri`, etc.
-* **Document `BotFleet` counter semantics.** Add a Javadoc/note in `BotFleet.java` stating that `currentRegistered()` tracks the launch VT's admitted count and may undercount post-reconnect; the server-side gauge and per-bot `isRegistered()` polling are the authoritative sources for long-running reports.
-* **Add `Duration` converter or switch to `long` seconds.** Either add a `picocli.ITypeConverter<Duration>` or change `--duration` to a `long` in seconds to avoid Picocli runtime surprises.
-* **Verify `loadHarnessJar` startup time.** The plan uses Spring Boot's `BootJar` (which uses `JarLauncher`). Per **Pitfall 5**, check that `java -jar build/libs/*-load-harness.jar --help` starts in < 1s. If not, switch to a plain `Jar` task with an explicit `Main-Class` manifest.
+---
 
-## Risk Assessment
+## Plan 18-01
 
-**Overall Risk: MEDIUM**
+### Summary
+Adds `BotIdentity`, `BotClientOptions`, and client-side handshake header injection.
 
-Justification: The plans are deeply researched and hit the phase requirements (SCALE-03/04/05) comprehensively. Risk is elevated from LOW by two execution hazards: (1) the **Plan 02/03 AdmissionGate overlap** could cause a compilation break or require a mid-wave course correction, and (2) the **Plan 05 overwrite report bug** would produce silently incorrect benchmark artifacts. Both are straightforward to fix with the suggestions above. The extensive test scaffolding—especially `AttributionRebindTest`, `CardinalityCapTest`, and the `BotRunner` regression tests—provides strong mitigation against regressions in the Phase 17 admission contract.
+### Strengths
+- Good first step and clean dependency base.
+- Preserves legacy constructors through an options record.
+- Correctly identifies reconnect header re-emission as critical for STALLED attribution.
+- Strong direct-constructor tests for identity invariants.
+
+### Concerns
+- **MEDIUM: Server-side sanitization is not guaranteed by client-side `BotIdentity`.** Malicious or ad-hoc clients can bypass `BotIdentity`; Plan 02 must reuse equivalent validation.
+- **MEDIUM: Harness ID character policy is inconsistent.** Context says alphanumeric + dash, but `BotIdentity` only rejects ASCII control chars. Spaces, quotes, unicode, and punctuation can enter logs/tags.
+- **MEDIUM: Reconnect test as written may not prove the real reconnect path.** "Fresh BotClient instance" does not prove the same client re-emits headers through its internal STALLED reconnect loop.
+- **LOW: `source=harness iff harnessId.present` may constrain future `offspring` behavior if offspring later wants a harness-like id.** Not blocking now, but document the intended boundary.
+
+### Suggestions
+- Add a reusable harness-id sanitizer/normalizer used by both BotIdentity and server header parsing.
+- Test same-instance reconnect or the actual `BotClient` reconnect path, not only a new instance.
+- Enforce a grep-friendly harness id pattern if the docs promise alphanumeric + dash.
+
+### Risk Assessment: **MEDIUM**
+Good plan, but security/normalization must not stop at the client boundary.
+
+---
+
+## Plan 18-02
+
+### Summary
+Reads handshake headers server-side, stashes session attributes, emits HARNESS logs, and routes session context through `AdmissionGate`.
+
+### Strengths
+- Correctly places identity parsing in `afterConnectionEstablished`.
+- Preserves `unknown` default for headerless clients.
+- Good decision to keep TICK-HEALTH scalar.
+- Moving all `AdmissionGate` edits into one plan reduces conflicts.
+
+### Concerns
+- **HIGH: Server accepts untrusted harness header values without full validation.** It trims/truncates but does not reject ASCII control chars or enforce the documented token shape. This can pollute logs and metric tags.
+- **MEDIUM: `TickHealthMonitorScalarTest` is under-specified.** The plan says if no TICK-HEALTH line exists, the test may become a TODO/vacuous. That weakens the invariant.
+- **MEDIUM: Admission log marker tests may be brittle if driven through full WebSocket setup.** A unit-level `AdmissionGate` test with mocked session attrs may be more reliable.
+- **LOW: Disconnect reason taxonomy has drift.** Context says `token|graceful`; plan adds `stalled-held`. That may be fine, but docs and tests must match.
+
+### Suggestions
+- Use a shared `AttributionSanitizer` or `BotIdentity` helper on the server path.
+- Make TICK-HEALTH scalar validation concrete: either trigger an actual log path or assert source code/log event shape where the marker exists.
+- Prefer unit tests for `AdmissionGate` formatting, integration tests for header ingestion.
+
+### Risk Assessment: **MEDIUM**
+The structure is right, but untrusted-header sanitation and some test design need tightening.
+
+---
+
+## Plan 18-03
+
+### Summary
+Adds attribution tags, cardinality capping, active/stalled bucket gauges, ingress overwrite tagging, and lifecycle wiring.
+
+### Strengths
+- Correctly identifies cardinality as an operational risk.
+- Good recognition that map keys and MeterFilter output must agree.
+- Strong intent to test every lifecycle path.
+- Keeps maintenance and tick-work metrics scalar.
+
+### Concerns
+- **HIGH: Overflow warning may not log the real 65th harness id.** Since `AttributionTagger` folds to `harness=overflow` before meter registration, the MeterFilter may only see `overflow`, not the raw over-cap id. The warn-once log belongs in the folding code, not only the MeterFilter.
+- **HIGH: STALLED rebind active-bucket flow can double-count.** Marking STALLED leaves active incremented, then rebind success appears to call `incActiveBucket(newSession)` again. The test expects active remains 1, but the described implementation can produce 2.
+- **HIGH: `bucketTagsByEntityId` needs clearer lifecycle ownership.** One shared map for active and stalled tags is fragile. Removal timing can break grace expiry, rebind, or cleanup-by-id paths.
+- **HIGH: ActionResolver session lookup by streaming active sessions is a scale regression.** Doing O(active sessions) work on an action hot path is risky in a scale milestone.
+- **MEDIUM: Optional tag keys may cause registry/export issues.** See overall concern.
+- **MEDIUM: `Counter.builder(...).register(...)` per event may be allocation-heavy.** It may be acceptable but should be measured or cached if hot.
+- **MEDIUM: Proposed concurrent cardinality registry has race-prone count/map bookkeeping.** A lock or bounded cache with atomic registration semantics would be safer.
+
+### Suggestions
+- Model active/stalled attribution as explicit per-entity state: `entityId -> AttributionBucket`, with clear transitions: registered, stalled, rebound, expired, disconnected.
+- Put overflow folding and warn-once logging in `AttributionTagger`.
+- Add `SessionRegistry.getById(sessionId)` or pass session/tags into `ActionResolver` instead of scanning sessions.
+- Decide consistent tag-key shape before implementation.
+- Make the rebind path transfer attribution rather than incrementing active a second time.
+
+### Risk Assessment: **HIGH**
+This is the riskiest plan. It touches shared simulation/session lifecycle and can silently corrupt metrics if the transition model is wrong.
+
+---
+
+## Plan 18-04
+
+### Summary
+Introduces `BotFactory`, `BotFleet`, ramp-up/species mix, close hooks, and migrates BotRunner to the fleet.
+
+### Strengths
+- Correctly removes the 30s launcher ceiling from the large-N path.
+- Good use of `CompletableFuture<RegistrationResult>`.
+- BotFactory seam is appropriately small for 999.2.
+- Preserves BotRunner as the small-N operator path.
+
+### Concerns
+- **HIGH: `BotClient.onClose` can double-decrement.** If `disconnect()` fires callbacks and Jetty `onClose` also fires, `liveCount` can go negative.
+- **HIGH: `BotRunnerOperatorTagTest` does not actually test BotRunner.** It launches `BotFleet` directly, so it does not prove BotRunner passes `BotIdentity.operator()`.
+- **MEDIUM: Same-wave dependency issue.** Plan 04 depends on Plan 02 but is also wave 2.
+- **MEDIUM: `currentRegistered()` is explicitly best-effort, yet the harness later uses it for reports.** That contradiction should be resolved in Plan 05.
+- **MEDIUM: Ramp rate implementation with `1000 / perSecond` loses precision and becomes zero above 1000/s.**
+- **LOW: Randomness/seed behavior is not addressed.** Repeatable benchmark runs may want deterministic species ordering and bot RNG seed control.
+
+### Suggestions
+- Make close callbacks exactly-once per connection or tie decrement to a registered-state compare-and-set.
+- Test BotRunner through an extracted `run(...)` method that receives a fleet/factory test double.
+- Move Plan 04 after Plan 02, or split BotRunner operator-tag test into Plan 06.
+- Document/report `currentRegistered()` as ramp-only and use `BotClient.isRegistered()` polling for harness snapshots.
+
+### Risk Assessment: **MEDIUM-HIGH**
+The fleet abstraction is sound, but close lifecycle and BotRunner testing need correction.
+
+---
+
+## Plan 18-05
+
+### Summary
+Builds the standalone Picocli load harness, JSON/JSONL report writer, Gradle tasks, and integration tests.
+
+### Strengths
+- Correctly keeps harness as a pure client process with no Spring context.
+- Good CLI surface and report schema coverage.
+- Good overwrite-mode header-retention fix.
+- Good dry-run jar/help verification.
+
+### Concerns
+- **HIGH: Picocli env-var default syntax is likely wrong or at least unverified.** `defaultValue = "${PARALIFE_HARNESS_COUNT}"` may not read environment variables as intended. This needs a verified Picocli syntax or manual env fallback.
+- **HIGH: `LoadHarness.run()` should not call `System.exit`.** It will break tests and makes composition hard. Use `Callable<Integer>` and let `main` call `CommandLine.execute`.
+- **HIGH: SIGINT/SIGTERM handling is not correct.** A standard shutdown hook cannot reliably distinguish SIGINT from SIGTERM, and final report writing from the main thread may not happen after JVM shutdown starts.
+- **HIGH: JSON field names are camelCase, not required snake_case.** D-17 names are `peak_registered`, `current_registered`, etc. Jackson needs `@JsonProperty` or snake-case naming.
+- **HIGH: Adding Picocli may fail in a restricted/offline environment if the dependency is not cached.** The plan should verify cache availability or define a fallback.
+- **MEDIUM: `connect_failures_total` is not a total.** The proposed computation counts currently disconnected/unregistered bots, not cumulative connection failures.
+- **MEDIUM: `syncs_received_total` computation is probably wrong.** It should use an actual bot counter if one exists, not `1 + respawnCount`.
+- **MEDIUM: Shutdown hook registration in tests can leak global hooks.** Tests need a hook abstraction or direct lifecycle method.
+- **MEDIUM: Append mode overwrites the file at header write.** If "append" means append across process restarts, this violates intent. Clarify semantics.
+
+### Suggestions
+- Implement `LoadHarness implements Callable<Integer>`.
+- Create a `HarnessEnvironment` resolver for CLI/env precedence.
+- Use `@JsonProperty("peak_registered")` or `ObjectMapper.setPropertyNamingStrategy(SNAKE_CASE)`.
+- Track report counters from monotonic counters in `BotFleet`/`BotClient`, not current state inference.
+- Either use `sun.misc.Signal` deliberately for signal-specific reasons or collapse shutdown reason to a portable value.
+- Check Picocli dependency availability before committing to it.
+
+### Risk Assessment: **HIGH**
+This plan has several implementation defects that can prevent the harness from being testable or from producing the required report shape.
+
+---
+
+## Plan 18-06
+
+### Summary
+Adds final rebind attribution test, migrates LoadTest to harness identity, writes `18-HARNESS.md`, updates `CLAUDE.md`, and runs jar/help smoke.
+
+### Strengths
+- Excellent focus on the subtle STALLED rebind attribution failure.
+- Good documentation closure with concrete commands.
+- Good decision to make LoadTest exercise the harness-tagged path.
+- Dry-run smoke catches accidental Spring startup.
+
+### Concerns
+- **MEDIUM: `AttributionRebindTest` may be brittle against shared registry state.** Negative assertion on `source=unknown` can fail due unrelated sessions or prior tests unless registry/context isolation is guaranteed.
+- **MEDIUM: Direct `handler.markStalled(...)` may not perfectly simulate queue-overflow STALLED behavior.** It is fine as a focused test, but one real overflow-path test should exist elsewhere.
+- **MEDIUM: Docs contain a likely tag typo.** The cheat sheet mentions `source=overflow`, but overflow is planned as a `harness=overflow` fold, not a source value in normal harness attribution.
+- **LOW: Jar glob in `java -jar build/libs/paralife-*-load-harness.jar --help` can be fragile if multiple matching jars exist.**
+- **LOW: Docs promise alphanumeric+dash harness ids, but earlier plans allow broader values.**
+
+### Suggestions
+- Compare unknown gauge before/after instead of requiring absolute `< 1.0`.
+- Add one integration test that triggers STALLED through actual outbound queue pressure, even if marked slow.
+- Correct docs to use `harness=overflow`.
+- Use a deterministic jar path in smoke checks.
+- Align docs and implementation on harness-id character policy.
+
+### Risk Assessment: **MEDIUM**
+Good closure plan, but its tests and docs depend on earlier lifecycle/report fixes.
+
+---
+
+## Final Recommendation
+
+Proceed only after revising these blockers:
+
+1. Fix wave ordering: Plan 04 cannot be same-wave with Plan 02 if it depends on it.
+2. Redesign Plan 03's active/stalled bucket lifecycle, especially STALLED rebind and `bucketTagsByEntityId`.
+3. Move overflow warn-once logging into the same code that folds raw harness ids.
+4. Fix Plan 05 CLI/report/shutdown shape: `Callable<Integer>`, verified env handling, snake_case JSON, no `System.exit` in `run`.
+5. Make `BotClient.onClose` exactly-once or state-guarded.
+6. Reconcile optional metric tag keys with future Prometheus expectations.
+
+After those changes, the phase plan should be strong enough to execute with MEDIUM risk.
+
+---
+
+## OpenCode Review
+
+## Phase 18 Plan Review
+
+### Summary
+
+Phase 18 delivers an external load harness (`LoadHarness`) scaling past 100 bots, per-harness identity attribution via WebSocket handshake headers, and a two-tag Micrometer schema with bounded cardinality. Six plans execute in four waves:
+
+| Plan | Wave | Focus |
+|------|------|-------|
+| 18-01 | 1 | `BotIdentity` record + `BotClient` handshake-header injection |
+| 18-03 | 1 | `AttributionTagger`, `AdmissionMetrics` two-tag extension + MeterFilter cap |
+| 18-02 | 2 | Server-side header read, session ATTR stashing, `AdmissionGate` session-bearing evaluate |
+| 18-04 | 2 | `BotFleet`/`BotFactory` refactor, `BotRunner` migration |
+| 18-05 | 3 | `LoadHarness` Picocli CLI + JSON/JSONL report writer |
+| 18-06 | 4 | Integration tests (`AttributionRebindTest`), `18-HARNESS.md`, `CLAUDE.md` updates |
+
+The plans correctly close SCALE-03, SCALE-04, and SCALE-05. Research is thorough (Jetty 12 header API, Micrometer `MeterFilter`, Spring `HttpHeaders` case-insensitivity all verified). Cross-reviewer amendments are well-documented (overflow folding co-located in `AttributionTagger`, `BotFleet` peak high-water mark semantics, `--duration` as int seconds).
+
+---
+
+### Strengths
+
+- **Clear responsibility separation.** Plan 02 owns *all* `AdmissionGate.java` edits; Plan 03 owns *all* `AdmissionMetrics.java` edits. This avoids the merge hell that usually sinks multi-plan phases.
+- **Defense-in-depth on cardinality.** The 64-cap is enforced twice: `AttributionTagger.foldHarnessIfOverCap` (bucket-map keys) and `MeterFilter.maximumAllowableTags` (registry). The `replaceTagValues` pattern avoids Micrometer issue #4971 memory leaks.
+- **Back-compat preservation.** `BotClient`'s existing 3/5/6-arg constructors remain compilable via `BotClientOptions.defaults(...)`. `BotRunner` exit codes and stdout strings are explicitly preserved.
+- **Rigorous test coverage.** Every release path (graceful close, stalled hold, stalled expiry, stalled rebind, rejected placement, duplicate close) has a dedicated lifecycle test.
+- **Pitfall documentation.** Research calls out six specific pitfalls (rebind attribution loss, constructor sprawl, 30s false-positive ceiling, header spoofing, Spring startup cost, Windows atomic move) and each plan addresses its relevant ones.
+
+---
+
+### Concerns
+
+#### HIGH
+
+- **Plan 03 `AdmissionMetrics` constructor breaking change.** Refactoring from `AdmissionMetrics(MeterRegistry)` to `AdmissionMetrics(MeterRegistry, AdmissionConfig, TickEngine, AttributionTagger)` will break every existing test that instantiates `AdmissionMetrics` directly. The plan says "audit all test sites and update" but provides no exhaustive list of call sites. Missed sites = compilation failure wave 1.
+- **`WorldWebSocketHandler.java` sequential-edit fragility.** Plan 03 (wave 1) deletes `setActiveEntities`/`setStalledSessions` call sites and adds `incActiveBucket`/`decActiveBucket` calls. Plan 02 (wave 2) then reads *the same file* to add handshake-header logic. While wave ordering enforces sequence, any missed Plan 03 call site (e.g., in a `handleTransportError` branch not explicitly listed) will leave a compilation error that Plan 02's executor must debug without context. A single shared structural diagram of `WorldWebSocketHandler` would mitigate this.
+- **Plan 05 assumes unverified `BotClient` observability methods.** The `computeCountersSnapshot` method calls `getActionCount()`, `getPerceptionCount()`, `getRespawnCount()`, `isRegistered()`, `isConnected()`, and `getE408ReconnectRequiredCount()`. Only `getE408...` is explicitly added in Plan 05. If the others don't exist today, Plan 05 will not compile. The interfaces block claims they are "current counters" but this is an unverified assumption (RESEARCH.md did not include a `BotClient.java` read of these specific methods).
+
+#### MEDIUM
+
+- **`bucketTagsByEntityId` rebind lifecycle ambiguity.** On STALLED-pivot rebind, the *old* session is closed and a *new* session is created with the *same* `entityId`. `incActiveBucket` is called for the new session (same key, possibly same Tags), but the old session's `decActiveBucket` may or may not fire depending on whether `cleanupBot` runs for the old session. If `decActiveBucket` fires *after* the rebind increment, we risk transient undercount. The lifecycle test in Plan 06 (`stalledRebindDecrementsStalledIncrementsActive`) locks the steady-state, but a transient dip could trigger false alerts on a dashboard. Add an explicit assertion that `activeBuckets` never goes negative.
+- **`TickHealthMonitorScalarTest` may be vacuous.** The test drives `metrics.setLastTickWorkMs(200)` but `TickHealthMonitor` might not emit a `TICK-HEALTH` log line in response to raw metric updates—it may only evaluate on tick events. If zero lines are emitted, the test passes trivially (`tickHealthLines >= 1` fails, but if the implementation is forgiving it could silently succeed). Lock the test to *force* emission or assert the test is non-vacuous by verifying `tickHealthLines > 0`.
+- **Plan 04 `SpeciesMix.pickFor` is sensitive to `ParticleType.values()` ordering.** The `balanced` path uses `types[i % types.length]`. If the enum declaration order ever changes (e.g., `SPORE` moves before `MEMBRANE`), the species distribution shifts silently. Since ` balanced()` is the default, this is a regression risk. Hardcode the order: `new ParticleType[]{CATALYST, MEMBRANE, SPORE}`.
+- **Plan 05 `--report-interval` VT may lose final write on fast shutdown.** The reporter VT sleeps `reportIntervalSeconds * 1000L`, then checks `exitReason`. If `exitReason` is set *during* the sleep, the VT returns without writing. The shutdown hook then calls `writeFinalAndReturn`, which is fine. But if `durationSeconds` expires and `exitReason` is set between the sleep wake and the write-check, the periodic write is skipped. Acceptable, but means the report might have a gap of up to `reportIntervalSeconds` before the final write. Not a bug, but document it.
+- **Plan 06 `AttributionRebindTest` directly calls `handler.markStalled(session, tick)`.** This assumes `markStalled` is public and takes `(WebSocketSession, long)`. If the signature differs (e.g., needs an `OutboundSender` or a `Consumer<Session>`), the test won't compile. Verify the exact signature in `WorldWebSocketHandler.java` before Plan 06 execution.
+
+#### LOW
+
+- **No JSON Schema for the report.** Phase 21 benchmark aggregation could benefit from a lightweight schema. Deferrable.
+- **No test for the 5000-connection design ceiling.** "Designed for 5000" is stated but unverified. Acceptable since the admission gate caps at 256 by default.
+- **`loadHarnessJar` uses Spring Boot `BootJar`**, pulling ~30MB of unused Spring deps into a pure client process. Wasteful but operationally harmless. Consider a future optimization to plain `Jar` with `Manifest` `Class-Path`.
+- **Plan 05 `generateHarnessId()` could collide.** `ThreadLocalRandom.nextLong()` has 2^64 space; collision probability is negligible for 64 concurrent harnesses, but not zero. Acceptable.
+
+---
+
+### Suggestions
+
+1. **Add a `BotClient.java` observability audit to Plan 05 wave 0.** Before writing `LoadHarness.computeCountersSnapshot`, grep `BotClient.java` for `getActionCount|getPerceptionCount|getRespawnCount|isRegistered|isConnected`. If any are missing, add them in a Plan 05 prerequisite task or default to zero in `computeCountersSnapshot`.
+2. **Replace `SpeciesMix.pickFor` enum iteration with an explicit ordered array.** Prevents silent behavioral regression if `ParticleType` declaration order changes.
+3. **Harden `TickHealthMonitorScalarTest` against vacuous pass.** Assert that the test actually triggers at least one `TICK-HEALTH` log line by driving the real tick loop or mocking `TickHealthMonitor` to emit on threshold breach.
+4. **Add a transient-negative guard to `AdmissionMetricsLifecycleTest`.** Assert `activeBuckets` values never go below zero during the `stalledRebind` test.
+5. **Document the report-gap invariant in `18-HARNESS.md`.** State that the on-disk file reflects the most recent periodic snapshot or the final snapshot, whichever is later; gaps of up to `--report-interval` are expected.
+6. **Consider a `BotClient` builder for future phases.** `BotClientOptions` is a good step, but with 7+ fields a fluent builder (`BotClient.builder().serverUri(u).species('C').identity(id).build()`) would improve readability for the 999.2 producer.
+
+---
+
+### Risk Assessment: **MEDIUM**
+
+**Justification:**
+
+- **Dependency ordering is mostly sound** (waves 1→2→3→4), but `WorldWebSocketHandler.java` being edited in both Plan 03 and Plan 02 creates a single point of fragility. A missed call site or subtle merge drift in that file could propagate into metric corruption or compilation failure.
+- **Metrics machinery is sophisticated.** The `AttributionTagger` ↔ `MeterFilter` ↔ `bucketTagsByEntityId` interaction is correct on paper but has edge cases around rebind and concurrent decrement. The lifecycle tests cover this, but they themselves depend on exact `markStalled` and `SessionRegistry` signatures.
+- **Plan 05's unverified `BotClient` observability assumptions** are the most likely source of a compilation surprise. If those methods don't exist, the Plan 05 integration test cannot compile.
+
+Mitigation: Run a **wave 0 spike** that audits `BotClient` for counter methods and verifies `markStalled` signature before any code is written. If both checks pass, risk drops to **LOW**.
 
 ---
 
 ## Consensus Summary
 
-Overall risk verdicts split: **Gemini = LOW**, **OpenCode = MEDIUM**, **Codex = MEDIUM-HIGH**, **Claude = MEDIUM-HIGH**. The split is itself a signal — Gemini reads the plans as well-mitigated by their own architectural choices; the other three flag plan-internal contradictions and ownership boundaries that will bite at execute time. Treat the median (MEDIUM) as the working assumption and resolve the cross-plan contradictions below before Wave 1.
+### Risk Verdict Spread
 
-### Agreed Strengths
+| Reviewer | Risk | Recommendation |
+|----------|------|----------------|
+| Gemini | LOW | Execute as-is; only LOW concerns |
+| Claude | MEDIUM | Amend Plan 03 markStalled ordering then execute |
+| Codex | HIGH→MEDIUM after fixes | Block on 6 listed amendments |
+| OpenCode | MEDIUM→LOW with wave-0 spike | Audit BotClient counters + markStalled signature first |
 
-- **Cardinality safety net** — `MeterFilter.maximumAllowableTags` + `replaceTagValues` avoiding Micrometer issue #4971's `deny()` memory leak (Gemini, OpenCode).
-- **AttributionRebindTest catches the STALLED-pivot attribution loss** — phase's most subtle failure mode locked by Plan 06 (Gemini, Claude, OpenCode).
-- **Wave decomposition / dependency sequencing is clean** — independent landings for 18-01 and 18-03, then 18-02 consumes both (Gemini, Codex, OpenCode).
-- **BotRunner preservation is explicit** — 100-bot operator path stays in scope alongside the new harness, satisfying SCALE-05 (Codex, Claude).
-- **`BotFactory` forward-compat seam for 999.2** is minimal and correctly placed (Codex, OpenCode).
+Three of four reviewers agree the architecture is sound and remaining issues are mechanical/executional, not design-level. Codex is the outlier on overall severity but its specific findings overlap heavily with the others.
 
-### Agreed Concerns (highest priority — fix before execute)
+### Agreed Strengths (2+ reviewers)
 
-1. **HIGH — Plan 02 / Plan 03 cross-edits to `AdmissionGate.java` collide** (Codex, OpenCode, Claude — three of four).
-   - OpenCode pinpoints the compilation break: Plan 03 Wave 1 calls `metrics.incRejected(token, session)` from `AdmissionGate.reject(...)`, but the session-bearing `reject` signature only arrives in Plan 02 Wave 2.
-   - Codex names it an "ownership conflict": both plans reshape `AdmissionGate`.
-   - Claude additionally flags missing `WorldWebSocketHandler.java` in Plan 03's `files_modified`, which Plan 02 also edits.
-   - **Recommended fix (Codex + OpenCode agree):** consolidate all `AdmissionGate.java` edits into Plan 02; Plan 03 owns `AdmissionMetrics.java` plus the call-site updates in `WorldWebSocketHandler` / `ActionResolver` / `OutboundSender` only.
+- **Cardinality defense-in-depth** — `AttributionTagger.foldHarnessIfOverCap` + `MeterFilter` cap, with `replaceTagValues` avoiding Micrometer leak (Gemini, OpenCode).
+- **Plan 03 every-release-path lifecycle test** — covers all six release paths; strong regression net (Claude, OpenCode).
+- **AdmissionGate ownership consolidation in Plan 02** — eliminates merge conflicts (Claude, OpenCode).
+- **Plan 06 `AttributionRebindTest` directly locks T-18-04** — STALLED-pivot attribution loss; agreed as the right invariant lock (Gemini, Claude, Codex, OpenCode).
+- **BotIdentity invariant tightening + reusable normalization** — Round-1 amendments absorbed (Claude, Codex, Gemini).
+- **Doc closure / forward-compat seams** — `18-HARNESS.md`, `BotFactory` for backlog 999.2 (Gemini, OpenCode).
+- **Wave 1 → Wave 2 sequencing of `WorldWebSocketHandler` edits prevents collision** (Claude positive, OpenCode flags fragility but agrees ordering is correct).
 
-2. **HIGH — Plan 02 internally contradicts itself on TICK-HEALTH `source=` field** (Codex HIGH; Claude flags the brittle grep acceptance criterion).
-   - `must_haves` says TICK-HEALTH log markers gain `source=server`; Task 2 says no `source=` should appear and TICK-HEALTH stays scalar.
-   - Codex recommends keeping it scalar (consistent with D-12); Claude recommends replacing the build-time grep with a `ListAppender`-based unit test.
+### Agreed Concerns (2+ reviewers — highest priority)
 
-3. **HIGH/MEDIUM — Per-bucket active/stalled gauge accounting is fragile** (Codex HIGH, Gemini MEDIUM, OpenCode LOW + adjacent).
-   - Gemini: idempotent-cleanup double-decrement via `handleTransportError` → `afterConnectionClosed`. Fix: guard `decActiveBucket(session)` inside the existing `if (wasRegistered)` block.
-   - Codex: too many lifecycle paths (admission, cleanup, stalled, rebind, action) — missed decrement = silent drift. Suggests deriving buckets from snapshots instead of inc/dec.
-   - OpenCode: `activeBuckets` / `stalledBuckets` maps never evict (small risk, but worth a note).
+#### HIGH — Block before execute
 
-4. **MEDIUM — Plan 05 `--duration` format inconsistency** (Codex, Claude, OpenCode — three of four).
-   - Context (D-16) says `--duration=<seconds>`; plan code uses ISO-8601 `Duration` like `PT5S`.
-   - Three independent reviewers want `int seconds`. OpenCode adds: Picocli 4.7 has no built-in `Duration` converter, so the `PT0S` default may fail at runtime without a custom `ITypeConverter<Duration>`.
-   - Codex separately flags `CommandLine.execute(args)` won't work on an option-holder class — needs `parseArgs` / `populateCommand`, or make `LoadHarness` itself the `@Command`.
+1. **Plan 03 STALLED-pivot bucket accounting is the highest-risk single area.**
+   - Claude HIGH: `markStalled` ordering bug — `incStalledBucket(session)` runs after `attrs.remove(ATTR_ENTITY_ID)`, snapshot lost, grace-expiry has no Tags.
+   - Codex HIGH: `bucketTagsByEntityId` lifecycle ownership fragile; rebind active-bucket double-count possible.
+   - OpenCode MEDIUM: rebind transient-negative window between old-session `decActiveBucket` and new-session `incActiveBucket`.
+   - **Action:** specify `markStalled` call ordering explicitly OR change signature to `incStalledBucket(WebSocketSession, String entityId)`; clarify rebind prose ("active stays incremented from original Allow"); add `activeBuckets ≥ 0` invariant assertion to lifecycle test.
 
-5. **MEDIUM — Plan 05 overwrite-mode report drops static header fields** (OpenCode — sole catch, but mechanically clear bug).
-   - `computeSnapshot` calls `ReportSnapshot.counters(...)` which nulls `harnessId`, `serverUri`, `targetCount`. After the first 30s reporter VT tick, the overwrite report permanently loses static config.
-   - Fix: store header snapshot in `LoadHarness`; merge with live counters in every overwrite write.
+2. **Plan 05 has multiple implementation-shape defects.**
+   - Codex HIGH: `LoadHarness.run()` calling `System.exit` (use `Callable<Integer>`); JSON field naming camelCase vs required snake_case; SIGINT/SIGTERM distinction not portable; Picocli env-var `${VAR}` syntax unverified.
+   - OpenCode HIGH: `LoadHarness.computeCountersSnapshot` calls `BotClient` getters not verified to exist.
+   - Claude MEDIUM: `BotFleet` shutdown idempotency edit missing from `files_modified`; shutdown-hook leak in tests.
+   - **Action:** make `LoadHarness` `Callable<Integer>`; force snake_case via Jackson `PropertyNamingStrategies.SNAKE_CASE` or `@JsonProperty`; spike-audit BotClient observability methods before Plan 05 execute (OpenCode's wave-0 audit); register/remove shutdown hook with reference; verify Picocli env-var syntax; collapse signal-distinction unless deliberately implemented.
 
-6. **MEDIUM — `BotFleet` counter semantics under STALLED-pivot rebind** (OpenCode + adjacent Gemini/Claude concerns about `onClose` hook).
-   - OpenCode: BotClient reconnects through its own internal loop (Phase 17), not through `BotFleet`, so `liveCount` is decremented but never re-incremented on rebind. `currentRegistered()` undercounts for long-running harnesses.
-   - Mitigation: document `BotFleet` counters as best-effort for ramp window; rely on server-side gauge + per-bot `isRegistered()` polling for steady-state.
+3. **Wave-ordering / file-edit fragility on `WorldWebSocketHandler.java`.**
+   - Codex HIGH: Plan 04 same-wave as Plan 02 despite dependency.
+   - OpenCode HIGH: sequential edits to `WorldWebSocketHandler` across Plan 03 (W1) → Plan 02 (W2); a missed call site leaves silent compilation failure for the next executor.
+   - **Action:** either move Plan 04 to Wave 3 OR document explicit serial sub-ordering inside Wave 2; produce a `WorldWebSocketHandler` structural snapshot listing every call site before Plan 03 edits.
 
-### Divergent Views
+4. **`BotClient.onClose` double-decrement risk** (Codex HIGH, Plan 04).
+   - Disconnect callbacks + Jetty `onClose` can both fire → `liveCount` negative.
+   - **Action:** state-guard the decrement with a CAS on a registered/closed flag.
 
-- **`BotIdentity` invariants** — Codex (HIGH) flags that `new BotIdentity("operator", Optional.of("h1"))` is legal; recommends enforcing `source=harness` iff `harnessId.isPresent()` plus normalization in the compact constructor. The other three reviewers don't surface this.
-- **JSONL durability** — Gemini flags Windows file-locking races on `tail -f` readers (suggests retry loop); Codex wants the temp+rename-vs-append-SYNC mismatch documented as intentional in `18-HARNESS.md`. Claude/OpenCode silent.
-- **AttributionRebindTest mechanics** — OpenCode flags package-visibility risk for `handler.markStalled(session, tick)` direct call; others assume it works.
-- **Test scope** — Codex argues 200/1000-bot harness integration tests should be slow-gated for Phase 21; Gemini and OpenCode read the existing test scaffolding as appropriately sized.
-- **Risk weighting** — Gemini reads the plans as low-risk because the architecture leans on stable libraries with explicit threat-model entries. The other three weight plan-internal contradictions higher than architectural soundness; this is the gap to close before execute.
+#### MEDIUM — Fix during execute or document
 
-### Recommended Plan Amendments (consensus-driven, before `gsd-execute-phase 18`)
+- **`AdmissionMetrics` constructor breaking change** — exhaustive grep for call sites mandated, not optional (OpenCode HIGH, Gemini LOW with concrete `grep -l 'new AdmissionMetrics('` suggestion).
+- **Server-side harness-id sanitation must not depend on client `BotIdentity`** — reject ASCII control chars + enforce alphanumeric+dash on the server path (Codex HIGH on Plan 02, Claude MEDIUM on header trust).
+- **`TickHealthMonitorScalarTest` vacuous-pass risk** — if the test never triggers a `TICK-HEALTH` line it silently passes (Codex MEDIUM, OpenCode MEDIUM). Force emission or assert `tickHealthLines > 0`.
+- **`SpeciesMix.pickFor` balanced-mode depends on `ParticleType.values()` order** (OpenCode MEDIUM, Codex MEDIUM-LOW). Hardcode `{CATALYST, MEMBRANE, SPORE}`.
+- **`closeReason="stalled-held"` outside D-14 taxonomy** (Claude LOW, Codex LOW). Document in `18-HARNESS.md` §5.
+- **Overflow warn-once log location** — must live in `AttributionTagger` folding code, not only the `MeterFilter`, or 65th id never logged (Codex HIGH).
+- **`AttributionTagger` cap-boundary race** — `putIfAbsent` + `incrementAndGet` rollback isn't atomic; either mutex slot-claim or document acceptable narrow window (Claude MEDIUM, Codex MEDIUM, Gemini LOW).
 
-1. Move all `AdmissionGate.java` edits into Plan 02; trim Plan 03's `files_modified` to `AdmissionMetrics.java` plus call sites in `WorldWebSocketHandler` / `ActionResolver` / `OutboundSender`.
-2. Resolve TICK-HEALTH contradiction in Plan 02 — recommend keeping scalar (Codex). Replace the grep acceptance criterion with a `ListAppender` assertion (Claude).
-3. Plan 05: change `--duration` to `int seconds` (D-16); replace `CommandLine.execute` with `parseArgs`/`populateCommand` or annotate `LoadHarness` as `@Command`.
-4. Plan 05: fix `computeSnapshot` overwrite-mode header retention.
-5. Plan 03: guard `decActiveBucket` inside `if (wasRegistered)` in `cleanupBot`; add tests for every release path (graceful close, stalled hold, stalled expiry, rebind success, reject after placement failure, duplicate close).
-6. Plan 04: document `BotFleet.currentRegistered()` as best-effort ramp-window metric; cite server-side gauge as authoritative for steady state.
-7. Plan 01: tighten `BotIdentity` invariants — `source=harness` ⇔ `harnessId.isPresent()`, normalize/truncate in compact constructor, reject control chars.
+#### LOW — Polish
 
-To incorporate: `/gsd-plan-phase 18 --reviews`
+- Picocli `defaultValue` patterns; jar-glob path determinism; LoadTest single-harness comment; harness-id char policy doc alignment; report-gap invariant doc.
+
+### Divergent Views (worth investigating)
+
+- **Overall risk level.** Gemini (LOW) vs Codex (HIGH-pre-fix). Gemini reads the Round-1 amendment block as resolving the architectural risks; Codex reads the prescriptive code skeletons as still containing executable defects. The truth is that the architecture is sound (per Gemini) but the plan text contains executable defects (per Codex/OpenCode/Claude HIGH on Plan 03 markStalled ordering). Net: **MEDIUM** is the correct reading.
+- **`bucketTagsByEntityId` design.** Codex wants a redesign to explicit `entityId → AttributionBucket` state machine; Claude treats it as a one-line ordering fix. Lower-cost path (Claude's) likely sufficient if call ordering is mandated and `AdmissionMetricsLifecycleTest::stalledExpiryDecrementsBothBuckets` would fail on snapshot loss.
+- **Optional `harness` tag for future Prometheus export.** Codex flags MEDIUM (consistent tag keys expected); OpenCode and Claude don't raise. Worth a one-line spike: confirm that `MeterFilter`'s `replaceTagValues` produces consistent key sets, OR adopt `harness="none"` sentinel now to forestall M5 Prometheus rework.
+- **Reconnect-test fidelity** (Plan 01). Codex flags MEDIUM (fresh `BotClient` instance ≠ same-instance reconnect path); other reviewers don't flag. Worth amending the test to drive the actual reconnect loop, not just a fresh constructor call.
+- **ActionResolver session lookup as scale regression** (Codex HIGH, Plan 03). Codex calls O(active sessions) work on the action hot path a regression for a scale milestone; other reviewers don't flag. Worth measuring or adding `SessionRegistry.getById(sessionId)` before Plan 03 execute.
+
+### Recommendation
+
+Adopt the union of HIGH-severity findings above before execute. Concretely:
+
+1. Plan 03: specify `markStalled` call ordering OR pass entityId explicitly to `incStalledBucket`; rewrite rebind prose; move overflow warn-once log into `AttributionTagger`; add `OutboundSender` delete-call-site spec; document or fix cap-boundary race; add `SessionRegistry.getById(sessionId)` (or pass session/tags) for ActionResolver hot path.
+2. Plan 04: state-guard `BotClient.onClose` decrement; move BotFleet shutdown idempotency here from Plan 05; either move plan to Wave 3 or document Wave-2 serial sub-ordering; fix ramp-rate precision (`1000 / perSecond` precision loss).
+3. Plan 05: `Callable<Integer>` shape; snake_case via Jackson naming strategy; verify Picocli env-var syntax; capture shutdown-hook reference for test cleanup; spike-audit `BotClient` observability methods before write.
+4. Plan 02: server-side harness-id sanitizer reused from `BotIdentity`; document `stalled-held` close token in `18-HARNESS.md` §5; harden `TickHealthMonitorScalarTest` against vacuous pass.
+5. Wave plan: serialize Plan 02 → Plan 04 inside Wave 2 (or move Plan 04 to Wave 3) to avoid same-wave dependency.
+6. Cross-cutting: produce a `WorldWebSocketHandler` call-site map before Plan 03 edits; produce a `new AdmissionMetrics(` grep before Plan 03 executes.
+
+After amendments, executor risk: MEDIUM. Phase goal achievement (SCALE-03/04/05) remains intact.
