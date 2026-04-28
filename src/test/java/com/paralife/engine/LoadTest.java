@@ -1,13 +1,21 @@
 package com.paralife.engine;
 
 import com.paralife.bot.BotClient;
-import com.paralife.bot.BotLauncher;
+import com.paralife.bot.BotFactory;
+import com.paralife.bot.BotFleet;
+import com.paralife.bot.BotIdentity;
+import com.paralife.bot.RampUpSpec;
+import com.paralife.bot.SpeciesMix;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.List;
@@ -17,6 +25,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Load test: 100 concurrent bots with full simulation, verifying no tick drift
  * or data corruption.
+ *
+ * <p>Phase 18 migration: bots are launched via {@link BotFleet} with
+ * {@link BotIdentity#harness(String) BotIdentity.harness("test-load")} so the test
+ * exercises the attribution path end-to-end. A gauge assertion verifies that the
+ * server-side active-entities bucket for {@code source=harness, harness=test-load}
+ * is populated during the run.
+ *
+ * <p>Single harness id — well within the 64-cap MeterFilter threshold (D-10). All 100
+ * bots share the same id, which costs exactly one cardinality slot per test run.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {
@@ -34,6 +51,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         "paralife.websocket.max-respawns-per-session=1000000",
         "paralife.admission.cap=1000000"
 })
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class LoadTest {
 
     private static final Logger log = LoggerFactory.getLogger(LoadTest.class);
@@ -41,11 +59,16 @@ class LoadTest {
     @LocalServerPort
     private int port;
 
-    private final BotLauncher launcher = new BotLauncher();
+    @Autowired
+    private MeterRegistry meterRegistry;
+
+    // Phase 18: BotFleet + BotFactory replaces the legacy BotLauncher.
+    // Single harness id; well within the 64-cap MeterFilter threshold (D-10).
+    private final BotFleet fleet = new BotFleet();
 
     @AfterEach
     void tearDown() {
-        launcher.shutdown();
+        fleet.shutdown();
     }
 
     @Test
@@ -53,8 +76,22 @@ class LoadTest {
         String uri = "ws://localhost:" + port + "/ws/world";
         int botCount = 100;
 
-        List<BotClient> bots = launcher.launch(uri, botCount);
+        // Phase 18: use BotIdentity.harness("test-load") so the attribution path is
+        // exercised end-to-end. All 100 bots share the same harness id (one cardinality
+        // slot, well within D-10's 64-cap).
+        BotIdentity identity = BotIdentity.harness("test-load");
+        BotFactory factory = new BotFactory(uri);
+
+        List<BotClient> bots = fleet.launch(
+                uri, botCount, identity,
+                RampUpSpec.instant(),
+                SpeciesMix.balanced(),
+                factory);
+
         assertThat(bots).hasSize(botCount);
+
+        // Wait for registration to settle (allow up to 30s for all VTs to connect).
+        fleet.awaitAllSettled().get(30, java.util.concurrent.TimeUnit.SECONDS);
 
         // Verify most registered (some may fail under heavy concurrent load)
         long registered = bots.stream().filter(BotClient::isRegistered).count();
@@ -65,6 +102,22 @@ class LoadTest {
 
         // Run for ~100 ticks at 100ms = 10 seconds
         Thread.sleep(10_000);
+
+        // Verify: harness-tagged active-entities gauge is populated.
+        // This confirms the attribution path is wired end-to-end: BotClient sends
+        // X-Paralife-Source: harness + X-Paralife-Harness: test-load; the server
+        // reads them in afterConnectionEstablished and tags the Micrometer gauge.
+        Gauge harnessGauge = meterRegistry.find("paralife.admission.active.entities")
+                .tags("source", "harness", "harness", "test-load")
+                .gauge();
+        assertThat(harnessGauge)
+                .as("paralife.admission.active.entities{source=harness, harness=test-load} "
+                        + "gauge must exist — attribution path must be wired end-to-end")
+                .isNotNull();
+        assertThat(harnessGauge.value())
+                .as("Active entities gauge for harness=test-load should be >= 99 "
+                        + "(at least 99 of 100 bots should be active)")
+                .isGreaterThanOrEqualTo(99.0);
 
         // Verify: most bots still connected
         long connected = bots.stream().filter(BotClient::isConnected).count();
