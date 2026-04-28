@@ -75,6 +75,9 @@ public class BotClient {
     private final AtomicInteger perceptionCount = new AtomicInteger();
     private final AtomicInteger syncCount = new AtomicInteger();
     private final AtomicInteger respawnCount = new AtomicInteger();
+    // Phase 18 Plan 05 (Round 2 OpenCode HIGH): new monotonic counters for LoadHarness report.
+    private final AtomicInteger e408ReconnectRequiredCount = new AtomicInteger();
+    private final AtomicInteger syncsReceivedCount = new AtomicInteger();
     private final CountDownLatch connectedLatch = new CountDownLatch(1);
     private final CountDownLatch registeredLatch = new CountDownLatch(1);
     private final AtomicBoolean alive = new AtomicBoolean(false);
@@ -309,6 +312,24 @@ public class BotClient {
         return respawnCount.get();
     }
 
+    /**
+     * Phase 18 Plan 05 (Round 2 OpenCode HIGH): monotonic count of E|408|reconnect-required
+     * frames received from the server. Incremented in the STALLED-pivot path before
+     * {@link #handleStalled()} is called.
+     */
+    public int getE408ReconnectRequiredCount() {
+        return e408ReconnectRequiredCount.get();
+    }
+
+    /**
+     * Phase 18 Plan 05 (Round 2 OpenCode HIGH): monotonic count of S|... (sync) frames
+     * received. Incremented on every {@link Frame.SyncFrame} — initial registration AND
+     * each respawn re-sync.
+     */
+    public int getSyncsReceivedCount() {
+        return syncsReceivedCount.get();
+    }
+
     /** Encode + send a frame. Silently no-ops if the session is not open. */
     private synchronized void sendFrame(Frame f) {
         Session s = this.session;
@@ -347,6 +368,9 @@ public class BotClient {
         // On re-sync after respawn, reset BotState to a fresh SOLO of the
         // original species — any prior bonded/composite state is gone on death.
         state.set(BotState.initial(species));
+        // Phase 18 Plan 05 (Round 2 OpenCode HIGH): increment syncsReceivedCount on every
+        // S|... frame — both initial registration AND each respawn re-sync.
+        syncsReceivedCount.incrementAndGet();
         if (syncCount.getAndIncrement() == 0) {
             registeredLatch.countDown();
         } else {
@@ -386,6 +410,9 @@ public class BotClient {
         String msg = e.message().orElse("");
         log.warn("Server error {}: {}", e.code(), msg);
         if (e.code() == 408 && "reconnect-required".equals(msg)) {
+            // Phase 18 Plan 05 (Round 2 OpenCode HIGH): increment before handleStalled so the
+            // monotonic counter is visible to LoadHarness even if the bot never reconnects.
+            e408ReconnectRequiredCount.incrementAndGet();
             // Phase 17 STALLED-pivot: server is closing this WS; reconnect with token to rebind same entity.
             handleStalled();
             return;
