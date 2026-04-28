@@ -183,8 +183,8 @@ class AdmissionMetricsLifecycleTest {
     void sessionRegistryGetByIdReturnsNullForMissingId() {
         // Verifies SessionRegistry.getById API (Round 2 Codex HIGH)
         // We test the API contract here; the performance test is in SessionRegistryTest
-        com.paralife.websocket.WebSocketMetrics wsMetrics =
-                mock(com.paralife.websocket.WebSocketMetrics.class);
+        com.paralife.metrics.WebSocketMetrics wsMetrics =
+                mock(com.paralife.metrics.WebSocketMetrics.class);
         com.paralife.websocket.SessionRegistry sessionRegistry =
                 new com.paralife.websocket.SessionRegistry(wsMetrics);
 

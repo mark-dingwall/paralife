@@ -29,7 +29,9 @@ class TickHealthMonitorTest {
                 new AdmissionConfig.TickOverloadConfig(80, 60, 5),  // window=5
                 AdmissionConfig.BackpressureConfig.defaults(),
                 AdmissionConfig.AttributionConfig.defaults());
-        metrics = new AdmissionMetrics(new SimpleMeterRegistry());
+        when(tickEngine.currentTick()).thenReturn(0L);
+        AttributionTagger tagger = new AttributionTagger(64, tickEngine);
+        metrics = new AdmissionMetrics(new SimpleMeterRegistry(), admissionConfig, tickEngine, tagger);
         monitor = new TickHealthMonitor(tickEngine, admissionConfig, tickConfig, metrics);
     }
 
