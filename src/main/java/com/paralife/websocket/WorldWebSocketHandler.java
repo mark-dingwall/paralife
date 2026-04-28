@@ -359,7 +359,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
                 register.resumeToken());
 
         AdmissionResult result = (admissionGate != null)
-                ? admissionGate.evaluate(req)
+                ? admissionGate.evaluate(req, session)
                 : AdmissionResult.Allow.INSTANCE;
 
         if (result instanceof AdmissionResult.Reject reject) {

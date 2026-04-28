@@ -5,6 +5,8 @@ import com.paralife.world.WorldGrid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.WebSocketSession;
+
 
 import jakarta.annotation.PostConstruct;
 import java.util.Optional;
@@ -93,34 +95,36 @@ public class AdmissionGate {
     }
 
     /**
-     * Evaluate admission for a single bot registration or respawn attempt.
+     * Session-bearing admission evaluation (Phase 18 Plan 02).
      *
-     * @param req Request context assembled by the WebSocket handler.
+     * <p>Passes {@code session} to the internal {@link #reject} helper so that
+     * {@link AdmissionMetrics#incRejected(String, WebSocketSession)} receives the
+     * session context for per-bucket attribution tagging (D-12 / D-13).
+     *
+     * @param req     Request context assembled by the WebSocket handler.
+     * @param session The WebSocket session associated with this request (may be null).
      * @return {@link AdmissionResult.Allow} to proceed, {@link AdmissionResult.Reject}
      *         to send an error frame, or {@link AdmissionResult.Rebind} to re-attach
      *         the session to an existing entity.
      */
-    public AdmissionResult evaluate(AdmissionRequest req) {
+    public AdmissionResult evaluate(AdmissionRequest req, WebSocketSession session) {
 
         // Guard 1: Maintenance (D-16). Checked first — operator intent takes absolute precedence.
         if (admissionConfig.maintenance()) {
-            return reject(req, 429, RejectionToken.MAINTENANCE);
+            return reject(req, session, 429, RejectionToken.MAINTENANCE);
         }
 
         // Guard 2: Tick-overload (D-14). Hysteresis gate from TickHealthMonitor.
         if (tickHealthMonitor.isOverloaded()) {
-            return reject(req, 429, RejectionToken.TICK_OVERLOAD);
+            return reject(req, session, 429, RejectionToken.TICK_OVERLOAD);
         }
 
         // Guard 3: Already-registered — BEFORE resume-token (corrected per codex MEDIUM / T-17-confused).
-        // A currently Alive session re-sending r|<type>|<token> is client confusion.
-        // Return 409 deterministically; tryRebind is NOT called.
         if (req.alreadyAlive()) {
-            return reject(req, 409, RejectionToken.ALREADY_REGISTERED);
+            return reject(req, session, 409, RejectionToken.ALREADY_REGISTERED);
         }
 
-        // Guard 4: Resume-token re-bind (D-13). Valid STALLED token bypasses cap checks —
-        // the entity is already counted in livingEntityCount().
+        // Guard 4: Resume-token re-bind (D-13).
         Optional<String> token = req.resumeToken();
         if (token.isPresent()) {
             Optional<ResumeTokenRegistry.RebindOutcome> rebind =
@@ -130,20 +134,15 @@ public class AdmissionGate {
                 metrics.incRebound();
                 return new AdmissionResult.Rebind(outcome.entityId(), outcome.freshResumeToken());
             }
-            // Unknown or expired token → fall through to fresh-registration path (D-13 back-compat).
         }
 
-        // Guard 5: Global cap (D-01). Atomic reservation closes the A4 check-then-act race —
-        // N concurrent r| frames cannot all observe `active = cap-1` and all succeed.
-        // Respawn frames REUSE the slot reserved at initial registration; only fresh
-        // registrations consume a new slot. The slot is released by WorldWebSocketHandler.cleanupBot
-        // when the session ends (covers Alive→close, Dead→close, and STALLED→reaped paths).
+        // Guard 5: Global cap (D-01).
         int cap = admissionConfig.cap();
         if (!req.isRespawn()) {
             while (true) {
                 int n = reservedSlots.get();
                 if (n >= cap) {
-                    return reject(req, 429, RejectionToken.WORLD_FULL);
+                    return reject(req, session, 429, RejectionToken.WORLD_FULL);
                 }
                 if (reservedSlots.compareAndSet(n, n + 1)) {
                     break;
@@ -153,19 +152,39 @@ public class AdmissionGate {
 
         // Guard 6: Per-session respawn cap.
         if (req.isRespawn() && req.respawnCount() >= respawnConfig.maxRespawnsPerSession()) {
-            return reject(req, 429, RejectionToken.RESPAWN_CAP);
+            return reject(req, session, 429, RejectionToken.RESPAWN_CAP);
         }
 
         return AdmissionResult.Allow.INSTANCE;
     }
 
     /**
-     * Emit metric + D-19 log marker, then return the Reject result.
+     * Back-compat no-session overload — delegates to session-bearing overload with null session.
+     *
+     * <p>Pre-Phase-18 callers that construct {@link AdmissionRequest} directly (tests, etc.)
+     * continue to work without modification. Attribution tags will resolve to {@code source=unknown}.
+     *
+     * @param req Request context assembled by the WebSocket handler.
+     * @return Admission result.
      */
-    private AdmissionResult.Reject reject(AdmissionRequest req, int code, String token) {
-        metrics.incRejected(token);
-        log.info("ADMISSION rejected tick={} session={} reason={} active={}/{}",
+    public AdmissionResult evaluate(AdmissionRequest req) {
+        return evaluate(req, null);
+    }
+
+    /**
+     * Emit metric + D-19 log marker with session attribution, then return the Reject result.
+     *
+     * <p>Phase 18 Plan 02: the ADMISSION rejected marker now carries
+     * {@code source=<v>[ harness=<id>]} from {@link AttributionTagger#formatLogFields(WebSocketSession)}
+     * (D-13). Metrics use the session-bearing {@link AdmissionMetrics#incRejected(String, WebSocketSession)}
+     * for per-bucket attribution tagging.
+     */
+    private AdmissionResult.Reject reject(AdmissionRequest req, WebSocketSession session,
+                                           int code, String token) {
+        metrics.incRejected(token, session);
+        log.info("ADMISSION rejected tick={} session={} reason={} {} active={}/{}",
                 req.tickNumber(), req.sessionId(), token,
+                AttributionTagger.formatLogFields(session),
                 worldGrid.livingEntityCount(), admissionConfig.cap());
         return new AdmissionResult.Reject(code, token);
     }
