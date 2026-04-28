@@ -662,27 +662,27 @@ try {
 | A6 | `BotClient` currently re-sends handshake headers on STALLED-pivot reconnect (because the BotIdentity is held as a field, not bound to a single session lifecycle). | Pitfall 1 | **HIGH** — must be verified in code during planning. If false, Phase 17's STALLED-pivot test path silently loses attribution. Mitigation: explicit test (`AttributionRebindTest`) and explicit check of `BotClient.connect()` ordering. |
 | A7 | `MeterFilter` registration via `@PostConstruct` in `AdmissionMetrics` runs BEFORE the first counter write. | Pattern 4 | **LOW** — Spring guarantees `@PostConstruct` runs before the bean is exposed; counter writes happen at request time, after startup. But if a `@EventListener(ApplicationReadyEvent)` accidentally writes before `@PostConstruct`, things fail. Plan should specify `@PostConstruct` ordering explicitly. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Cardinality cap config namespace.**
    - What we know: D-10 says default 64; tunable via `paralife.admission.attribution.max-harness-cardinality` OR `paralife.harness.*` (Claude's discretion).
    - What's unclear: which namespace the user prefers — `attribution` lives under `admission` (cohesive with Phase 17 cap-related config), `harness` would be a new namespace.
-   - Recommendation: Use `paralife.admission.attribution.max-harness-cardinality` — keeps server-side admission-related config under one prefix and avoids creating a server-side `paralife.harness.*` namespace that has no other members. Document this choice in `18-HARNESS.md`.
+   - RESOLVED: Use `paralife.admission.attribution.max-harness-cardinality` — keeps server-side admission-related config under one prefix and avoids creating a server-side `paralife.harness.*` namespace that has no other members. Document this choice in `18-HARNESS.md`.
 
 2. **Append-mode JSONL atomicity strictness.**
    - What we know: D-17 says "atomic temp + rename" applies "always".
    - What's unclear: Whether per-line or only header-line atomic-rename is required.
-   - Recommendation: Per A5 — propose header-line atomic + counter-line append+SYNC; surface as a user clarification at plan-time if the user disagrees.
+   - RESOLVED: Per A5 — propose header-line atomic + counter-line append+SYNC; surface as a user clarification at plan-time if the user disagrees.
 
 3. **Whether `BotLauncher.java` is deleted or kept as a thin facade.**
    - What we know: D-04 says "refactor, do not fork."
    - What's unclear: Whether an external test (`HundredBotIntegrationTest`?) imports `BotLauncher` directly.
-   - Recommendation: Search for `import com.paralife.bot.BotLauncher`; if any non-test file imports it, keep a deprecated facade. Otherwise delete.
+   - RESOLVED: Search for `import com.paralife.bot.BotLauncher`; if any non-test file imports it, keep a deprecated facade. Otherwise delete.
 
 4. **Whether `LoadTest.java` opts into harness-tagged path.**
    - What we know: Claude's discretion in CONTEXT.md says "recommended" for end-to-end attribution coverage.
    - What's unclear: Whether updating LoadTest blocks any expectation in `LoadTestSummary.md` etc.
-   - Recommendation: Yes — set `harness-id=test-load` and `source=harness` in LoadTest. Adds attribution-path coverage with zero behavioral cost.
+   - RESOLVED: Yes — set `harness-id=test-load` and `source=harness` in LoadTest. Adds attribution-path coverage with zero behavioral cost.
 
 ## Environment Availability
 
