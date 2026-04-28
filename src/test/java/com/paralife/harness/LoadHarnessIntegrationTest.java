@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.lang.reflect.Field;
 import java.nio.file.Files;
@@ -39,7 +40,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>Round 2 Claude+OpenCode MEDIUM: shutdown hook removed after runInternal() returns</li>
  * </ul>
  */
+// @DirtiesContext: the harness launches real bots that register on the server-side admission gate.
+// Without context isolation, bots from other @SpringBootTest classes fill the grid before this
+// test's bots can register, causing peak_registered=0 and awaitRegistered timeouts.
+// Each method dirties the context to ensure a fresh server (empty admission state) for each test.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class LoadHarnessIntegrationTest {
 
     @LocalServerPort

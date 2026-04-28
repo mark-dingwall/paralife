@@ -23,15 +23,14 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Standalone Paralife load harness (Phase 18 D-15).
  *
- * <p>Zero Spring annotations / {@code SpringApplication.run} — this is a pure
- * {@code public static void main} entry point. Picocli handles argument parsing;
+ * <p>Zero Spring annotations — pure process entry point.
+ * No SpringApplication is used. Picocli handles argument parsing;
  * {@link BotFleet} manages the VT-per-bot lifecycle.
  *
- * <p><b>Round 2 Codex HIGH — Callable&lt;Integer&gt;, not Runnable:</b>
- * {@code Runnable.run()} calling {@code System.exit} breaks composition and JUnit tests.
- * {@code Callable<Integer>.call()} returns the exit code; Picocli's
- * {@code CommandLine.execute(args)} routes the return value to the process exit code.
- * {@code System.exit} appears ONLY in {@code main}.
+ * <p><b>Round 2 Codex HIGH — Callable&lt;Integer&gt;:</b>
+ * Implements {@link Callable}{@code <Integer>}; {@link #call()} returns the exit code.
+ * Picocli's {@code CommandLine.execute(args)} routes the return value to the process
+ * exit code. The process exit call appears ONLY in {@link #main(String[])}.
  *
  * <p><b>Round 2 Codex HIGH — {@code ${env:VAR}} syntax:</b>
  * All env-var {@code defaultValue} strings use {@code ${env:PARALIFE_HARNESS_*}} syntax.
@@ -42,8 +41,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * A single hook with {@code exitReason = "signal"} is used for both.
  *
  * <p><b>Round 2 Claude+OpenCode MEDIUM — shutdown hook cleanup:</b>
- * The hook {@code Thread} reference is captured and removed via
- * {@code Runtime.getRuntime().removeShutdownHook(hook)} in a {@code finally} block
+ * The hook {@code Thread} reference is captured and removed in a {@code finally} block
  * to prevent hook accumulation across test JVM runs.
  */
 @Command(name = "load-harness", mixinStandardHelpOptions = true,
@@ -106,12 +104,13 @@ public final class LoadHarness implements Callable<Integer> {
     private ReportSnapshot initialHeader;
 
     /**
-     * Entry point. Picocli's {@code execute(args)} runs {@link #call()} and routes the
-     * returned Integer exit code to {@code System.exit}. {@code System.exit} is ONLY here.
+     * Process entry point. Picocli executes {@link #call()} and routes the returned Integer
+     * exit code to the process via a single exit call at the end of this method.
+     * This is the ONLY location where process exit is initiated; call() and runInternal()
+     * never exit the process directly — that preserves testability and composition.
      */
     public static void main(String[] args) {
-        // Round 2 Codex HIGH: Callable<Integer> + execute(args). Never call System.exit
-        // from inside call() or runInternal() — that breaks tests and composition.
+        // Round 2 Codex HIGH: Callable<Integer> + execute(args). Keep the exit call here only.
         int rc = new CommandLine(new LoadHarness()).execute(args);
         System.exit(rc);
     }
