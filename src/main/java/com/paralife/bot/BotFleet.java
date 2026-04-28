@@ -58,6 +58,14 @@ public final class BotFleet {
     private final AtomicBoolean shutdownDone = new AtomicBoolean(false);
 
     /**
+     * Phase 18 Plan 05 (Round 2 Codex MEDIUM): monotonic counter of bot connect/register
+     * failures. Incremented when a launch VT's {@link BotClient#awaitRegistered} returns
+     * {@code false} OR when the connect itself throws. Never decremented.
+     */
+    private final java.util.concurrent.atomic.AtomicLong connectFailuresTotal =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
      * Launch {@code count} bots asynchronously. Returns immediately after enqueuing all
      * virtual threads — no 30s ceiling (Pitfall 3 fix).
      *
@@ -98,10 +106,16 @@ public final class BotFleet {
                     if (ok) {
                         int live = liveCount.incrementAndGet();
                         highWater.updateAndGet(prev -> Math.max(prev, live));
+                    } else {
+                        // Round 2 Codex MEDIUM: increment monotonic failure counter when
+                        // awaitRegistered times out (bot connected but never received S frame).
+                        connectFailuresTotal.incrementAndGet();
                     }
                     fut.complete(new RegistrationResult(botId, ok, Optional.empty()));
                 } catch (Exception e) {
                     log.warn("Bot {} failed to connect: {}", botId, e.getMessage());
+                    // Round 2 Codex MEDIUM: also increment on connect() exception.
+                    connectFailuresTotal.incrementAndGet();
                     fut.complete(new RegistrationResult(botId, false, Optional.of(
                             e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())));
                 }
@@ -116,6 +130,15 @@ public final class BotFleet {
      */
     public int peakRegistered() {
         return highWater.get();
+    }
+
+    /**
+     * Phase 18 Plan 05 (Round 2 Codex MEDIUM): monotonic count of bot connect/register failures.
+     * Incremented when a launch VT's {@link BotClient#awaitRegistered} returns {@code false}
+     * OR when {@link BotClient#connect()} throws. Never decremented.
+     */
+    public long connectFailuresTotal() {
+        return connectFailuresTotal.get();
     }
 
     /**
