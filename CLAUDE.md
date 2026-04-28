@@ -110,6 +110,19 @@ the actual `sendMessage` call. Writers: drain VT (`OutboundSender.drainLoop`), k
 (`WorldWebSocketHandler.sendOutOfBand`), and the back-compat fallback in
 `WorldWebSocketHandler.sendFrame`. Encoding and metric recording stay outside the monitor — the
 monitor only protects the non-thread-safe `sendMessage` invocation.
+
+### Connection model (Phase 18, D-05 / D-21)
+
+**WS:entity 1:1** — one WebSocket connection per entity, always. Every entity on the grid has
+exactly one WebSocket session; every WebSocket session owns exactly one entity during the Alive phase.
+
+Many concurrent WebSocket connections is a stated architectural goal. Scale-out is achieved by
+running more connections (more bots, more `LoadHarness` JVMs), never by multiplexing multiple
+entities over a single connection. Multi-entity-per-session is **strongly discouraged** and requires
+an explicit ADR with justification before any exception is considered.
+
+See `.planning/phases/18-external-load-harness-harness-identity/18-HARNESS.md` §1 for full
+rationale, exception policy, and the 5 000-connections-per-JVM design ceiling (D-02).
 <!-- GSD:architecture-end -->
 
 <!-- GSD:skills-start -->
