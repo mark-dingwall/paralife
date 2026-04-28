@@ -48,6 +48,14 @@ import java.util.concurrent.atomic.AtomicReference;
  *       sends {@code r|<species>} again. Server resolves with {@code S} or
  *       {@code E|429}.</li>
  * </ul>
+ *
+ * <p><b>Phase 18 (plan 18-01):</b> Added {@link BotIdentity} carriage via
+ * WebSocket handshake headers ({@code X-Paralife-Source} /
+ * {@code X-Paralife-Harness}). Headers are re-sent on <em>every</em>
+ * {@link #connect()} invocation — this preserves attribution across
+ * Phase 17 STALLED-pivot reconnects (RESEARCH.md Pitfall 1 / T-18-04).
+ * The {@link BotClientOptions} record accepts identity without breaking the
+ * existing 3/5/6-arg constructors (RESEARCH.md Pitfall 2).
  */
 public class BotClient {
 
@@ -59,6 +67,8 @@ public class BotClient {
     private final long respawnCooldownMs;
     private final long respawnJitterMs;
     private final Random rng;
+    /** Phase 18 D-06: harness identity carried in the WS handshake headers. Final field — re-used on every connect(). */
+    private final BotIdentity identity;
     private final AtomicInteger actionCount = new AtomicInteger();
     private final AtomicInteger perceptionCount = new AtomicInteger();
     private final AtomicInteger syncCount = new AtomicInteger();
@@ -76,28 +86,43 @@ public class BotClient {
     /** Phase 17: server-issued opaque resume token; sent on reconnect after STALLED to re-bind to the same entity. */
     private volatile String resumeToken;
 
-    public BotClient(String serverUri, char species, HeuristicBrain brain) {
-        this(serverUri, species, brain, 100L, 50L, new Random());
+    /**
+     * Primary constructor (Phase 18). Accepts a {@link BotClientOptions} record so
+     * identity can be supplied without breaking existing 3/5/6-arg call sites
+     * (RESEARCH.md Pitfall 2).
+     */
+    public BotClient(BotClientOptions opts) {
+        char sp = opts.species();
+        if (sp != 'C' && sp != 'M' && sp != 'S') {
+            throw new IllegalArgumentException("species must be C/M/S: " + sp);
+        }
+        this.serverUri = opts.serverUri();
+        this.species = sp;
+        this.brain = opts.brain();
+        this.respawnCooldownMs = opts.respawnCooldownMs();
+        this.respawnJitterMs = opts.respawnJitterMs();
+        this.rng = opts.rng();
+        this.identity = opts.identity();
+        this.state = new AtomicReference<>(BotState.initial(sp));
     }
 
+    /** Back-compat 3-arg constructor. Defaults to {@link BotIdentity#unknown()}. */
+    public BotClient(String serverUri, char species, HeuristicBrain brain) {
+        this(BotClientOptions.defaults(serverUri, species, brain));
+    }
+
+    /** Back-compat 5-arg constructor. Defaults to {@link BotIdentity#unknown()}. */
     public BotClient(String serverUri, char species, HeuristicBrain brain,
                      long respawnCooldownMs, long respawnJitterMs) {
-        this(serverUri, species, brain, respawnCooldownMs, respawnJitterMs,
-                new Random());
+        this(new BotClientOptions(serverUri, species, brain, respawnCooldownMs,
+                respawnJitterMs, new Random(), BotIdentity.unknown()));
     }
 
+    /** Back-compat 6-arg constructor. Defaults to {@link BotIdentity#unknown()}. */
     public BotClient(String serverUri, char species, HeuristicBrain brain,
                      long respawnCooldownMs, long respawnJitterMs, Random rng) {
-        if (species != 'C' && species != 'M' && species != 'S') {
-            throw new IllegalArgumentException("species must be C/M/S: " + species);
-        }
-        this.serverUri = serverUri;
-        this.species = species;
-        this.brain = brain;
-        this.respawnCooldownMs = respawnCooldownMs;
-        this.respawnJitterMs = respawnJitterMs;
-        this.rng = rng;
-        this.state = new AtomicReference<>(BotState.initial(species));
+        this(new BotClientOptions(serverUri, species, brain, respawnCooldownMs,
+                respawnJitterMs, rng, BotIdentity.unknown()));
     }
 
     /**
@@ -123,6 +148,12 @@ public class BotClient {
 
         ClientUpgradeRequest req = new ClientUpgradeRequest();
         req.addExtensions("permessage-deflate; server_no_context_takeover");
+
+        // Phase 18 D-06: harness identity carriage. Headers re-sent on EVERY connect()
+        // invocation — this is what preserves attribution across STALLED-pivot reconnects
+        // (RESEARCH.md Pitfall 1 / T-18-04). identity is a final field bound at construction time.
+        req.setHeader("X-Paralife-Source", identity.source());
+        identity.harnessId().ifPresent(id -> req.setHeader("X-Paralife-Harness", id));
 
         Endpoint endpoint = new Endpoint();
         Session connected = client.connect(endpoint, URI.create(serverUri), req)
@@ -172,6 +203,11 @@ public class BotClient {
     public boolean isConnected() {
         Session s = this.session;
         return s != null && s.isOpen();
+    }
+
+    /** Phase 18 D-06: returns the harness identity carried in the handshake headers. */
+    public BotIdentity identity() {
+        return identity;
     }
 
     public boolean isRegistered() {
