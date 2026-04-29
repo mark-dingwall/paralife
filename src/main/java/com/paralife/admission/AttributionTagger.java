@@ -90,7 +90,10 @@ public final class AttributionTagger {
         }
         String source = sourceOf(session);
         String harness = harnessOf(session);
-        if (harness == null) {
+        // Defense-in-depth (Codex Round 2 #5): only emit harness tag when source=harness AND
+        // harness present. Prevents drift if an attribute layer ever sets harness on a
+        // non-harness source.
+        if (harness == null || !"harness".equals(source)) {
             return Tags.of("source", source);
         }
         String effective = foldHarnessIfOverCap(harness);

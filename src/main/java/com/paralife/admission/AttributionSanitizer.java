@@ -1,13 +1,14 @@
 package com.paralife.admission;
 
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /**
  * Single source of truth for harness-id normalization (Phase 18 Round 2 Codex HIGH).
  *
  * <p>Used by:
  * <ul>
- *   <li>{@link com.paralife.bot.BotIdentity#harness(String)} — client-side validation</li>
+ *   <li>{@link com.paralife.bot.BotIdentity} — client-side validation in compact ctor</li>
  *   <li>{@link com.paralife.websocket.WorldWebSocketHandler#afterConnectionEstablished(org.springframework.web.socket.WebSocketSession)}
  *       — server-side defense-in-depth against untrusted handshake input (T-18-01)</li>
  * </ul>
@@ -21,6 +22,13 @@ public final class AttributionSanitizer {
     /** Maximum length for a harness id (matches {@link com.paralife.bot.BotIdentity#MAX_HARNESS_ID_LENGTH}). */
     public static final int MAX_HARNESS_ID_LENGTH = 32;
 
+    /**
+     * Allowlist regex per {@code 18-HARNESS.md §2}: {@code ^[A-Za-z0-9-]{1,32}$}.
+     * Spaces, {@code =}, {@code /}, {@code _}, non-ASCII chars are rejected — a tight
+     * superset of the original control-char-only guard (P18-Chunk-A remediation MEDIUM).
+     */
+    private static final Pattern ALLOWED = Pattern.compile("^[A-Za-z0-9-]{1,32}$");
+
     private AttributionSanitizer() {}
 
     /**
@@ -30,29 +38,20 @@ public final class AttributionSanitizer {
      * <ol>
      *   <li>Null input → {@link Optional#empty()}.</li>
      *   <li>Trim whitespace. Blank after trim → {@link Optional#empty()}.</li>
-     *   <li>Any ASCII control character (0x00-0x1F, 0x7F) present → {@link Optional#empty()}.
-     *       This covers CR, LF, tab, NUL, DEL — the full header-injection guard surface.</li>
-     *   <li>Truncate to {@link #MAX_HARNESS_ID_LENGTH} characters.</li>
+     *   <li>Trimmed value must match {@code ^[A-Za-z0-9-]{1,32}$} — anything else
+     *       (spaces, {@code =}, {@code /}, {@code _}, non-ASCII, control chars including
+     *       CR/LF, oversize) → {@link Optional#empty()}.</li>
      * </ol>
      *
      * @param raw the untrusted handshake header value (or client-supplied id)
-     * @return {@link Optional#empty()} for null, blank, or control-char-containing input;
-     *         {@link Optional#of(Object)} with the sanitized (trimmed, truncated) value otherwise.
+     * @return {@link Optional#empty()} for null/blank/non-conformant input;
+     *         {@link Optional#of(Object)} with the trimmed value otherwise.
      */
     public static Optional<String> sanitizeHarnessId(String raw) {
         if (raw == null) return Optional.empty();
         String trimmed = raw.trim();
         if (trimmed.isEmpty()) return Optional.empty();
-        // Reject ANY ASCII control char (broader than CR/LF only — a header-injection guard).
-        for (int i = 0; i < trimmed.length(); i++) {
-            char c = trimmed.charAt(i);
-            if (c < 0x20 || c == 0x7F) {
-                return Optional.empty();
-            }
-        }
-        String truncated = trimmed.length() > MAX_HARNESS_ID_LENGTH
-                ? trimmed.substring(0, MAX_HARNESS_ID_LENGTH)
-                : trimmed;
-        return Optional.of(truncated);
+        if (!ALLOWED.matcher(trimmed).matches()) return Optional.empty();
+        return Optional.of(trimmed);
     }
 }

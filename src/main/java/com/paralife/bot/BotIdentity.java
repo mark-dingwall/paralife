@@ -26,8 +26,21 @@ import java.util.Set;
  */
 public record BotIdentity(String source, Optional<String> harnessId) {
 
+    /**
+     * Full source taxonomy — includes server-only reserved values.
+     * Server code (e.g. attribution tagger, future D-20 producer) may set any of these.
+     */
     public static final Set<String> SOURCE_TAXONOMY =
             Set.of("operator", "harness", "unknown", "overflow", "offspring");
+
+    /**
+     * Subset of {@link #SOURCE_TAXONOMY} accepted from client-supplied handshake headers.
+     * {@code overflow} is a server-side cardinality fold result; {@code offspring} is reserved
+     * for D-20. Allowing clients to send these would let them spoof the server-side cardinality
+     * fold or pre-empt the future offspring producer.
+     */
+    public static final Set<String> CLIENT_ALLOWED_SOURCES =
+            Set.of("operator", "harness", "unknown");
     public static final int MAX_HARNESS_ID_LENGTH = 32;
 
     public BotIdentity {
@@ -47,18 +60,14 @@ public record BotIdentity(String source, Optional<String> harnessId) {
                             + "', harnessId=" + (hasId ? "present" : "empty"));
         }
 
-        // Normalize on every construction path.
+        // Normalize on every construction path. Delegates to AttributionSanitizer so client-side
+        // and server-side use the same regex (^[A-Za-z0-9-]{1,32}$).
         if (hasId) {
             String raw = harnessId.get();
-            String trimmed = raw.trim();
-            if (trimmed.isEmpty()) {
-                throw new IllegalArgumentException("harnessId must not be blank");
-            }
-            validateHarnessId(trimmed);
-            String truncated = trimmed.length() > MAX_HARNESS_ID_LENGTH
-                    ? trimmed.substring(0, MAX_HARNESS_ID_LENGTH)
-                    : trimmed;
-            harnessId = Optional.of(truncated);
+            harnessId = com.paralife.admission.AttributionSanitizer.sanitizeHarnessId(raw)
+                    .map(Optional::of)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "harnessId must match ^[A-Za-z0-9-]{1,32}$ (got '" + raw + "')"));
         }
     }
 
@@ -75,17 +84,5 @@ public record BotIdentity(String source, Optional<String> harnessId) {
 
     public static BotIdentity unknown() {
         return new BotIdentity("unknown", Optional.empty());
-    }
-
-    /** Reject CR, LF, and any other ASCII control character (0x00-0x1F, 0x7F). */
-    private static void validateHarnessId(String id) {
-        for (int i = 0; i < id.length(); i++) {
-            char c = id.charAt(i);
-            if (c < 0x20 || c == 0x7F) {
-                throw new IllegalArgumentException(
-                        "harnessId must not contain ASCII control chars (header-injection guard, T-18-01); offending char at index "
-                                + i + " (0x" + Integer.toHexString(c) + ")");
-            }
-        }
     }
 }

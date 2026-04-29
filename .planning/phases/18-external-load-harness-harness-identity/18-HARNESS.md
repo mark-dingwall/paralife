@@ -68,7 +68,7 @@ Harness identity rides on the WebSocket **handshake via HTTP headers**:
 
 | Header | Value | When Present |
 |--------|-------|-------------|
-| `X-Paralife-Source` | `operator` \| `harness` \| `unknown` \| `offspring` | Always |
+| `X-Paralife-Source` | `operator` \| `harness` \| `unknown` (client-allowed subset of the source taxonomy — see §4) | Always |
 | `X-Paralife-Harness` | `<harness-id>` | Only when `X-Paralife-Source: harness` |
 
 The header path was chosen over:
@@ -87,13 +87,18 @@ preserved across the STALLED-pivot rebind path (T-18-04 mitigation — see §9).
 ^[A-Za-z0-9-]{1,32}$
 ```
 
-Single source of truth. Implemented by:
-- `com.paralife.bot.BotIdentity#harness(String)` (client-side, Plan 01)
-- `com.paralife.admission.AttributionSanitizer#sanitizeHarnessId(String)` (server-side, Plan 02)
+Single source of truth. Implemented by `com.paralife.admission.AttributionSanitizer#sanitizeHarnessId(String)` —
+both `com.paralife.bot.BotIdentity` (client-side compact ctor) and the server-side handshake
+header path delegate to it (P18-Chunk-A remediation).
 
-Future contributors changing one but not the other should be caught by code review against this
-anchor. The current implementation rejects ASCII control chars (0x00–0x1F, 0x7F) on top of the
-regex constraint as defense-in-depth (T-18-01 — header injection).
+Non-conformant input (over-length, spaces, `=`, `/`, `_`, non-ASCII, ASCII control chars
+including CR/LF) is **rejected**, not silently truncated — the sanitizer's job is to gate
+header values, not coerce them.
+
+**`source=harness` invariant** (server-side, P18-Chunk-A remediation): when a client sends
+`X-Paralife-Source: harness` but the harness header is missing or sanitizer-rejected, the
+server folds source to `unknown`. This preserves the bidirectional invariant
+`source=harness ⇔ harness id present` matching `BotIdentity`'s compact-ctor enforcement.
 
 ### Identity Granularity (D-07)
 
@@ -174,13 +179,18 @@ No YAML config file this phase.
 
 `source` ∈ `{operator, harness, unknown, overflow, offspring}` — bounded, immutable set.
 
-| Value | Meaning |
-|-------|---------|
-| `operator` | `BotRunner` ≤100 operator path |
-| `harness` | `LoadHarness` external harness |
-| `unknown` | Absent or unrecognized header |
-| `overflow` | Future: harness-id cardinality cap folded (D-10) — applied to tag, not to `source` |
-| `offspring` | **Reserved** — no producer this phase; see §10 Forward Notes |
+| Value | Meaning | Client-allowed |
+|-------|---------|----------------|
+| `operator` | `BotRunner` ≤100 operator path | yes |
+| `harness` | `LoadHarness` external harness | yes |
+| `unknown` | Absent or unrecognized header | yes |
+| `overflow` | Server-side cardinality fold result (D-10) — applied to tag, not to `source` | **no** (P18-Chunk-A: reserved server-only) |
+| `offspring` | **Reserved** — no producer this phase; see §10 Forward Notes | **no** (P18-Chunk-A: reserved server-only) |
+
+**Client-allowed subset** (`com.paralife.bot.BotIdentity#CLIENT_ALLOWED_SOURCES`): only
+`{operator, harness, unknown}` are accepted from `X-Paralife-Source` headers. A client
+attempting to spoof `overflow` or `offspring` is folded to `unknown` —prevents pollution
+of the cardinality-fold bucket and pre-emption of the future D-20 producer.
 
 **Note:** `offspring` is reserved from day one so dashboards and grafana queries can treat it as a
 known future value and avoid rework when backlog 999.2 ships.

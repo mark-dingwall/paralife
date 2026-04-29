@@ -228,22 +228,31 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         String rawSource = headers.getFirst("X-Paralife-Source");
         String rawHarnessId = headers.getFirst("X-Paralife-Harness");
 
-        // Source: bounded-taxonomy filter (T-18-01). Values outside taxonomy fold to "unknown".
-        String source = (rawSource == null || rawSource.isBlank())
-                ? "unknown"
-                : rawSource.trim();
-        if (!BotIdentity.SOURCE_TAXONOMY.contains(source)) {
+        // L1: length cap before further work — accepted client values are <= 8 chars.
+        // H3: bounded CLIENT-ALLOWED subset (operator/harness/unknown). Server-only
+        // taxonomy values (overflow, offspring) are NOT accepted from client headers.
+        String source;
+        if (rawSource == null || rawSource.isBlank() || rawSource.length() > 16) {
             source = "unknown";
+        } else {
+            source = rawSource.trim();
+            if (!BotIdentity.CLIENT_ALLOWED_SOURCES.contains(source)) {
+                source = "unknown";
+            }
+        }
+
+        // M3 fold: if source=harness but harness id is missing/invalid, fold source to unknown.
+        // Preserves the bidirectional invariant (source=harness IFF harness present), matching
+        // BotIdentity's compact-ctor enforcement.
+        if ("harness".equals(source)) {
+            Optional<String> sanitized = AttributionSanitizer.sanitizeHarnessId(rawHarnessId);
+            if (sanitized.isPresent()) {
+                session.getAttributes().put(AttributionTagger.ATTR_HARNESS, sanitized.get());
+            } else {
+                source = "unknown";
+            }
         }
         session.getAttributes().put(AttributionTagger.ATTR_SOURCE, source);
-
-        // Harness: server-side sanitization via the shared helper (Round 2 Codex HIGH).
-        // Only stash if source=harness AND sanitizer accepts the value. Sanitizer rejects
-        // ASCII control chars including CR/LF; truncates to 32 chars.
-        if ("harness".equals(source)) {
-            AttributionSanitizer.sanitizeHarnessId(rawHarnessId).ifPresent(sanitized ->
-                    session.getAttributes().put(AttributionTagger.ATTR_HARNESS, sanitized));
-        }
 
         long currentTick = tickEngine.currentTick();
         Object harnessAttr = session.getAttributes().get(AttributionTagger.ATTR_HARNESS);
@@ -289,11 +298,13 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         }
 
         // Normal disconnect: clear ACTIVE token and run standard cleanup.
+        // Pass the session reference directly so cleanup is independent of registry presence
+        // (consensus CRITICAL fix — cleanup-after-unregister previously skipped slot release).
         Object entityIdObj = session.getAttributes().get(ATTR_ENTITY_ID);
         if (entityIdObj instanceof String eid && resumeTokenRegistry != null) {
             resumeTokenRegistry.clearActive(eid);
         }
-        cleanupBot(sessionId);
+        cleanupBot(session);
         log.info("Client disconnected: {} (total: {}, status: {})",
                 sessionId, sessionRegistry.getSessionCount(), status);
     }
@@ -304,7 +315,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         if (outboundSender != null) {
             outboundSender.detachSession(session.getId());
         }
-        cleanupBot(session.getId());
+        cleanupBot(session);
         sessionRegistry.unregister(session.getId());
     }
 
@@ -369,20 +380,35 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
 
         if (result instanceof AdmissionResult.Rebind rebind) {
             // Resume-token re-bind: preserve entityId, swap session in BotRegistry, restore respawn count.
-            // Round 2 Claude MEDIUM: rebind decrements OLD stalled bucket via the snapshot.
-            // Active bucket is NOT modified — it stays incremented from the original Allow path.
-            // Do NOT call incActiveBucket here — that would double-count.
+            //
+            // P18-Chunk-A H1 fix: gauge accounting under attribution change.
+            // The original Allow incremented the gauge keyed by the OLD session's tags
+            // (captured in the snapshot). When the rebound session presents different
+            // attribution headers (operator JVM restart with auto-uuid harness, missing
+            // headers, etc.) we must:
+            //   1. drop the OLD stalled-bucket gauge   (decStalledBucketByTags(snapshot))
+            //   2. drop the OLD active-bucket gauge    (decActiveBucketByTags(snapshot))
+            //   3. re-increment the NEW active-bucket  (incActiveBucket — uses live session tags
+            //      and updates the entityId→Tags snapshot to point at the new bucket)
+            //
+            // For the same-attribution case (snapshot == new tags) this is a net no-op.
+            // Both buckets stay at their pre-rebind values and the snapshot is rewritten to itself.
+            // Inserting ATTR_ENTITY_ID into attrs BEFORE incActiveBucket is required — the
+            // incActiveBucket call captures the snapshot keyed by the entity id read off attrs.
+            attrs.remove(ATTR_STALL_TICK);
+            attrs.put(ATTR_ENTITY_ID, rebind.entityId());
+            attrs.put(ATTR_ENTITY_TYPE, register.entityType());
+            attrs.put(ATTR_RESUME_TOKEN, rebind.freshResumeToken());
+
             if (admissionMetrics != null) {
                 io.micrometer.core.instrument.Tags oldTags =
                         admissionMetrics.lookupBucketTags(rebind.entityId());
                 if (oldTags != null) {
                     admissionMetrics.decStalledBucketByTags(oldTags);
+                    admissionMetrics.decActiveBucketByTags(oldTags);
                 }
+                admissionMetrics.incActiveBucket(session);
             }
-            attrs.remove(ATTR_STALL_TICK);
-            attrs.put(ATTR_ENTITY_ID, rebind.entityId());
-            attrs.put(ATTR_ENTITY_TYPE, register.entityType());
-            attrs.put(ATTR_RESUME_TOKEN, rebind.freshResumeToken());
             // Restore respawn count from stall-time snapshot (claude MEDIUM respawn-cap-bypass fix).
             Integer snapshot = respawnCountAtStall.remove(rebind.entityId());
             if (snapshot != null) {
@@ -579,8 +605,12 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
 
     /**
      * Phase 17 D-12: reap an entity by ID. Invoked by {@link ResumeTokenRegistry} sweep when
-     * grace expires. Resolves entityId → sessionId via {@link BotRegistry#getSessionByEntity},
-     * then runs standard cleanup. Idempotent: if entityId is unknown, this is a no-op.
+     * grace expires. Idempotent: if entityId is unknown, this is a no-op.
+     *
+     * <p>Critical: when called via the stalled→grace-expire path, the WebSocket session was
+     * already unregistered at stalled-close time. We therefore use the bucket-tags snapshot
+     * (captured at admission time) to decrement gauges and explicitly release the slot —
+     * the registry-driven {@link #cleanupBot(WebSocketSession)} path cannot help here.
      */
     public void cleanupByEntityId(String entityId) {
         if (entityId == null) return;
@@ -588,65 +618,104 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         // Operator SLI: rising counter indicates either widespread slow-consumer conditions
         // or grace-window mis-tuning.
         if (admissionMetrics != null) admissionMetrics.incTerminalDropout();
+
         String sessionId = botRegistry.getSessionByEntity(entityId).orElse(null);
+        io.micrometer.core.instrument.Tags bucketTags = admissionMetrics != null
+                ? admissionMetrics.lookupBucketTags(entityId) : null;
+        respawnCountAtStall.remove(entityId);
+
         if (sessionId == null) {
             log.debug("cleanupByEntityId: entityId={} has no bound session (already reaped?)", entityId);
-            // No session: decrement both buckets via snapshot (STALLED entity already gone).
-            if (admissionMetrics != null) {
-                io.micrometer.core.instrument.Tags bucketTags =
-                        admissionMetrics.lookupBucketTags(entityId);
-                if (bucketTags != null) {
-                    admissionMetrics.decActiveBucketByTags(bucketTags);
-                    admissionMetrics.decStalledBucketByTags(bucketTags);
-                }
-            }
-            respawnCountAtStall.remove(entityId);
-            return;
-        }
-        // Session exists: decrement stalled bucket via snapshot; cleanupBot handles active decrement.
-        if (admissionMetrics != null) {
-            io.micrometer.core.instrument.Tags bucketTags =
-                    admissionMetrics.lookupBucketTags(entityId);
-            if (bucketTags != null) {
+            if (admissionMetrics != null && bucketTags != null) {
+                admissionMetrics.decActiveBucketByTags(bucketTags);
                 admissionMetrics.decStalledBucketByTags(bucketTags);
             }
+            if (admissionMetrics != null) admissionMetrics.releaseBucketTags(entityId);
+            return;
         }
-        respawnCountAtStall.remove(entityId);
-        cleanupBot(sessionId);
+
+        // Drop the stalled gauge here (snapshot keyed by entityId — survives session unregister).
+        if (admissionMetrics != null && bucketTags != null) {
+            admissionMetrics.decStalledBucketByTags(bucketTags);
+        }
+
+        WebSocketSession session = sessionRegistry.getSession(sessionId);
+        if (session != null) {
+            // Session still in registry — full cleanup (active dec + slot release + grid + BotRegistry).
+            cleanupBot(session);
+        } else {
+            // Session unregistered (typical stalled-close path). Manually drop active gauge,
+            // release slot, clear grid, unregister from BotRegistry.
+            if (admissionMetrics != null && bucketTags != null) {
+                admissionMetrics.decActiveBucketByTags(bucketTags);
+            }
+            if (admissionMetrics != null) admissionMetrics.releaseBucketTags(entityId);
+            botRegistry.getBySession(sessionId).ifPresent(state -> {
+                var pos = state.position();
+                worldGrid.clearEntity(pos.x(), pos.y());
+            });
+            botRegistry.unregisterBySession(sessionId);
+            if (admissionGate != null) admissionGate.releaseSlot();
+        }
     }
 
-    /** Remove bot's entity from the grid, then unregister from BotRegistry. */
-    public void cleanupBot(String sessionId) {
-        WebSocketSession s = sessionRegistry.getSession(sessionId);
-        boolean wasRegistered = false;
-        if (s != null) {
-            Object eid = s.getAttributes().remove(ATTR_ENTITY_ID);
-            s.getAttributes().remove(ATTR_STALL_TICK);
-            s.getAttributes().remove(ATTR_RESUME_TOKEN);
-            // ATTR_ENTITY_TYPE is the durable "session ever admitted" marker (survives Phase 15.2
-            // death-pivot). Removing here makes the slot release idempotent against repeated
-            // cleanupBot calls for the same session.
-            wasRegistered = s.getAttributes().remove(ATTR_ENTITY_TYPE) != null;
-            if (eid instanceof String e) {
-                respawnCountAtStall.remove(e);
-                if (resumeTokenRegistry != null) resumeTokenRegistry.clearActive(e);
-            }
+    /**
+     * Remove bot's entity from the grid, decrement bucket gauges, and release the admission slot.
+     *
+     * <p>Takes a {@link WebSocketSession} reference (not just sessionId) so cleanup works
+     * regardless of whether the session is still registered in {@link SessionRegistry} —
+     * fixes the consensus CRITICAL where {@code afterConnectionClosed} unregistered before
+     * cleaning up, leaking a slot per graceful disconnect.
+     *
+     * <p>H1 fix: active gauge dec uses the {@link AdmissionMetrics#lookupBucketTags} snapshot
+     * keyed by entityId, NOT live session tags. This keeps rebind-across-attribution-change
+     * accounting correct (the original bucket gets the dec, not a new one derived from the
+     * rebound session's possibly-different harness id).
+     *
+     * <p>Idempotent: relies on the {@code ATTR_ENTITY_TYPE} marker for "wasRegistered" detection,
+     * so a second invocation on the same session is a no-op.
+     */
+    public void cleanupBot(WebSocketSession s) {
+        if (s == null) return;
+        String sessionId = s.getId();
+        Object eid = s.getAttributes().remove(ATTR_ENTITY_ID);
+        s.getAttributes().remove(ATTR_STALL_TICK);
+        s.getAttributes().remove(ATTR_RESUME_TOKEN);
+        // ATTR_ENTITY_TYPE is the durable "session ever admitted" marker. Removing makes
+        // slot release idempotent against repeated cleanupBot calls.
+        boolean wasRegistered = s.getAttributes().remove(ATTR_ENTITY_TYPE) != null;
+        String entityId = eid instanceof String e ? e : null;
+
+        if (entityId != null) {
+            respawnCountAtStall.remove(entityId);
+            if (resumeTokenRegistry != null) resumeTokenRegistry.clearActive(entityId);
         }
         botRegistry.getBySession(sessionId).ifPresent(state -> {
             var pos = state.position();
             worldGrid.clearEntity(pos.x(), pos.y());
         });
         botRegistry.unregisterBySession(sessionId);
-        // Release the reservation booked at initial admission. Covers Alive→close, Dead→close,
-        // and STALLED→reaped paths — once per registered session.
+
         if (wasRegistered && admissionGate != null) {
             admissionGate.releaseSlot();
         }
-        // Per-bucket decrement (Phase 18 D-12): replaces scalar setActiveEntities.
-        // Guarded by wasRegistered to prevent double-decrement on repeated cleanupBot calls
-        // (handleTransportError → afterConnectionClosed idempotency).
         if (wasRegistered && admissionMetrics != null) {
-            admissionMetrics.decActiveBucket(s);
+            // H1 fix: prefer snapshot Tags (keyed by entityId) over session-derived tags.
+            // Snapshot is captured at incActiveBucket time and survives session-attr churn.
+            io.micrometer.core.instrument.Tags bucketTags = entityId != null
+                    ? admissionMetrics.lookupBucketTags(entityId)
+                    : null;
+            if (bucketTags != null) {
+                admissionMetrics.decActiveBucketByTags(bucketTags);
+            } else {
+                // Fallback: session tags. Hits only when no snapshot was ever captured
+                // (e.g. legacy tests calling cleanupBot without going through Allow path).
+                admissionMetrics.decActiveBucket(s);
+            }
+            // C2 fix: drop entityId snapshot from bucketTagsByEntityId — prevents unbounded growth.
+            if (entityId != null) {
+                admissionMetrics.releaseBucketTags(entityId);
+            }
         }
     }
 

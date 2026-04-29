@@ -309,6 +309,64 @@ public class AdmissionMetrics {
         return entityId == null ? null : bucketTagsByEntityId.get(entityId);
     }
 
+    /**
+     * Release the {@link #bucketTagsByEntityId} snapshot for the given entityId.
+     *
+     * <p>Without this call the map grows unbounded across long-running churn
+     * (every entity gets a fresh id, including respawn {@code -rN} suffixes).
+     * Callers must invoke this once per entityId after all bucket decrements
+     * have been made via the snapshot tags.
+     *
+     * <p>Idempotent: a second call with the same entityId is a no-op.
+     */
+    public void releaseBucketTags(String entityId) {
+        if (entityId == null) return;
+        bucketTagsByEntityId.remove(entityId);
+    }
+
+    /**
+     * Test-only accessor: number of entityId snapshots currently held.
+     * Used by lifecycle invariant tests across multiple packages.
+     */
+    public int bucketTagsSize() {
+        return bucketTagsByEntityId.size();
+    }
+
+    /** Test-only: total of every active bucket gauge value. */
+    public int totalActiveBucketCount() {
+        return activeBuckets.values().stream().mapToInt(AtomicInteger::get).sum();
+    }
+
+    /** Test-only: total of every stalled bucket gauge value. */
+    public int totalStalledBucketCount() {
+        return stalledBuckets.values().stream().mapToInt(AtomicInteger::get).sum();
+    }
+
+    /** Test-only: minimum value across all active buckets (catches double-decrement). */
+    public int minActiveBucketCount() {
+        return activeBuckets.values().stream().mapToInt(AtomicInteger::get).min().orElse(0);
+    }
+
+    /** Test-only: minimum value across all stalled buckets. */
+    public int minStalledBucketCount() {
+        return stalledBuckets.values().stream().mapToInt(AtomicInteger::get).min().orElse(0);
+    }
+
+    /** Test-only: number of distinct active-bucket Tags keys. */
+    public int activeBucketKeyCount() {
+        return activeBuckets.size();
+    }
+
+    /** Test-only: snapshot of active-bucket Tags keys (for harness invariant test). */
+    public java.util.Set<Tags> activeBucketKeys() {
+        return java.util.Set.copyOf(activeBuckets.keySet());
+    }
+
+    /** Test-only: snapshot of stalled-bucket Tags keys (for harness invariant test). */
+    public java.util.Set<Tags> stalledBucketKeys() {
+        return java.util.Set.copyOf(stalledBuckets.keySet());
+    }
+
     // ── Scalar gauges (D-12: no source/harness tags) ─────────────────────────
 
     /** Mirror the maintenance flag as 0 (off) or 1 (on) in the gauge (D-18 scalar). */

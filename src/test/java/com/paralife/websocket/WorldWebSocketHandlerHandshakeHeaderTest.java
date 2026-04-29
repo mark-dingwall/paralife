@@ -163,33 +163,79 @@ class WorldWebSocketHandlerHandshakeHeaderTest {
     // ── Round 2 Codex HIGH: server-side sanitizer enforcement ─────────────────
 
     @Test
-    void blankHarnessId_notStashed() throws Exception {
-        // Blank harness id must be rejected by AttributionSanitizer on the server path.
-        // Note: raw CR/LF cannot be injected via HTTP headers (the protocol strips them before
-        // reaching the server). Control-char rejection is verified at the unit level in
-        // AttributionSanitizerTest. This test verifies the server code path is wired to the
-        // sanitizer (blank → Optional.empty() → no stash).
-        // Session is admitted but treated as harness with no harness id.
+    void blankHarnessId_foldsSourceToUnknown() throws Exception {
+        // P18-Chunk-A remediation MEDIUM: when source=harness but the sanitizer rejects the
+        // harness id, the server folds source to "unknown" so the bidirectional invariant
+        // (source=harness ⇔ harness present) holds on the server side too.
         WebSocketSession serverSession = connectAndGetServerSession("harness", "   ");
 
         assertThat(serverSession.getAttributes().get(AttributionTagger.ATTR_SOURCE))
-                .as("Source should still be 'harness'")
-                .isEqualTo("harness");
+                .as("Source should be folded to 'unknown' when harness id sanitizer rejects")
+                .isEqualTo("unknown");
         assertThat(serverSession.getAttributes())
-                .as("Blank harness id must NOT be stashed (sanitizer rejects blank)")
+                .doesNotContainKey(AttributionTagger.ATTR_HARNESS);
+    }
+
+    // ── P18-Chunk-A H3: reserved server-only source values cannot be spoofed ──
+
+    @Test
+    void reservedSourceOverflow_foldedToUnknown() throws Exception {
+        // 'overflow' is reserved for server-side cardinality folding. A client header
+        // claiming source=overflow must NOT be honoured — would let clients pollute the
+        // overflow bucket or evade attribution.
+        WebSocketSession serverSession = connectAndGetServerSession("overflow", null);
+
+        assertThat(serverSession.getAttributes().get(AttributionTagger.ATTR_SOURCE))
+                .as("Reserved 'overflow' value must fold to 'unknown' on the client path")
+                .isEqualTo("unknown");
+    }
+
+    @Test
+    void reservedSourceOffspring_foldedToUnknown() throws Exception {
+        // 'offspring' is reserved for D-20 (server-side reproduction-spawned entities).
+        // Client cannot pre-empt the future producer.
+        WebSocketSession serverSession = connectAndGetServerSession("offspring", null);
+
+        assertThat(serverSession.getAttributes().get(AttributionTagger.ATTR_SOURCE))
+                .isEqualTo("unknown");
+    }
+
+    @Test
+    void overLongSourceHeader_foldedToUnknown() throws Exception {
+        // L1 length cap: source values legitimately <= 8 chars; a 50-char string is junk.
+        WebSocketSession serverSession = connectAndGetServerSession(
+                "operator-with-a-bunch-of-extra-padding-on-the-end", null);
+
+        assertThat(serverSession.getAttributes().get(AttributionTagger.ATTR_SOURCE))
+                .as("Over-length source header should fold to unknown without further inspection")
+                .isEqualTo("unknown");
+    }
+
+    @Test
+    void harnessSourceWithoutHarnessHeader_foldsSourceToUnknown() throws Exception {
+        // M3 invariant: source=harness ⇔ harness id present. Missing harness header → fold.
+        WebSocketSession serverSession = connectAndGetServerSession("harness", null);
+
+        assertThat(serverSession.getAttributes().get(AttributionTagger.ATTR_SOURCE))
+                .as("source=harness without a valid harness header must fold to unknown")
+                .isEqualTo("unknown");
+        assertThat(serverSession.getAttributes())
                 .doesNotContainKey(AttributionTagger.ATTR_HARNESS);
     }
 
     @Test
-    void overLengthHarnessId_truncatedTo32Chars() throws Exception {
+    void overLengthHarnessId_foldsSourceToUnknown() throws Exception {
+        // P18-Chunk-A remediation MEDIUM: regex enforcement. Over-length input is
+        // rejected by AttributionSanitizer; that triggers the source=harness → source=unknown
+        // fold (M3 invariant restoration).
         String raw = "a-very-long-harness-id-that-exceeds-32-chars-by-quite-a-lot";
-        String expected = raw.substring(0, 32);
 
         WebSocketSession serverSession = connectAndGetServerSession("harness", raw);
 
-        assertThat(serverSession.getAttributes().get(AttributionTagger.ATTR_HARNESS))
-                .as("Over-length harness id should be truncated to 32 chars")
-                .isEqualTo(expected);
+        assertThat(serverSession.getAttributes().get(AttributionTagger.ATTR_SOURCE))
+                .isEqualTo("unknown");
+        assertThat(serverSession.getAttributes())
+                .doesNotContainKey(AttributionTagger.ATTR_HARNESS);
     }
 
     // ── Inner endpoint ─────────────────────────────────────────────────────────
