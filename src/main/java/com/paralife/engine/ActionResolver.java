@@ -292,9 +292,10 @@ public class ActionResolver {
             // D-09: last-write-wins collapse — increment the two-tag ingress-overwrite
             // counter (paralife.admission.ingress.overwrites). Observational only; the
             // collapse itself is the protective behavior. No auto-disconnect.
-            // Round 2 Codex HIGH: O(1) lookup via getById instead of O(N) stream.
+            // O(1) registry lookup — getById was a duplicate alias and has been collapsed
+            // into the canonical getSession (P18-Chunk-A remediation: Opencode H3).
             org.springframework.web.socket.WebSocketSession session =
-                    sessionRegistry.getById(sessionId);   // O(1) — Round 2 Codex HIGH
+                    sessionRegistry.getSession(sessionId);
             admissionMetrics.incIngressOverwrite(session);   // session may be null → tagger handles it
         }
         if (action.verb() == 'V' && action.arg().isPresent()) {

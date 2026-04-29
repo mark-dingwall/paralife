@@ -177,18 +177,18 @@ class AdmissionMetricsLifecycleTest {
         assertActiveBucketValue(session, 0.0);
     }
 
-    // ── SessionRegistry.getById O(1) lookup test ─────────────────────────────
+    // ── SessionRegistry.getSession O(1) lookup test ──────────────────────────
 
     @Test
-    void sessionRegistryGetByIdReturnsNullForMissingId() {
-        // Verifies SessionRegistry.getById API (Round 2 Codex HIGH)
-        // We test the API contract here; the performance test is in SessionRegistryTest
+    void sessionRegistryGetSessionReturnsNullForMissingId() {
+        // P18-Chunk-A remediation (Opencode H3): getById was a pure duplicate of
+        // getSession and has been removed; getSession remains the canonical O(1) accessor.
         com.paralife.metrics.WebSocketMetrics wsMetrics =
                 mock(com.paralife.metrics.WebSocketMetrics.class);
         com.paralife.websocket.SessionRegistry sessionRegistry =
                 new com.paralife.websocket.SessionRegistry(wsMetrics);
 
-        assertThat(sessionRegistry.getById("nonexistent")).isNull();
+        assertThat(sessionRegistry.getSession("nonexistent")).isNull();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
