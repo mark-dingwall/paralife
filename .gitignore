@@ -26,6 +26,9 @@ Thumbs.db
 # Claude
 .claude/
 
+# Worktrees
+.worktrees/
+
 # Codex
 .codex/
 .codex
