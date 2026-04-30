@@ -1,15 +1,11 @@
 ---
 phase: 19
 reviewers: [gemini, claude, codex, opencode]
-reviewed_at: 2026-04-30T18:44:54Z
-plans_reviewed:
-  - 19-01-placement-index-PLAN.md
-  - 19-02-live-entity-registry-PLAN.md
-  - 19-03-golden-trace-equivalence-PLAN.md
-  - 19-04-entity-list-iteration-PLAN.md
+reviewed_at: 2026-04-30T20:26:43Z
+plans_reviewed: [19-01-placement-index-PLAN.md, 19-02-live-entity-registry-PLAN.md, 19-03-golden-trace-equivalence-PLAN.md, 19-04-entity-list-iteration-PLAN.md]
 models:
   gemini: gemini-3.1-pro-preview
-  claude: opus (effort xhigh)
+  claude: opus
   codex: gpt-5.5 (reasoning_effort=high)
   opencode: openrouter/moonshotai/kimi-k2.6
 ---
@@ -18,472 +14,432 @@ models:
 
 ## Gemini Review
 
-```markdown
-# Phase 19 Implementation Plan Review
+# Phase 19 Plan Review
 
 ## Summary
-The implementation plans for Phase 19 are exceptionally detailed, well-researched, and rigorously structured. The phased approach to decoupling the O(grid) scans into a `LiveEntityRegistry` (19-02) and an `EligibleCellIndex` (19-01), followed by the semantic-equivalence gate (19-03) before the main refactoring (19-04), ensures that behavioral correctness is proven and easily verifiable. However, there are significant gaps in lifecycle management for the `EligibleCellIndex` and a guaranteed hash-ordering divergence in the `GoldenTraceEquivalenceTest` that will cause the equivalence gate to fail.
+The four-plan sequence provides a highly disciplined, wave-based approach to solving SCALE-06 and SCALE-07. The separation of state structures (`EligibleCellIndex`, `LiveEntityRegistry`) from their eventual consumption is excellent, and inserting the `GoldenTraceEquivalenceTest` gate (Plan 03) before the risky refactor (Plan 04) is the correct architectural safety net. However, the sequence contains a fatal logic flaw regarding semantic equivalence in Plan 04, and a race condition in the test harness in Plan 03, which will guarantee failure during execution.
 
 ## Strengths
-- **Rigorous Semantic Equivalence Gate:** Plan 19-03’s `GoldenTraceEquivalenceTest` is a brilliant use of the Golden Master testing technique. Pinning the SHA-256 digest of outbound WebSocket frames before Plan 19-04 executes ensures the O(1) iteration refactoring won't silently break existing behavior.
-- **Architectural Safety:** Strict adherence to the single-threaded mutation core invariant. Deferring the parallel read-only sub-steps to Phase 19.1 correctly minimizes the blast radius of the current milestone.
-- **Data Structure Choices:** The O(1) dense-array + hash map (sparse-set) pattern chosen for both the `LiveEntityRegistry` and `EligibleCellIndex` is highly appropriate for ECS-like iteration and random placement sampling without adding heavy dependencies.
+- **Excellent sequencing:** Pinning the `EXPECTED_DIGESTS` baseline in Plan 03 before mutating the tick pipeline in Plan 04 perfectly avoids the "refactor agrees with itself" trap.
+- **Appropriate data structures:** `EligibleCellIndex` and `LiveEntityRegistry` correctly utilize O(1) sparse-set backing structures without introducing heavy dependencies.
+- **Strict concurrency hygiene:** The explicit ban on `parallelStream` preserves the single-threaded mutation invariant, preventing subtle thread-safety regressions.
+- **Comprehensive lifecycle hooks:** Plan 02 exhaustively identifies all entity ID mutation sites (bonding, composite formation/dissolve, rigid-body movement) to keep the registry accurate.
 
 ## Concerns
-- **HIGH: `EligibleCellIndex` Staleness / Missing Lifecycle Hooks:** Plan 19-01 wires `notifyChanged(x, y)` exclusively into `WorldWebSocketHandler` after a successful placement. However, entities moving (via `ActionResolver`), dying (via `DeathFinalizer`), or collapsing into composites (`SimulationEngine`) will also alter the state of the grid. Because these sites are not wired to call `eligibleCellIndex.notifyChanged`, the 5x5 bounding box index will become permanently stale, leading to incorrect rejections (`GRID_FULL`) as cells are not freed upon death or movement.
-- **HIGH: `GoldenTraceEquivalenceTest` Baseline Divergence (Plan 19-03 vs 19-04):** Plan 19-03 instructs the test driver to sort values to maintain determinism before the 19-04 refactor lands. However, `TickBroadcaster` internally iterates over `ConcurrentHashMap.values()` from `BotRegistry`, which the test driver cannot control. If `ConcurrentHashMap.values()` happens to yield a stable order in 19-03, it will almost certainly be a *different* order than the insertion-ordered `LiveEntityRegistry.snapshot()` introduced in 19-04. This will cause an unavoidable `EXPECTED_DIGEST` mismatch when Plan 19-04 lands, breaking the exact contract the test was meant to enforce.
-- **MEDIUM: Duplicate Lifecycle Wiring:** Both `EligibleCellIndex` (once the bug above is fixed) and `LiveEntityRegistry` require hooks at the exact same lifecycle points (`DeathFinalizer`, `ActionResolver`, `WorldWebSocketHandler`). Relying on developers to manually maintain these parallel hooks across multiple services introduces a brittle coupling.
+
+- **HIGH — Plan 04 conflates determinism with semantic equivalence.** The pre-refactor `SimulationEngine` processes entities and populates lists for `Collections.shuffle` using a row-major `(x, then y)` grid scan order. Plan 04 mandates using `LiveEntityRegistry.snapshot()` (which is ordered by `entityId`) and strictly forbids reordering. While `entityId` order is *deterministic*, it changes the pre-shuffle input order. Java's `Collections.shuffle` output depends on input order, meaning combat resolution and RNG consumption sequences (e.g., in `processDeaths` composite dissolution) will diverge from the baseline. This will definitively break the `GoldenTraceEquivalenceTest`.
+- **HIGH — Plan 03 `awaitAllSessionQueuesDrained()` contains a vacuous truth race condition.** The helper iterates over `capture.sessionsSeen()`. If this check runs immediately after a tick—before the virtual threads have processed the queue and called `onEmit`—`sessionsSeen()` will be empty. The loop will skip, `allDrained` will remain true, and the test will fire the next tick immediately. This will cause runaway ticks, dropped frames, and flaky digests.
+- **MEDIUM — Lock ordering risk in `EligibleCellIndex`.** `notifyChanged` holds `synchronized(this)` while calling `worldGrid.getCell()`, which acquires the grid's read lock. This establishes an `Index Monitor -> Grid Read Lock` order. While not deadlocking currently, it is a hidden hazard that future maintainers could trip over.
+- **MEDIUM — Fragile fallback constructors.** Plans 01 and 02 both extend `WorldWebSocketHandler` and `SimulationEngine` constructors. Meticulously updating all legacy 6-arg/7-arg test constructors to forward `null`s for the new `EligibleCellIndex` and `LiveEntityRegistry` parameters is highly prone to compilation breaks during execution.
 
 ## Suggestions
-1. **Expand `EligibleCellIndex` Hooks (Plan 19-01):** Update Plan 19-01 to wire `eligibleCellIndex.notifyChanged(x,y)` into the same lifecycle locations identified in Plan 19-02 for `LiveEntityRegistry`. This includes `ActionResolver.resolveMove` (triggering on both old and new positions), `DeathFinalizer.finalize*`, and `SimulationEngine.collapseToMember`.
-2. **Fix `TickBroadcaster` Iteration Order in Plan 19-03:** To ensure the baseline digest captured in Plan 19-03 perfectly matches the output of Plan 19-04, update `TickBroadcaster` *in Plan 19-03* to explicitly sort `botRegistry.getAllBots()` by `entityId` before iteration. Then, update Plan 19-04 to apply the exact same sort on `liveEntityRegistry.snapshot()`.
-3. **Consolidate WorldGrid Mutation Events (Future/Backlog):** Given that two independent indices now need to be notified on every grid change, consider introducing an internal event bus or callback interface directly on `WorldGrid` (e.g., `GridMutationListener.onCellChanged(x, y)`). This would remove the need to manually sprinkle `notifyChanged` and `updatePosition` hooks across `ActionResolver`, `DeathFinalizer`, etc.
-4. **Clarify `GoldenTraceCapture` Test Setup:** In Plan 19-03, explicitly ensure that the `GoldenTraceCapture` helper strictly isolates the test context to the 10 seeded bots. Any stray keepalives, background reconnects, or metrics could inadvertently pollute the SHA-256 digest.
+
+1. **Plan 04 MUST Preserve Row-Major Order for Physics:** To pass the semantic equivalence gate, any list in `SimulationEngine` that replaces a grid scan and feeds into `Collections.shuffle` (or consumes `simRng` in loops like `processDeaths`) MUST be sorted by `x` ascending, `y` ascending before processing. You must explicitly authorize the executor to apply this row-major sort to perfectly emulate the legacy grid scan order. (Note: `TickBroadcaster` does *not* need this sort, as per-session hashing handles its non-determinism).
+2. **Fix Plan 03 Drain Check:** Change `awaitAllSessionQueuesDrained()` to iterate over a known list of expected sessions (e.g., `sessionRegistry.getActiveSessions()`) rather than `capture.sessionsSeen()`.
+3. **Locking Hygiene in Plan 01:** Document the `Index -> Grid` lock ordering in `EligibleCellIndex`, or evaluate the eligibility constraints using a grid read outside of the `synchronized` block.
+4. **Explicit Constructor Updates:** Ensure Plan 02 explicitly lists all fallback constructors in `WorldWebSocketHandler` and `SimulationEngine` that need to be updated to accommodate the new `LiveEntityRegistry` parameter alongside the `EligibleCellIndex` from Plan 01.
 
 ## Risk Assessment
-**Overall Risk: MEDIUM**
-
-*Justification:* The foundational ideas are extremely solid, and the testing strategy is excellent. The risk is elevated to MEDIUM solely due to the `EligibleCellIndex` staleness bug. If Plan 19-01 is executed as-written, the simulation will experience artificial capacity limits and density pathing bugs as dead or moved entities fail to free up eligible placement slots. If the missing lifecycle hooks and the hash iteration sorting mismatch are addressed, the risk profile drops to LOW.
-```
+**HIGH**. While the architecture and wave strategy are exceptionally strong, Plan 04 is logically trapped. It requires passing a strict byte-for-byte semantic equivalence test against a legacy baseline, but actively forbids preserving the row-major ordering necessary to achieve that exact physics equivalence. The agent will fail the gate and be unable to proceed without operator intervention. Implementing the row-major sort suggestion for `SimulationEngine` and fixing the test harness race condition lowers this risk to LOW.
 
 ---
 
 ## Claude Review
 
-# Phase 19 Plan Review
+# Phase 19 Plan Review (Caveman)
 
 ## Summary
 
-Plans solid in shape — sparse-set + entity-list patterns correct, EXPECTED_DIGEST pinning workflow clever. But three critical wiring gaps will break execution: EligibleCellIndex maintenance hooks incomplete (Plan 01), LiveEntityRegistry lifecycle hooks miss formation/reproduce (Plan 02), GoldenTraceEquivalenceTest scenario likely captures zero frames (Plan 03). Plan 04 strong but inherits gaps. Phase achievable; needs targeted fixes before execution.
+Plans tight after replan. Reviews-driven fixes folded in well: H1 lifecycle hooks complete, H2 @DependsOn locked, H3 entity-id sites enumerated, H4 vacuous-baseline guards plus per-session digests, H5 explicit TickEvent driver, M3 sort-baked-in, M4/M5 grep tightened, M6 back-compat ctor patched. Main residual risk = Codex H "row-major vs sort-by-entityId pre-shuffle order changes simulation outcomes". Plan 04 acknowledges + STOP/escalate path documented but cross-cut digest divergence likely on first run. Otherwise plans executable.
 
 ## Strengths
 
-- D-10 EXPECTED_DIGEST pin design — closes self-consistency loophole. Strong.
-- PATTERNS.md analog override (DeathFinalizer not BotRegistry) — correct architectural call.
-- Plan 02 ActionResolver.resolveMove hook flagged HARD REQUIREMENT — prevents Plan 04 stale-position trap.
-- Wave structure (01→02→03→04) sequences cleanly. EXPECTED_DIGEST captured pre-Plan-04 = clean baseline.
-- Sparse-set sketches verbatim from competitive-programming canon. No hand-rolled novelty.
-- D-08/D-11 single-threaded invariant enforced via grep gates (`parallelStream == 0`). Good.
-- Constraint-3 cascade radius math (5×5 from 1-step overcrowding coupling) sound.
-- Diffusion / nutrient-spawn carve-outs explicit. No accidental refactor of inherently-spatial loops.
+- Wave sequencing 01→02→03→04 correct. EXPECTED_DIGESTS pinned mid-flight (post-02/pre-04) closes self-agreement loophole.
+- H1 closed thoroughly. Grep counters (≥12 in SimulationEngine, ≥8 ActionResolver, ≥2 DeathFinalizer) enforce coverage.
+- H3 entity-id site audit explicit per-line: bond-formation, composite-formation/collapse/dissolve/revert, reproduce, executeCompositeMovement. Acceptance ≥14 grep gate.
+- H4/L3 vacuous-baseline guards triple-belt: emitCount > 0, map non-empty, no per-session hex == EMPTY_SHA256_HEX.
+- M3 sort-by-entityId baked into `snapshot()` not reactive in TickBroadcaster. Removes Plan 04 reactive-sort surface area.
+- M4 shuffle count `== 3` (was `>= 3`). M5 remaining loops `<= 2` (was `<= 4`). RNG-regression silently-passing closed.
+- Plan 04 W4 explicit "STOP and escalate" on EXPECTED_DIGESTS mismatch. No self-healing re-pin.
+- @DependsOn("rockGenerator") on EligibleCellIndex closes H2 sibling-@PostConstruct race.
+- Plan 03 listener fires inside `synchronized(session)` post-sendMessage. Captures actual wire bytes. try/catch wraps listener so test bug can't kill drain VT.
+- DeathFinalizer back-compat ctor in SimulationEngine 9-arg/13-arg both addressed (M6).
 
 ## Concerns
 
 ### HIGH
 
-**[H1] Plan 01 — EligibleCellIndex.notifyChanged not wired at death + movement sites.**
-CONTEXT.md D-04 mandates "every entity place / clear / death event dirties a 5×5 bbox". Plan 01 task 2(d) wires only the WorldWebSocketHandler.handleRegister success path. Death (DeathFinalizer.finalize*Death → worldGrid.clearEntity), composite collapse (SimulationEngine.collapseToMember), movement (ActionResolver.resolveMove → clearEntity + setEntity), reproduce (resolveReproduce → setEntity), bonding (processInteractions → setEntity + clearEntity), composite formation, dissolve all mutate grid without notifying index. Result: cells that became eligible after a death stay excluded from index until coincidental neighbour-event triggers a bbox refresh. PlacementDensityIntegrationTest will pass at saturation (no event-rate dependency) but production runs with churn will produce false GRID_FULL. Fix: add notifyChanged hooks at all `worldGrid.{clearEntity, setEntity}` callers (or hook inside WorldGrid itself + accept Spring-awareness there).
+**[H1] Plan 04 pre-shuffle-order divergence likely produces refactor-cut digest mismatch.**
+Pre-Plan-04: row-major scan → list in row-major (x*H+y) order → shuffled. Post-Plan-04: snapshot in sort-by-entityId order → shuffled. `Collections.shuffle(list, seededRng)` with same seed but different input permutation produces DIFFERENT output permutation. Different shuffle output → different combat pairing order → different death events → different perception frames per session → per-session digest diverges.
 
-**[H2] Plan 01 — EligibleCellIndex @PostConstruct ordering vs RockGenerator undefined.**
-EligibleCellIndex.initialize() walks grid and adds eligible cells. Comment claims "Spring guarantees component init order via dependency graph — WorldGrid is already populated". WorldGrid is populated (constructor), but rocks aren't placed until RockGenerator.@PostConstruct runs. EligibleCellIndex doesn't depend on RockGenerator; @PostConstruct ordering between sibling beans is undefined. If EligibleCellIndex.initialize runs first, rock cells get added permanently (no future event removes them). Fix: `@DependsOn("rockGenerator")` on EligibleCellIndex, or constructor-inject RockGenerator to force ordering, or initialize lazily on first sample.
+Plan 04 acknowledges this and says "STOP and escalate" but treats it as edge case. Reality: it's the EXPECTED outcome unless registration happens in row-major order coincidentally. This means Plan 04's first run will almost certainly red on EXPECTED_DIGESTS, blocking the wave with no automated recovery path. Operator burden.
 
-**[H3] Plan 02 — LiveEntityRegistry missing formation / reproduce / dissolve / revert hooks.**
-Plan 02 covers register (WS), unregister (DeathFinalizer 3 sites), updatePosition (ActionResolver.resolveMove), and `collapseToMember`. Misses:
-- BondFormation (SimulationEngine.processInteractions ~line 555–617): two Particles → one BondedPair with new id `predator+prey`. Need unregister(predator.id) + unregister(prey.id) + register(bp.id, primaryPos).
-- CompositeFormation (~line 622–681): two BondedPairs → two CompositeMembers with fresh UUIDs. Need unregister(bp1.id) + unregister(bp2.id) + register(member1.id, pos1) + register(member2.id, pos2).
-- ReproducerBud + resolveReproduce: spawn `child-N` Particle. Need register(childId, target).
-- dissolveToParticles: members → new Particle ids `cm.id+"-p"`. Need unregister(cm.id) + register(particle.id, pos) per member.
-- revertToBondedPair: CompositeMember → BondedPair with new id. Need unregister(cm.id) + register(bp.id, pos).
-- executeCompositeMovement: rigid-body move of N members; updatePosition needed per member, not just resolveMove site.
+**Fix options (pick before executing):**
+1. **Sort snapshot by `(x, y)` row-major instead of entityId.** snapshot() returns list sorted by `Comparator.comparingInt(EntityEntry::position().x()).thenComparingInt(...y())`. Matches pre-refactor row-major iteration → shuffle input identical → digest stable. This is what Codex review suggested. Drop M3 entityId-sort if you take this path.
+2. **Re-pin EXPECTED_DIGESTS as part of Plan 04** with explicit operator-approval gate documented. Less ideal but pragmatic.
+3. **Run Plan 04 first against pre-shuffle, capture the new digest, accept post-Plan-04 baseline as canonical.** Same as 2 with different framing.
 
-Plan 04 then iterates an incomplete registry — shuffle list size differs from grid-scan size → RNG consumption differs → GoldenTraceEquivalenceTest fails. The failure points to "fix Plan 02" but executor mid-Plan-04 doesn't own that. Backflow during Wave 4 = expensive. Fix: Plan 02 must enumerate every `worldGrid.setEntity / clearEntity / trySetEntity` site that introduces or remaps an entityId, and add the matching register/unregister/updatePosition.
+Plan 04 currently chose option 2-via-escalation. Risk = Plan 04 stalls indefinitely. Recommend option 1.
 
-**[H4] Plan 03 — GoldenTraceEquivalenceTest driveScenario likely captures zero frames.**
-Test wires `botRegistry.register(sessionId, entityId, pos)` with synthetic `trace-sess-N` ids but doesn't register sessions in SessionRegistry, doesn't call `OutboundSender.attachSession`, doesn't open real WebSocket sessions. TickBroadcaster.onTick at line 192–195: `WebSocketSession session = sessionRegistry.getSession(bot.sessionId()); if (session == null || !session.isOpen()) continue;` — every iteration skipped. OutboundSender.offer never invoked. drainLoop never sends. FrameEmitListener never fires. Digest = SHA-256("") = `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+**[H2] Plan 03 EXPECTED_DIGESTS pinning instability across CI machines/JVM versions.**
+SHA-256 over outbound frame bytes assumes byte-perfect reproducibility. Two risks:
+- `WebSocketSession.getId()` is Jetty-assigned, may differ across runs even at fixed seed → per-session map keys diverge across CI runs → mapA != EXPECTED_DIGESTS even with no refactor change.
+- HashMap iteration in any Frame encoding (e.g. cell-entry construction) could leak instability.
 
-Acceptance regex `EXPECTED_DIGEST = "[0-9a-f]{64}"` matches the empty-digest. Test will pass with vacuous baseline. Plan 04 refactor would also produce empty-digest. False green throughout. Fix: either (a) wire real WS clients à la HundredBotIntegrationTest, or (b) inject mock WebSocketSession + attached OutboundSender into SessionRegistry. Add acceptance gate `assertThat(capture.emitCount()).isGreaterThan(0)`.
+Plan 03 driveScenario uses synthetic `trace-sess-N` but `sessionRegistry.register(sessionId, mockSession)` may be incompatible with the existing `SessionRegistry.register(WebSocketSession session)` signature (line 31 takes session, derives id internally via `session.getId()`). Mock returns "trace-sess-N" via `when(session.getId()).thenReturn(sessionId)` so should work IF registry honors `session.getId()` not its own id source. Verify.
 
-**[H5] Plan 03 — TickEngine driving mechanism unspecified for full @Order chain.**
-EnvironmentDeterminismTest uses `environmentEngine.onTickEnvOnlyForTest(tick)` — env-only, not the full pipeline. GoldenTrace needs SimulationEngine + EnvironmentEngine + ActionResolver + EnvPostActionReconciler + TickBroadcaster — i.e. publish TickEvent via ApplicationEventPublisher (so all @EventListener-annotated handlers fire in @Order chain). Plan says "tickEngine.runOneTick() is the test seam" but doesn't confirm it exists or that it triggers the full event chain. If executor falls back to env-only, test exercises the wrong code path and EXPECTED_DIGEST is captured against a partial pipeline. Fix: explicit driver via `applicationEventPublisher.publishEvent(new TickEvent(tickNumber))` — confirms full chain fires; document in plan.
+Bigger risk: `OutboundSender.attachSession(sessionId, session)` — re-grep, signature uncertain. If method takes only `WebSocketSession` and derives id via `getId()`, mock plumbing OK. If signature differs, test won't compile.
+
+**Fix:** Plan 03 Task 2 must verify these signatures BEFORE writing the test. If `OutboundSender.attachSession(WebSocketSession, int queueSize)` is the actual signature (confirmed at WorldWebSocketHandler line 223: `outboundSender.attachSession(session, admissionConfig.backpressure().outboundQueueSize())`), the test must use that.
+
+**[H3] Plan 03 `awaitAllSessionQueuesDrained` race against TickBroadcaster.onTick.**
+Driver loop:
+```java
+applicationEventPublisher.publishEvent(new TickEvent(t));
+awaitAllSessionQueuesDrained();
+```
+publishEvent is synchronous — all @Order handlers fire on the calling thread before publishEvent returns. By time we reach awaitAllSessionQueuesDrained, all `outboundSender.offer(...)` calls already complete. Drain VTs run async. So far OK.
+
+But `capture.sessionsSeen()` is populated AS frames drain. First tick: queues populate before `sessionsSeen` does. Loop `for (String sid : capture.sessionsSeen())` may be empty when first checked → loop returns "all drained" prematurely → next tick fires before previous tick's frames finish draining → frame ordering across ticks intermixes → digest non-deterministic.
+
+**Fix:** track sessions registered in driveScenario explicitly, await drain for THOSE session ids, not for `capture.sessionsSeen()`. Or use `outboundSender` to enumerate attached sessions. Or block until `sessionsSeen.size() == 10` AND queue depths zero.
 
 ### MEDIUM
 
-**[M1] Plan 01 — wrong import paths in plan source samples.**
-Plan code imports `com.paralife.world.Particle` and `com.paralife.world.ParticleType`. Actual: `com.paralife.world.Entity.Particle` and `com.paralife.world.Entity.ParticleType` (sealed inner types). Will not compile as-written. Cosmetic but multiple sites — executor needs to translate. Fix: correct samples to `Entity.Particle` qualifier or import via `com.paralife.world.Entity.Particle`.
+**[M1] Plan 02 SimulationEngine ≥14 grep counter undercount.**
+Audit:
+- bond-formation: 3 ops (unreg pred, unreg prey, reg bp) — 1 site
+- composite-formation: 4 ops — 1 site
+- collapseToMember: 3 ops × 2 unreg sites (lines 719/725) + register sites (multiple per pos 695/698/701) — could be 5+
+- handleMemberDeath line 973: 1
+- processDeaths 1127/1136: 2
+- revertToBondedPair: 2
+- dissolveToParticles: per-member loop — 2N ops, dissolveToParticles iterates all surviving members
+- collapseToMember actually doesn't exist in the source — it's `revertToBondedPair` + `dissolveToParticles` per the read
 
-**[M2] Plan 01 — PlacementDeterminismTest bypasses handleRegister.**
-Test calls `eligibleCellIndex.sample(handler.spawnRngForTest())` directly instead of driving WS register frames. Tests the index, not the integration with handleRegister. D-06 contract is "registration arrival order → identical placements" — the integration is what matters. If a future refactor splits `spawnRng` from sample-call site, this test stays green while D-06 silently breaks. Fix: drive via real WS r| frames or via a package-private `handler.handleRegisterForTest(sessionId, registerFrame)` seam.
+Actual count: depends on dissolveToParticles loop iteration unrolling. ≥14 reasonable LOWER bound but plan should re-audit count post-edit. Risk: passes ≥14 grep with one site missed.
 
-**[M3] Plan 04 — TickBroadcaster sort-by-entityId determinism treated as optional.**
-Plan 04 task 2 step 4: "If GoldenTraceEquivalenceTest fails ... sort the snapshot by entityId before iteration". This is not a flake fix — pre-Plan-04 used `botRegistry.getAllBots()` (ConcurrentHashMap.values()) iteration order; post-Plan-04 uses LiveEntityRegistry insertion order. These almost certainly differ → cross-session emit order differs → digest differs. Sort isn't optional, it's mandatory for digest stability across the refactor boundary. (Same applies to any other handler iterating bots.) Fix: bake `entries.sort(Comparator.comparing(EntityEntry::entityId))` into the canonical replace-pattern; add grep gate for sort presence.
+**Fix:** acceptance should enumerate each site by line range, not just count.
 
-**[M4] Plan 04 — `Collections.shuffle(.*simRng) >= 3` shuffle count gate too loose.**
-Pre-refactor SimulationEngine has shuffle calls at lines 305, 429, 513 (= 3). Post-refactor count must be exactly 3, not "≥ 3". A `>= 3` bound passes if executor accidentally adds a fourth shuffle. RNG consumption changes → digest fails. Fix: `== 3`.
+**[M2] Plan 01 lost-race fallback emits GRID_FULL even when grid not full.**
+Plan 01 step (d): if `trySetEntity` fails after `sample()` returned a position, treat as GRID_FULL. Acceptable per D-05 but creates a wire-shape where client sees GRID_FULL on a half-empty grid (race lost to one concurrent writer). At dense workloads this wire is technically correct (token = same), but operationally noisy.
 
-**[M5] Plan 04 — remaining-grid-loop bound `≤ 4` too generous.**
-8 in-scope sites + 1 nutrient-spawn (kept) = 9 doubles in source. Refactor 8 → 1 remaining (nutrient-spawn). Bound `≤ 4` lets executor leave 3 in-scope sites unrefactored and still pass. Fix: `≤ 1` if executor cleanly removes the 8 in-scope sites; or `≤ 2` to permit one unforeseen pass.
+**Fix accept:** Phase 21 benchmark observation; current plan flags as L1.
 
-**[M6] Plan 02 — DeathFinalizer constructor signature change risk.**
-Adding `LiveEntityRegistry` to DeathFinalizer constructor breaks the back-compat 9-arg SimulationEngine ctor (lines 172–202) which constructs a fresh DeathFinalizer with the old signature: `new DeathFinalizer(worldGrid, botRegistry, this.buffRegistry, compositeRegistry, this.hooks, this)`. Plan 02 doesn't mention this. Fix: update the back-compat ctor to pass a fresh LiveEntityRegistry instance, or mark that ctor as deprecated and remove its DeathFinalizer instantiation.
+**[M3] Plan 02 ActionResolver.resolveMove `entityId` resolution.**
+Plan instructs: `liveEntityRegistry.updatePosition(entityId, target)` after setEntity. But actual local in ActionResolver is `ra.bot.entityId()` or `placed.id()` (resolveMove may consume Particle which has its own id). Plan says "Match the actual local variable names" but no specific guidance. Risk: executor picks wrong id source → registry tracks wrong entity.
+
+**Fix:** Plan 02 must specify: use `ra.particle.id()` (or whatever the placed Particle reference is). The Particle id IS the entityId stored in BotRegistry — they're the same string per `BotRegistry.register(sessionId, entityId, position)` where entityId comes from Particle.id().
+
+**[M4] Plan 02 SimulationEngine.processInteractions energy decay sites (lines 756, 783) and overcrowding (886, 888) flagged "occupant identity unchanged → idempotent" for EligibleCellIndex.notifyChanged in Plan 01 — but Plan 02 does NOT hook LiveEntityRegistry.updatePosition there. Correct: occupant moves not happening, only energy changes. updatePosition unnecessary. Just confirming intentional.
+
+**[M5] Plan 03 EXPECTED_DIGESTS uses `Map.of` capped at 10 entries.**
+Java's `Map.of(k,v,...)` factory caps at 10 pairs. Test scenario uses 10 bots → 10 sessions → fits exactly. If executor chooses N=10 bots, plan compiles. If they bump to N=11+, must switch to `Map.ofEntries(Map.entry(...), ...)`. Plan mentions this caveat. OK.
+
+**[M6] Plan 04 EnvironmentEngine refactor at lines 894–900 / 924–936 (entity-status writeback inside buildStatusCaches).**
+buildStatusCaches runs at @Order(14). Refactoring its inner per-entity passes to iterate snapshot() while the outer pass walks the grid mixes two iteration shapes within the same handler method. Anti-pattern flagged in RESEARCH.md.
+
+The plan calls this out and says "keep grid-walk for shadow-grid bit, entity-status portion uses entity-list". Concrete code surface = 2 different loops within buildStatusCaches. Fine but executor needs to be careful not to merge them or break cache-fill ordering (cell-status and entity-status caches must both be complete by the time @Order(20) ActionResolver reads them).
+
+**Fix:** acceptance should verify buildStatusCaches still produces both caches fully populated post-refactor. The existing EnvironmentDeterminismTest.envOnlyObservablesFireDuringSingleRun catches major breakage. GoldenTraceEquivalenceTest catches subtle. Sufficient if both stay green.
 
 ### LOW
 
-**[L1] Plan 01 — lost-race fallback emits GRID_FULL on transient race.**
-D-05 acceptable per CONTEXT.md, but spurious GRID_FULL on a non-full grid is a slightly noisy wire shape under high concurrent registration. Could mitigate with one re-sample (still O(1)). Accept per existing decision; flag for Phase 21 benchmark observation.
+**[L1] Plan 01 Task 1 acceptance: `cellStatusCacheView called exactly 1 time per notifyChanged` via Mockito spy.** Mockito.spy on a Spring `@Component` requires either `@SpyBean` or manual instantiation. Plan uses pure-JUnit unit test, not @SpringBootTest, so manual `Mockito.spy(new EnvironmentEngine(...))` — but EnvironmentEngine has many collaborators. Stub instantiation in a unit test will be painful. Consider: skip the spy assertion, rely on code-review of the hoisted variable. Or move the test to integration (@SpringBootTest) where @SpyBean works.
 
-**[L2] Plan 03 — FrameEmitListener inside synchronized(session) extends critical section.**
-CLAUDE.md says monitor only protects sendMessage. Adding listener inside extends slightly. Listener is fast (digest update); sub-µs. Could move outside (after monitor exit) — bytes are immutable post-send. Trivial.
+**[L2] Plan 04 Task 2: EnvironmentEngine @Order(14) grep gate.**
+`grep -c "@Order(14)" src/main/java/com/paralife/engine/EnvironmentEngine.java >= 1` — pre-refactor file may use `@Order(14)` literal or named constant. If named constant, grep fails. Sanity-check pre-refactor file before adding gate. CLAUDE.md states @Order(14) explicitly so likely literal. Confirm.
 
-**[L3] Plan 03 — empty-digest false-pass not gated.**
-Acceptance regex matches SHA-256 of empty input. Add `emitCount > 0` assertion + grep that EXPECTED_DIGEST is not the empty-digest constant.
+**[L3] Plan 03 listener inside synchronized(session) extends critical section.**
+CLAUDE.md says monitor only protects sendMessage. Plan acknowledges as accepted. Listener is sub-µs digest update. OK.
 
-**[L4] Plan 04 — `@Order(14)` grep on EnvironmentEngine assumes existing annotation.**
-Confirm pre-refactor file has `@Order(14)`. CLAUDE.md tick pipeline cites @Order(14) so likely present. Sanity check.
+**[L4] Plan 03 mock WebSocketSession: `when(session.isOpen()).thenReturn(true)` — does the session ever transition to closed during the 50-tick scenario?** If a bot dies, drainAndBroadcastDeaths fires terminal vD frame, then BotRegistry removes the bot. Session stays "open" because mock returns true forever. Test should not exercise the close path; if it does, mock needs more setup. Plan 03 scenario does NOT seed deaths intentionally, so OK.
 
-**[L5] Plan 03 — capture digest reset semantics ambiguous.**
-`MessageDigest.digest()` resets the digest. `digestAsHex()` calls `digest.digest()` once, then `currentDigest()` would re-compute over zero input. If test calls both, second call returns SHA-256 of empty. Plan only calls `digestAsHex()` per run — OK. Document.
+**[L5] Plan 02 LiveEntityRegistry stores Position by value in EntityEntry.** Each updatePosition allocates a new EntityEntry record. At 256 entities × 50 ticks × N moves = ~minor GC pressure. Phase 21 benchmark may surface if unexpected. Trivial.
 
 ## Suggestions
 
-1. **Add Plan 01 task 3:** wire EligibleCellIndex.notifyChanged at all worldGrid mutation sites — DeathFinalizer.finalize*Death (post-clearEntity), ActionResolver.resolveMove (post-setEntity new pos + post-clearEntity old pos), SimulationEngine.processInteractions (bonding setEntity/clearEntity, composite formation), reproduce children, dissolve/revert. Otherwise placement index drifts.
+1. **(HIGH urgency) Resolve pre-shuffle order before executing Plan 04.** Pick one:
+   - **Option A (recommended):** change Plan 02 snapshot sort from entityId to row-major `(x, y)`. Matches pre-Plan-04 grid-scan order; shuffle input identical pre/post; EXPECTED_DIGESTS stable. Update REVIEWS M3 fix to "row-major sort", not entityId. Document why: shuffle determinism requires input-order stability across the cut.
+   - **Option B:** explicitly accept that Plan 04 will need EXPECTED_DIGESTS re-pinned. Add a Plan 04.5 task: capture new digest post-refactor, operator reviews, re-pins. Honest but slow.
 
-2. **Add @DependsOn("rockGenerator") to EligibleCellIndex** or constructor-inject RockGenerator to lock @PostConstruct ordering.
+2. **Plan 03 Task 2: verify `OutboundSender.attachSession` and `SessionRegistry.register` signatures BEFORE writing driveScenario.** Add explicit pre-flight grep step. Currently plan has "re-grep for actual method names" comment but no acceptance check. Add: "first action of Task 2: read OutboundSender.java and SessionRegistry.java, document actual signatures, adjust driveScenario accordingly".
 
-3. **Expand Plan 02 task 2 to enumerate every entity-id-introducing site:** BondFormation, CompositeFormation, ReproducerBud, resolveReproduce solo, dissolveToParticles, revertToBondedPair, executeCompositeMovement. Provide explicit hook locations per site.
+3. **Plan 03 awaitAllSessionQueuesDrained: track explicit session list.** Replace `for (String sid : capture.sessionsSeen())` with `for (String sid : registeredSessionIds)` where registeredSessionIds is the list built in Step 1 of driveScenario. Avoids race where sessionsSeen is empty on first tick.
 
-4. **Plan 03: pre-flight test infrastructure** — confirm SessionRegistry + OutboundSender wiring needed for real frame emission. Either model on HundredBotIntegrationTest (real Jetty WS clients) or inject mock-but-registered sessions. Add `assertThat(capture.emitCount()).isGreaterThan(0)` before digest comparison. Document `applicationEventPublisher.publishEvent(new TickEvent(t))` as the explicit tick driver.
+4. **Plan 02 Task 2: enumerate ActionResolver entityId sources explicitly.** Add inline comment in plan: "use `ra.particle.id()` for Particle moves, `member.id()` for composite-member moves" so executor doesn't pick wrong field.
 
-5. **Plan 04: make sort mandatory** — bake `entries.sort(Comparator.comparing(EntityEntry::entityId))` into the canonical TickBroadcaster + any per-bot iteration replace-pattern. Reduces "harness flake or real divergence" diagnostic ambiguity. Add grep gate.
+5. **Plan 04 Task 1 acceptance: replace `>= 7` grep with site-specific assertions.** Each refactor target line range should have its own `grep -nA5 "<method-name>" | grep -c "liveEntityRegistry.snapshot"` >= 1 check. Catches one-site-missed regression that aggregate count hides.
 
-6. **Tighten Plan 04 grep counters** — `Collections.shuffle(.*simRng)` exactly == 3; remaining `for (int .. = 0` ≤ 1 (or ≤ 2 with explicit allowlist for fertility/serialization passes).
+6. **Plan 03 EXPECTED_DIGESTS pinning workflow: add CI sanity step.** After pinning, run the test 3 times in a row in the same JVM — all 3 must pass identically. Catches latent JVM-internal non-determinism (HashMap iteration order, etc.) that single-run pinning misses.
 
-7. **Plan 02 — also update SimulationEngine 13-arg back-compat ctor** to construct DeathFinalizer with LiveEntityRegistry parameter, OR add a no-op stub registry, OR remove the back-compat ctor's internal DeathFinalizer construction.
+7. **Plan 01 lost-race fallback: count it.** Add metric `paralife.placement.lost-race.total` increment in the fallback branch. Lets Phase 21 benchmark observe if races are common (signal for tightening). Cheap.
 
-8. **Consider Plan 03 per-session digest map** instead of single global digest. Stronger contract; cross-session ordering becomes irrelevant. O(N) digests, each independently comparable. Simpler debugging when divergence happens.
-
-9. **Add explicit "EXPECTED_DIGEST is non-empty" check** to Plan 03 acceptance: `EXPECTED_DIGEST != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"` (SHA-256 of empty).
+8. **Plan 02 LiveEntityRegistryTest.snapshotIsSortedByEntityIdAfterRemovals already in plan but consider adding `snapshotEqualsRebuiltSnapshot` test:** insert N entries, remove half, snapshot == manually-built sorted list. Belt-and-braces against swap-and-pop bug.
 
 ## Risk Assessment
 
 **Overall: MEDIUM-HIGH.**
 
-Plan shape correct; execution gaps will surface as test failures or false-greens. Specifically:
-- H1 + H3: Plan 01 + Plan 02 wiring incompleteness propagates to Plan 04 as digest divergence. Caught by GoldenTrace, but expensive backflow if discovered mid-Wave-4.
-- H4 + H5: Plan 03's harness gaps risk a vacuous baseline that masks Plan 04 regressions. Worst case: Plan 04 lands with broken semantics, EXPECTED_DIGEST agrees because both runs produce empty-digest, real wire output silently drifts. Concerns 4+5 are the most damaging because they undermine the entire equivalence-gate strategy.
-- H2: smaller blast-radius (rocks-as-eligible bug) but causes false GRID_FULL early in production runs.
+Architectural shape sound. H1/H2/H3/H4/H5/M3-M6 review fixes well-folded. Test infrastructure appropriately defensive (per-session digests, vacuous-baseline triple-guard, explicit TickEvent driver, STOP/escalate on cross-cut divergence).
 
-Concurrency invariants (single-threaded core, RRWL, VT-per-session) preserved across plans — design discipline is sound. D-08/D-11 enforced via grep gates. No parallelStream sneaking in.
+Risk concentrated in Plan 04's Codex-H pre-shuffle-order issue. Plan acknowledges but treats as exceptional. Likely outcome: first execution of Plan 04 fails GoldenTraceEquivalenceTest at the EXPECTED_DIGESTS map assertion. Operator must intervene before wave can proceed. This is correct safety behavior but high friction.
 
-Fixes for H1–H5 are localised (each ≤ 1 hour of plan revision), not architectural. Once addressed, risk drops to LOW. Recommend revising Plans 01–03 before Wave 1 begins; Plan 04 holds as-written subject to M3 + M4 + M5 tightening.
+If Suggestion 1 Option A taken (row-major sort in snapshot()), risk drops to LOW: the EXPECTED_DIGESTS contract becomes mechanically stable across the cut, Plan 04 lands cleanly, GoldenTraceEquivalenceTest stays green automatically.
 
-Want me to draft concrete patch text for the H1–H5 fixes?
+If Option B taken (accept re-pinning), risk stays MEDIUM: extra round-trip but no architectural surprise.
+
+Concurrency invariants preserved across all plans (D-08/D-11 single-threaded mutation, parallelStream banned via grep, VT-per-session outbound respected). Lock ordering documented for EligibleCellIndex (synchronized → grid read-lock; tick threads must not invert).
+
+H1 lifecycle coverage now exhaustive — stale-eligibility / stale-registry traps closed by REVIEWS H1 + H3 + grep counters.
+
+Recommend: pick suggestion 1 Option A before Plan 04 begins. Drops overall risk to LOW.
 
 ---
 
 ## Codex Review
 
-# Phase 19 Plan Review
+Based on the supplied artifacts, Phase 19 is well-researched and has the right strategic shape, but the execution plans are still high-risk. The largest issue is semantic equivalence: several plans replace row-major grid iteration and per-session bot iteration with `LiveEntityRegistry.snapshot()` sorted by `entityId`, which is deterministic but not equivalent to the current observable order. The second major risk is lifecycle correctness around composite/bonded entities: the plans blur “grid occupant entity” vs “bot session entity,” which can cause missed removals, missing outbound frames, or stale registry positions.
 
-## Overall Assessment
+## Plan 19-01 — Placement Index
 
-The four-plan sequence is directionally strong: it separates placement, lifecycle registry, equivalence gating, and entity-list consumption in a sensible dependency chain. The strongest part is the explicit semantic-equivalence gate before Plan 04. The main risks are lifecycle correctness and over-specified implementation details. In particular, the placement index must be updated for *all* occupancy-changing events, not only register/death; otherwise it will drift from `WorldGrid`. There are also concurrency risks around reading `EnvironmentEngine.cellStatusCacheView()` from WebSocket threads while the tick thread rebuilds it.
+**Summary:** Strong plan for replacing retry placement with an indexed eligible set, but lifecycle hook coverage and concurrency behavior are brittle.
 
-Overall risk: **MEDIUM-HIGH** until the index-maintenance and golden-trace design are tightened.
+**Strengths**
+- Correct high-level data structure: dense array + sparse back-map gives O(1) add/remove/sample.
+- Good recognition of dirty-bbox radius 2 for the “would cause overcrowding” rule.
+- Preserves `E|503|GRID_FULL` wire shape.
+- Adds deterministic placement coverage and removes retry storms.
+- Explicitly calls out `@DependsOn("rockGenerator")`, stale cache behavior, and lock-order concerns.
 
----
+**Concerns**
+- **HIGH:** `sample()` and `trySetEntity()` are not atomic. A concurrent writer can make `trySetEntity` fail and the handler emits `GRID_FULL` even when many cells remain eligible.
+- **HIGH:** Manual `notifyChanged` at every mutation site is very brittle. Future or missed `WorldGrid` mutations will silently stale the index.
+- **MEDIUM:** Constraint 3 appears to count only `Particle` and `BondedPair`. If overcrowding applies to `CompositeMember` or other occupied entities, this violates the stated “adjacent occupied cell” rule.
+- **MEDIUM:** Constraint 2 relies on potentially stale `cellStatusCache`; the plan documents this, but the acceptance criteria still imply the constraints are strictly enforced.
+- **LOW:** The unit-test strategy around spying `EnvironmentEngine` may be cumbersome if that class has heavy constructor dependencies.
 
-# Plan 19-01 — Placement Index
+**Suggestions**
+- Prefer a single placement method such as `eligibleCellIndex.tryPlace(Entity, rng)` that samples, tentatively removes, calls `WorldGrid.trySetEntity`, and updates/retries a small bounded number of times on stale candidates.
+- Add a registry/index consistency assertion test that mutates through representative paths and verifies every indexed cell is truly eligible.
+- Either centralize mutation notification inside `WorldGrid` via a lightweight listener, or create a single `GridMutationNotifier` wrapper used by all mutation paths.
+- Clarify which entity types contribute to overcrowding and use that exact predicate in `EligibleCellIndex`.
 
-## Summary
+**Risk Assessment:** **MEDIUM-HIGH**. The algorithm is right, but the split sample/place operation and hook sprawl are the main correctness risks.
 
-This plan targets the right bottleneck and uses an appropriate sparse-set data structure. The eligibility rules and `GRID_FULL` behavior match the phase decisions. However, the maintenance strategy is incomplete: updating the index only from `WorldWebSocketHandler` after registration is not enough to keep it correct as entities move, die, collapse, reproduce, or are cleared. The plan also introduces a cross-thread read of `EnvironmentEngine.cellStatusCacheView()` that may not be safe unless the cache is immutable or guarded.
+## Plan 19-02 — Live Entity Registry
 
-## Strengths
+**Summary:** The registry is a useful SCALE-07 foundation, but the entity identity model needs tightening before consumers rely on it.
 
-- Correctly removes the retry-storm failure mode.
-- Sparse-set `dense + posInDense` structure is appropriate for O(1) sample/add/remove.
-- Keeps existing `E|503|GRID_FULL` wire shape.
-- Tests cover core constraints, determinism, empty-set behavior, and dense saturation.
-- Explicitly avoids new dependencies and new protocol surface.
+**Strengths**
+- Clear sparse-set design with O(1) register/unregister/update.
+- `snapshot()` returns a defensive copy.
+- Good recognition that deterministic iteration order is required.
+- Keeps `BotRegistry` decoupled, which is cleaner than embedding lifecycle concerns there.
+- Explicitly includes move/update hooks, which Plan 04 depends on.
 
-## Concerns
+**Concerns**
+- **HIGH:** `snapshot()` sorted by `entityId` is deterministic but not semantically equivalent to row-major grid scans. This will change pre-shuffle order in `SimulationEngine`, and therefore can change simulation outcomes.
+- **HIGH:** Bonded/composite identity handling is ambiguous. If the registry stores one logical `BondedPair` entry, unregistering `primaryEntityId` and `secondaryEntityId` on bonded-pair death will not remove the bonded-pair registry entry.
+- **HIGH:** Tick broadcasting may need per-session bot state, not one logical grid occupant. A `BondedPair` or composite may correspond to multiple sessions; replacing `botRegistry.getAllBots()` with one live-entity entry can drop frames.
+- **MEDIUM:** No integration invariant test verifies `LiveEntityRegistry` matches the actual grid after bonding, reproduction, collapse, dissolve, movement, and death.
+- **MEDIUM:** Registration can occur from WS threads while tick handlers are running; the plan does not define whether mid-tick registration should appear in later `@Order` handlers.
 
-- **HIGH:** Index maintenance misses many occupancy changes. Movement, deaths, composite collapse, reproduction, and any `WorldGrid.clearEntity/setEntity` call can change eligibility. Hooking only register means stale occupied cells may remain eligible and freed cells may never become eligible.
-- **HIGH:** `EnvironmentEngine.cellStatusCacheView()` may be unsafe to read from WS threads while the tick thread rebuilds the backing map.
-- **HIGH:** `@PostConstruct` ordering against `RockGenerator` is not guaranteed unless there is an explicit dependency. The initial eligible set may be built before rocks exist.
-- **MEDIUM:** The proposed `EnvironmentEngine` dependency from `EligibleCellIndex` increases coupling and may create bean lifecycle or circular dependency issues.
-- **MEDIUM:** Lost-race fallback returns `GRID_FULL` even if only one sampled cell was stale. That preserves no-retry, but the reason may be false.
-- **MEDIUM:** The determinism test samples directly from `EligibleCellIndex` instead of driving the real register path, so it may not prove the actual `handleRegister` contract.
-- **LOW:** Acceptance checks based on line counts and grep counts are brittle.
+**Suggestions**
+- Define two separate concepts explicitly:
+  - `LiveEntityRegistry`: grid occupants for simulation iteration.
+  - `BotSessionRegistry` or sorted `BotRegistry` snapshot: session-bound bots for outbound frames.
+- Add `LiveEntityRegistryInvariantTest`: after scripted lifecycle operations, compare registry entries against occupied non-rock/non-nutrient grid cells.
+- For semantic equivalence, expose `snapshotByGridOrder()` or sort by linearized position for refactored grid-scan replacements.
+- Audit bonded-pair death hooks against actual registered IDs: unregister the grid occupant ID, not just session participant IDs.
 
-## Suggestions
+**Risk Assessment:** **HIGH**. The registry is necessary, but identity semantics are currently under-specified and likely to break composites or broadcasting.
 
-- Move dirty notifications to a central occupancy mutation layer, ideally `WorldGrid` events or explicit hooks at every known mutation site.
-- At minimum, add hooks in:
-  - `ActionResolver.resolveMove`
-  - `DeathFinalizer`
-  - composite collapse paths
-  - reproduction/offspring placement if they occupy cells
-  - any direct `setEntity`, `clearEntity`, or `trySetEntity` call site
-- Replace `cellStatusCacheView()` map reads with a thread-safe snapshot/array, or compute constraint 2/3 directly from `WorldGrid` under a read lock.
-- Add explicit startup ordering, for example `@DependsOn("rockGenerator")`, or rebuild the index after rock generation deterministically.
-- Make the integration determinism test drive the actual registration handler or WS path.
-- Add an invariant test: after a scripted sequence of move/death/register, index eligibility matches a full recomputation.
+## Plan 19-03 — Golden Trace Equivalence
 
-## Risk Assessment
+**Summary:** The pinned per-session digest gate is the right idea, but the proposed harness has race and coverage gaps.
 
-**HIGH.** The sparse-set idea is solid, but stale-index risk is central to correctness. This plan should not proceed until the maintenance contract covers all occupancy mutations.
+**Strengths**
+- Correctly avoids global digest flakiness by hashing per session.
+- Pinned `EXPECTED_DIGESTS` prevents the “two wrong runs agree” failure mode.
+- Good vacuous-baseline guards: `emitCount > 0`, non-empty maps, non-empty SHA rejection.
+- Drives the Spring event pipeline through `ApplicationEventPublisher`, which is much better than a partial seam.
+- Listener after successful send captures the actual outbound surface.
 
----
+**Concerns**
+- **HIGH:** `awaitAllSessionQueuesDrained()` uses `capture.sessionsSeen()`. Before first async emission, that list can be empty, causing the wait to return too early.
+- **HIGH:** The test scenario appears to use simple placed particles only. It may not cover bonding, composites, death, collapse, reproduce, or movement, which are exactly where Plan 02/04 risks live.
+- **MEDIUM:** `attemptPlacementForTest` plus manual `botRegistry.register` / `liveEntityRegistry.register` is not truly the full `handleRegister` path and risks divergence from production registration behavior.
+- **MEDIUM:** Outbound direct sends outside `OutboundSender` are not captured. That is acceptable as a minimum gate, but it should not be described as “all observable output.”
+- **LOW:** A production test seam on `OutboundSender` is acceptable, but it needs a small focused test that listener exceptions do not kill the drain loop.
 
-# Plan 19-02 — Live Entity Registry
+**Suggestions**
+- Track known session IDs in the test and wait for `queueDepth(sessionId) == 0` for those IDs, not `capture.sessionsSeen()`.
+- Add an `OutboundSender.flushForTest(sessionIds, timeout)` helper if possible.
+- Expand the golden scenario enough to include at least one move, one reproduce, one bonding/composite transition if deterministic setup allows it.
+- Rename the claim from “all outbound WebSocket frames” to “all frames emitted via `OutboundSender` in this scenario.”
+- Prefer driving registration through a real test register path that performs placement, bot registration, live registration, session registry, and outbound attachment together.
 
-## Summary
+**Risk Assessment:** **MEDIUM-HIGH**. The gate design is sound, but the first implementation can pass while missing the riskiest semantic changes.
 
-The registry is a useful prerequisite for entity-list iteration, and separating lifecycle wiring from consumer refactors is good sequencing. The plan correctly identifies moves as a hard requirement. The main weakness is the O(1) swap-and-pop structure conflicts with the stated deterministic insertion-order requirement after removals, which may matter for semantic equivalence. It also risks missing lifecycle paths unless every entity creation/removal site is audited mechanically.
+## Plan 19-04 — Entity-List Iteration
 
-## Strengths
+**Summary:** This plan targets the phase goal directly, but it is the riskiest plan because the proposed iteration order is not equivalent to the current grid-scan semantics.
 
-- Good separation: registry first, consumers later.
-- Includes registration, death, movement, and composite-collapse lifecycle hooks.
-- Explicitly avoids coupling `BotRegistry` to `LiveEntityRegistry`.
-- `updatePosition` in `ActionResolver` is correctly marked non-deferrable.
-- Snapshot-copy iteration is the right shape for tick-handler stability.
+**Strengths**
+- Correctly leaves nutrient spawn, diffusion, lightning, fertility, and serialization grid-walks alone.
+- Preserves the single-threaded mutation invariant and defers parallelism.
+- Uses the golden trace as the merge gate.
+- Explicitly preserves `@Order`, stalled-session handling, death broadcasts, and outbound queueing.
+- Adds useful grep gates for shuffle count and remaining grid loops.
 
-## Concerns
+**Concerns**
+- **HIGH:** Replacing row-major grid scans with `entityId` order changes processing order before `Collections.shuffle(..., simRng)`. Java shuffle output depends on input order, so semantic divergence is likely.
+- **HIGH:** Replacing `botRegistry.getAllBots()` with `LiveEntityRegistry.snapshot()` may drop sessions for bonded/composite entities if there is not a one-to-one mapping from live grid occupant to WebSocket session.
+- **HIGH:** The plan acknowledges golden-trace failure may happen and says to escalate. That means the plan is not yet executable autonomously as written.
+- **MEDIUM:** `processEnergyDecay`, death processing, and overcrowding may have order-sensitive side effects even when no shuffle is involved.
+- **LOW:** Grep-count acceptance for nested loops is fragile; it can miss or misclassify loops.
 
-- **HIGH:** Swap-and-pop does not preserve insertion order after removal. The plan documents this, but still claims deterministic insertion-order iteration.
-- **HIGH:** Composite/member lifecycle is complex. The plan relies on executor source inspection, which is fine, but acceptance criteria only grep for references and may miss a real lifecycle gap.
-- **MEDIUM:** Registry stores only `entityId` and `position`; if entity IDs change/remap during bonding/collapse, hooks must be exact or Plan 04 will silently skip/duplicate entities.
-- **MEDIUM:** Concurrency model is mixed: WS registration can mutate while tick handlers snapshot. `synchronized` protects registry state, but does not coordinate with `WorldGrid` mutation order.
-- **LOW:** `concurrentRegisterIsSafe` may imply broader thread-safety than the simulation actually needs.
+**Suggestions**
+- For `SimulationEngine`, preserve row-major equivalence by sorting registry entries by `position.x * height + position.y` before building the lists. That keeps pre-shuffle order identical to the old grid scan.
+- For `TickBroadcaster`, strongly consider using a deterministic `BotRegistry.snapshotSortedBySessionOrEntity()` rather than `LiveEntityRegistry`, unless the code proves every live entity maps to exactly one session.
+- Add specific tests for bonded/composite broadcasting: both sessions still receive frames after bonding/composite transitions.
+- Treat `GoldenTraceEquivalenceTest` failure as a plan-design failure, not just an implementation event. Fix ordering before execution.
+- Replace grep loop-count checks with targeted tests or helper methods for the known refactor sites.
 
-## Suggestions
+**Risk Assessment:** **HIGH**. The plan achieves the intended shape, but likely violates semantic equivalence unless iteration order and session mapping are corrected first.
 
-- Choose one deterministic order explicitly:
-  - maintain insertion order with remove-by-index shifting, accepting O(N) removal, or
-  - keep swap-and-pop but sort snapshots by `entityId` for all semantic-sensitive consumers.
-- Add a full-grid consistency assertion test:
-  - scan `WorldGrid`
-  - compare live non-rock/non-nutrient entities against `LiveEntityRegistry.snapshot()`
-  - run after register, move, death, bonding/collapse.
-- Add a single lifecycle audit task using `rg "trySetEntity|setEntity|clearEntity|unregisterByEntity|register\\("`.
-- Clarify whether offspring/composite members without sessions belong in the registry. The plan says yes, but registration hooks may only cover bot-bound entities.
+## Overall Risk Assessment
 
-## Risk Assessment
+**Overall risk: HIGH.**
 
-**MEDIUM.** The registry shape is useful, but deterministic ordering and lifecycle completeness need a tighter contract before Plan 04 depends on it.
+The phase has the right architecture: indexed placement plus live-entity iteration plus a pinned golden trace is a credible path to SCALE-06 and SCALE-07. The main unresolved risks are semantic equivalence and identity mapping. Before execution, I would tighten two contracts:
 
----
+1. Simulation refactors that replace grid scans must preserve row-major order unless a golden-trace-approved behavior change is explicitly accepted.
+2. Live grid occupants and bot/session recipients must not be conflated; broadcasting should remain session-driven unless composites are proven one-session-per-live-entry.
 
-# Plan 19-03 — Golden Trace Equivalence
-
-## Summary
-
-This is the best architectural safeguard in the phase. Pinning a digest before Plan 04 is exactly the right idea. However, the proposed capture point may be asynchronous and cross-session ordering may be nondeterministic, making the test flaky or misleading. The test scenario also appears under-specified: direct `BotRegistry.register` may not produce actual outbound frames unless real sessions and sender queues are wired.
-
-## Strengths
-
-- Correctly avoids the weak “run twice after refactor” trap by pinning a pre-refactor digest.
-- Captures wire bytes instead of internal objects.
-- Places the equivalence gate before Plan 04, which is the right dependency.
-- Leaves metric equivalence to Phase 21, which is a reasonable scope choice.
-- Listener defaults to null, limiting production impact.
-
-## Concerns
-
-- **HIGH:** Cross-session send order can vary because `OutboundSender` uses per-session virtual-thread queues. A global ordered digest may be flaky.
-- **HIGH:** Directly registering fake sessions may not exercise real outbound sending if `TickBroadcaster` requires open `WebSocketSession` objects.
-- **MEDIUM:** Adding a production listener seam to `OutboundSender` for tests is acceptable, but it must not run under session locks if listener work can block.
-- **MEDIUM:** “Listener fires inside synchronized(session)” conflicts with “do not hold lock during listener” guidance. Capturing inside the lock improves ordering but increases risk.
-- **MEDIUM:** Digest pinning can become a maintenance burden if benign frame ordering changes occur.
-- **LOW:** Printing baseline digest in a permanent test is noisy.
-
-## Suggestions
-
-- Prefer per-session digests sorted by session ID over one global emit-order digest.
-- If global ordering is required, capture logical enqueue order at `offer`, not asynchronous send completion order.
-- Use real test WebSocket sessions if the goal is actual wire output; otherwise document that this is a tick-frame enqueue equivalence test.
-- Make the listener very lightweight and never call user code while holding a session lock. A safe pattern is to copy `(sessionId, bytes)` into a thread-safe queue after send, then digest deterministically in the test.
-- Add `emitCount > 0` and expected session count assertions.
-- Fail fast if `EXPECTED_DIGEST` is still placeholder.
-
-## Risk Assessment
-
-**MEDIUM.** The concept is strong, but the async ordering and test-session realism need refinement to avoid a flaky or toothless gate.
-
----
-
-# Plan 19-04 — Entity-List Iteration
-
-## Summary
-
-The scope is appropriate: consume the registry in per-entity paths while leaving spatial diffusion and nutrient spawning alone. The main risk is semantic drift. Replacing row-major grid scans with registry order can change RNG consumption effects, interaction ordering, death ordering, and broadcast ordering. The golden trace should catch this, but only if Plan 03 is robust. The plan also underestimates the importance of order before `Collections.shuffle`: Java shuffle is deterministic for a given input order and RNG, so changing pre-shuffle order can change the shuffled order even with the same size.
-
-## Strengths
-
-- Correctly preserves spatial grid-walks for diffusion and nutrient spawning.
-- Keeps `@Order` chain unchanged.
-- Explicitly blocks parallelism in Phase 19.
-- Uses Plan 03 as a semantic gate.
-- Correctly preserves `STALLED` skip, death broadcast, and outbound queue paths.
-
-## Concerns
-
-- **HIGH:** The statement “shuffle randomizes regardless, digest stays stable if list size is same” is false. Same RNG + same size but different initial list order can produce different final order.
-- **HIGH:** Registry order differs from row-major grid order. Any unshuffled logic will change behavior unless snapshots are sorted to match previous scan order.
-- **HIGH:** If Plan 02 registry position updates are incomplete, this plan will process stale positions.
-- **MEDIUM:** The remaining-loop grep cap is brittle. It may either miss an in-scope loop or reject legitimate spatial loops.
-- **MEDIUM:** EnvironmentEngine cache writeback refactors are risky because mixed cell-status/entity-status caches often have subtle ordering assumptions.
-- **LOW:** Sorting by entity ID may produce deterministic output but not row-major-equivalent output.
-
-## Suggestions
-
-- For semantic equivalence, sort snapshots by previous grid scan order before replacing grid scans:
-  ```java
-  entries.sort(Comparator
-      .comparingInt((EntityEntry e) -> e.position().x())
-      .thenComparingInt(e -> e.position().y()));
-  ```
-  Use entity ID only as a tie-breaker if needed.
-- For methods that previously built lists by grid order and then shuffled, preserve row-major pre-shuffle order.
-- Add helper methods like `livePositionsMatching(Predicate<Entity>)` to avoid repeated subtle implementations.
-- Before Plan 04, add a registry-vs-grid invariant test and run it inside the golden scenario.
-- Treat any `EXPECTED_DIGEST` mismatch as a design issue, not something to re-pin.
-
-## Risk Assessment
-
-**MEDIUM-HIGH.** The plan is necessary and well scoped, but ordering equivalence is fragile. Preserving row-major ordering from registry snapshots is likely required.
-
----
-
-# Cross-Plan Dependency Review
-
-## Strengths
-
-- Plan order is broadly correct:
-  - 19-01 placement
-  - 19-02 registry lifecycle
-  - 19-03 equivalence gate
-  - 19-04 registry consumers
-- Plan 03 correctly blocks Plan 04.
-- Plan 02 correctly blocks Plan 04.
-- The Phase 19 / 19.1 split is prudent.
-
-## Main Cross-Plan Gaps
-
-- **HIGH:** `EligibleCellIndex` maintenance should be coordinated with Plan 02 lifecycle hooks. Right now Plan 02 wires `LiveEntityRegistry`, but not necessarily `EligibleCellIndex`, at death/move/collapse sites.
-- **HIGH:** Ordering equivalence is not consistently defined. Registry insertion order, swap-and-pop order, row-major scan order, entity-ID sort order, and async send order are all different.
-- **MEDIUM:** Plan 01 and Plan 02 both modify `WorldWebSocketHandler` constructors. Sequencing avoids merge conflict, but test constructors/null forwarding may create null-path bugs.
-- **MEDIUM:** The plans rely heavily on grep acceptance criteria. Add behavioral invariant tests where possible.
-
-## Top Recommended Changes Before Execution
-
-1. Define one canonical iteration order for equivalence. For replacing grid scans, use row-major position order unless there is a strong reason not to.
-2. Add a central “index dirty notification” audit for every occupancy mutation.
-3. Make `EligibleCellIndex` cache reads thread-safe or self-contained.
-4. Change golden trace digesting to per-session deterministic digests, or capture enqueue order synchronously.
-5. Add registry/index consistency tests against a full `WorldGrid` recomputation.
-
-## Final Risk Assessment
-
-**Overall: MEDIUM-HIGH.**
-
-The plans can achieve the Phase 19 goal, but only if lifecycle synchronization and ordering semantics are tightened. The biggest correctness risks are stale placement eligibility and behavior changes caused by replacing row-major grid scans with registry iteration. The biggest test risk is a flaky or non-representative golden trace due to async send ordering.
+With those corrections and broader lifecycle invariant tests, the phase becomes much more likely to deliver capacity headroom without changing emergent behavior.
 
 ---
 
 ## OpenCode Review
 
-## Phase 19 Plan Review
+# Phase 19 Plan Review
 
-### 1. Summary
+## Summary
 
-The four-plan structure (Placement Index → Live Registry → Golden Gate → Entity-List Refactor) is a disciplined, layered attack on SCALE-06 and SCALE-07. The wave dependencies (01 → 02 → 03 → 04) correctly sequence constructor-conflicting changes and establish a determinism oracle before the risky tick-handler refactor lands. The scope is appropriately tight—placement is limited to `r|` ingress, entity-list iteration defers parallelism to Phase 19.1, and spatial diffusion stays grid-bound. The research artifacts are thorough and the honesty assessment about modest performance win at 256 bots (architectural, not purely performance-driven) lends credibility.
+The four-plan sequence (Placement Index → Live Entity Registry → Golden Trace Gate → Entity-List Iteration) is meticulously researched and correctly scoped for SCALE-06/SCALE-07. The sparse-set data structures (`EligibleCellIndex`, `LiveEntityRegistry`) are the right choice for the grid size and entity cap. However, the phase carries **medium-high execution risk** due to a fundamental determinism tension in Plan 04 (shuffle-order divergence), a non-automatable baseline-pin workflow in Plan 03, and heavy code-surgery coupling across six production files and seven test files. The plans will likely achieve the phase goals, but only if the shuffle determinism issue is resolved before Plan 04 execution and the EXPECTED_DIGESTS capture is automated.
 
-### 2. Strengths
+---
 
-- **Excellent sequencing.** Plan 03 (Golden Trace) pins a SHA-256 baseline *before* Plan 04 mutates the tick pipeline. This prevents the "refactor agrees with itself" trap.
-- **Honest performance framing.** Research explicitly states the 256-bot grid-scan overhead is only ~1.2% of the 500 ms tick budget; the real payoff is enabling Phase 19.1 parallelism and scaling beyond the admission cap.
-- **Strong concurrency hygiene.** D-08/D-11 single-threaded mutation invariant is repeated as an acceptance gate in every plan; `parallelStream()` is explicitly banned in acceptance criteria.
-- **Defensive design for placement.** Constraint-3 (would-cause-overcrowding) is a thoughtful refinement that prevents cascade penalties; dirty-bbox maintenance avoids the O(65k) full-rebuild cost.
-- **Clear backlog separation.** Phase 19.1 for read-only parallelism and 999.x for conflict-graph dispatch prevent scope creep while preserving the user's proposals.
+## Strengths
 
-### 3. Concerns
+*   **Appropriate data structures:** Dense-array + back-map sparse sets for both `EligibleCellIndex` and `LiveEntityRegistry` give O(1) add/remove/sample with deterministic iteration — exactly right for a 256×256 grid with ≤256 entities.
+*   **Strong test strategy:** Four Wave-0 test files cover constraints, determinism, density saturation, and semantic equivalence. The GoldenTraceEquivalenceTest with per-session SHA-256 digests correctly sidesteps cross-session virtual-thread scheduling jitter.
+*   **Lifecycle hook audit (REVIEWS H1/H3):** The exhaustive enumeration of every `setEntity`/`clearEntity`/`unregisterByEntity` call site for `notifyChanged` and registry hooks is thorough and necessary.
+*   **Explicit stale-data acknowledgment:** Plan 01 documents the 1-tick `cellStatusCache` staleness during placement and correctly designates `trySetEntity` as the atomic gate.
+*   **Atomic backpressure preservation:** `GRID_FULL` wire shape and `RejectionToken` taxonomy are reused unchanged (Phase 17 contracts respected).
 
-- **HIGH — GoldenTraceEquivalenceTest cross-session emit determinism.** The test assumes fixed seed + single-threaded driver yields deterministic interleaving of per-session virtual-thread drain loops. Virtual threads are scheduled on platform thread pools; cross-session emit order is **not** guaranteed to be stable across two JVM runs even with identical simulation seeds. The plan acknowledges this as a "fallback" to per-session digests, but relying on JVM scheduler stability as the primary gate is brittle. If the test flakes in CI, the Plan 04 merge gate loses trust.
-- **MEDIUM — `LiveEntityRegistry.snapshot()` order stability after removals.** The registry uses swap-and-pop `unregister`, which mutates iteration order after the first death. The plan claims insertion-order determinism holds because WS arrival is serialized, but death order is simulation-dependent. If two runs have particles die in a different order (e.g., due to `Collections.shuffle` altering combat pairings), the dense array order diverges. Plan 04's TickBroadcaster task notes a *reactive* `sort(Comparator.comparing(...))` fix, but this should be the default behavior in Plan 02 to avoid digest surprises.
-- **MEDIUM — `EligibleCellIndex.evaluateEligibility` allocates 25 `unmodifiableMap` wrappers per event.** Calling `environmentEngine.cellStatusCacheView()` inside the 5×5 `notifyChanged` loop creates transient `Collections.unmodifiableMap` objects for every dirtied cell. At high event rates this is minor GC pressure that is trivially avoidable by hoisting the view reference above the loop.
-- **MEDIUM — Plan 19-03 `driveScenario()` placeholder is undercooked.** The task sketches a test driver that places bots at hardcoded `(i*3, i*3)` and "seeds" them manually, bypassing the actual `handleRegister` and `EligibleCellIndex` integration. If the baseline digest is captured against a toy scenario that doesn't exercise the full tick pipeline (e.g., no real WS sessions, no `OutboundSender` queues), it may miss regressions in the actual broadcast path. The test needs real sessions or at a minimum must drive registration through `WorldWebSocketHandler.handleRegister` so the post-Plan-04 refactor exercises the same code surface.
-- **MEDIUM — `EligibleCellIndex` holds its monitor while calling `WorldGrid` and `EnvironmentEngine`.** A WS inbound thread acquires `EligibleCellIndex`'s monitor inside `notifyChanged`, then calls `worldGrid.getCell()` (which acquires the grid read lock). If a tick thread ever needs the reverse order (grid write lock → EligibleCellIndex monitor), this is safe *today* because tick threads don't touch the index. However, this ordering is an implicit contract that future maintainers could violate. A brief comment in the source would mitigate this.
-- **LOW — Plan 19-04 SimulationEngine acceptance criteria miscounts grid loops.** Research (A2) claims 9 grid scans; PATTERNS.md lists 8 line numbers; Plan 04 says "7 in-scope sites." The discrepancy is minor and acceptance criteria use `grep` bounds (`≤ 4` remaining loops), but the planner should reconcile the count to ensure nothing is missed.
+---
 
-### 4. Suggestions
+## Concerns
 
-1. **Guarantee deterministic snapshot order in Plan 02.** Change `LiveEntityRegistry.snapshot()` to sort by `entityId` before returning the shallow copy, or maintain a `LinkedHashMap`/`TreeMap` for stable ordering. This removes the reactive sort hack from Plan 04 and makes the golden trace inherently more stable.
-2. **Use per-session digests as the primary gate in Plan 03.** Capture a `Map<String, byte[]>` of per-session SHA-256 digests and assert map equality across runs. This eliminates cross-session emit-order flakiness entirely. A secondary global digest can be kept for convenience.
-3. **Hoist `cellStatusCacheView()` in `EligibleCellIndex.notifyChanged`.** Cache the map reference before the 5×5 loop to avoid 25 temporary wrapper allocations per event.
-4. **Drive Plan 03's scenario through real WS test clients.** Model `driveScenario()` after `HundredBotIntegrationTest`'s `BlockingWebSocketClient` loop rather than direct `worldGrid.trySetEntity` calls. The baseline must include the full `OutboundSender` queue/drain path to be a valid oracle for Plan 04.
-5. **Add an `EligibleCellIndex` gauge to `AdmissionMetrics` (or a new `ScaleMetrics` bean).** Emitting `eligibleCount` as a Micrometer gauge would give immediate observability during Phase 21 dense-run benchmarks without requiring new work later.
-6. **Document the lock-ordering invariant.** Add a code comment in `EligibleCellIndex` noting that callers typically hold the `WorldGrid` write lock before entering synchronized methods, and that tick threads must not call into the index while holding the grid write lock.
+### Plan 01 — Placement Index
 
-### 5. Risk Assessment
+*   **[MEDIUM] `notifyChanged` cost under high churn:** Each grid mutation triggers a 5×5 bbox re-evaluation. That's ~225 `worldGrid.getCell` / `getNeighbors` reads per event (25 cells × ~9 reads each). At 100+ moves/deaths/births per tick, the tick handler thread could spend >10k grid reads just maintaining the index, dwarfing the O(1) sampling win. The dirty-bbox approach is correct; the multiplier under churn is just higher than acknowledged.
+*   **[MEDIUM] `@DependsOn("rockGenerator")` fragility:** Spring `@DependsOn` ensures `@PostConstruct` order, but it does not guarantee the Rocks are physically written to `WorldGrid` before `initialize()` runs if `RockGenerator` uses deferred/async initialization. The plan should verify `RockGenerator.initialize()` is fully synchronous.
+*   **[LOW] `evaluateEligibility` double-neighbor-walk:** For constraint-3, the code walks 8 neighbours of the candidate cell, and for each occupied neighbour walks *its* 8 neighbours to count. That's up to 64 reads per cell in the bbox. This is O(25×64) = 1,600 reads worst-case per event. Still acceptable at current scale, but wasteful. A pre-computed neighbour count cache (like `cellStatusCache` but storing the raw count byte) would eliminate the inner walk.
 
-**Overall: MEDIUM**
+### Plan 02 — Live Entity Registry
 
-The plans are architecturally sound and well-scoped, but the **MEDIUM** rating stems from the fragility of the primary verification gate. If the `GoldenTraceEquivalenceTest` flakes due to virtual-thread scheduling jitter or non-deterministic `ConcurrentHashMap` iteration order in unrefactored code, Plan 04 loses its safety net. Additionally, the `LiveEntityRegistry` swap-and-pop ordering introduces a subtle source of cross-run divergence that the test is specifically designed to catch—meaning the gate could fail for infrastructure reasons rather than real regressions. The actual refactor logic ( Plans 01, 02, 04 ) is low-risk; the risk is concentrated in the test harness that guards it. Fixing the gate design *before* pinning the digest will lower the overall risk to **LOW**.
+*   **[MEDIUM] `executeCompositeMovement` hook uncertainty:** The plan marks this as a "HARD REQUIREMENT" but admits the method may not exist in `ActionResolver`. If the rigid-body translation is embedded inside `resolveMove` or spread across helper methods, the executor could miss it, leaving stale positions in the registry. Stale positions → Plan 04 iterates wrong coordinates → golden trace failure.
+*   **[MEDIUM] Constructor/back-compat ctor cascade:** Adding two new constructor parameters (`EligibleCellIndex`, `LiveEntityRegistry`) to `SimulationEngine`, `ActionResolver`, `DeathFinalizer`, and `WorldWebSocketHandler` — plus propagating them through internal `new DeathFinalizer(...)` calls and test alt-ctors — is high-touch. One missed alt-ctor path (e.g. a `@SpringBootTest` that instantiates `SimulationEngine` manually) causes a compile error that blocks the wave.
+*   **[LOW] Sort cost in `snapshot()`:** `O(N log N)` per snapshot, called by every tick handler (maybe 4–5× per tick). At N=256 this is noise, but it's a fixed tax on every tick even when the grid scan being replaced was cheap.
+
+### Plan 03 — Golden Trace Equivalence
+
+*   **[HIGH] Manual EXPECTED_DIGESTS pin workflow:** The two-pass "run once with placeholder, print to stdout, manually copy into source, recompile, run again" workflow is not CI-friendly and is prone to copy-paste errors. If the executor is an automated agent it can self-edit, but the plan frames this as requiring manual intervention, which breaks autonomous execution flow.
+*   **[MEDIUM] Mock session fidelity:** The test uses `mock(WebSocketSession.class)`. If `OutboundSender` or `TickBroadcaster` calls any other method on the session (e.g. `getAttributes()`, `getUri()`, `isOpen()` checks inside the drain loop), the mock defaults may return null/false and silently skip emit paths. This could produce a vacuous pass even with the emitCount guard, if all sessions are skipped for the same mock-default reason across both runs.
+*   **[MEDIUM] `resetAll()` completeness:** The plan mentions resetting `worldGrid`, `botRegistry`, `liveEntityRegistry`, and `handler`, but may miss `SessionRegistry` internal state and `OutboundSender` per-session queues. Leftover queue state or closed mock sessions from Run A could pollute Run B.
+
+### Plan 04 — Entity-List Iteration
+
+*   **[HIGH] `Collections.shuffle` determinism divergence:** Pre-Plan-04, the shuffled lists are built from row-major grid scans. Post-Plan-04, they come from `snapshot()` which is sorted by `entityId` (lexicographic string order). `Collections.shuffle` with a fixed seed produces a deterministic permutation **of its input order**. Because the input order differs, the post-shuffle sequence will differ. This changes interaction resolution order, which changes deaths, energy levels, and ultimately the observable simulation output. The plan acknowledges this and says "STOP and escalate," but this is a **predictable Plan 04 failure mode** that should be mitigated proactively, not treated as an unknown.
+*   **[MEDIUM] `TickBroadcaster` session lookup per entity:** Switching from `botRegistry.getAllBots()` (which yields `sessionId` directly) to `liveEntityRegistry.snapshot()` + `botRegistry.getSessionForEntity(entityId)` adds a HashMap lookup per entity per tick. More importantly, if the two registries ever drift (e.g. an entity is in `LiveEntityRegistry` but missing from `BotRegistry` due to a missed hook), the session is silently skipped. The existing code would have iterated it via `getAllBots()`. The per-session digest might still match if the skip is consistent, but it's a coverage gap.
+*   **[MEDIUM] `processOvercrowding` refactored semantics:** The original grid scan visits every cell and may set overcrowding flags on cells that become empty mid-tick (e.g. due to death). Refactoring to iterate only live entities means empty cells that were overcrowded last tick might not get their flag refreshed/cleared if the logic depends on visiting them. The plan claims empty cells can't be overcrowded, but if the flag is used as a spatial cache for environmental effects or nutrient spawning, stale flags on empty cells could diverge.
+
+---
+
+## Suggestions
+
+1.  **[Plan 04 — CRITICAL] Pre-shuffle sort to preserve row-major equivalence:** For the three `Collections.shuffle(..., simRng)` sites in `SimulationEngine`, sort the filtered entity-list by `position.x() * height + position.y()` (row-major linear index) **before** calling `shuffle`. This makes the pre-shuffle input order identical to the pre-refactor grid-scan order, guaranteeing deterministic shuffle output and eliminating the HIGH-risk divergence. Add a comment explaining this is a compatibility shim.
+2.  **[Plan 03] Auto-pin EXPECTED_DIGESTS via resource file:** Instead of hardcoding digests in Java source, write them to `src/test/resources/golden-trace-phase19.json` on first run (generate-if-missing). The test reads the file at runtime. This removes manual editing and recompilation from the workflow.
+3.  **[Plan 02/04] Registry consistency assertion:** Add a `@Profile("test")` bean or a test assertion that verifies `liveEntityRegistry.size() == botRegistry.getAllBots().size()` at the end of every tick. Catches missed register/unregister hooks immediately rather than via a flaky golden trace.
+4.  **[Plan 01] Hoist `worldGrid.getCell` reads in `evaluateEligibility`:** For the dirty-bbox walk, instead of re-calling `worldGrid.getCell(cx, cy)` and then `worldGrid.getCell(nPos.x(), nPos.y())` for each neighbour, consider whether `Cell` itself can report its occupied-neighbour count if that data is already computed during `buildStatusCaches()`. This would collapse constraint-3 evaluation to a single cache read instead of a nested walk.
+5.  **[Plan 04] Add `sessionId` to `EntityEntry`:** If `LiveEntityRegistry.EntityEntry` also stored `sessionId` (or an `Optional<String>`), `TickBroadcaster` could avoid the `botRegistry.getSessionForEntity` lookup entirely, removing a coupling point and a potential skip hazard. This requires wiring `sessionId` at registration time.
+
+---
+
+## Risk Assessment
+
+**Overall Risk Level: MEDIUM-HIGH**
+
+**Justification:**
+
+The phase goals are clearly defined and the chosen algorithms are sound, but execution hinges on four sequential waves of high-touch code surgery across the simulation core. The highest risk is **Plan 04's deterministic equivalence guarantee**, which is architecturally compromised by the `Collections.shuffle` order divergence unless a compatibility sort is added. Without it, the GoldenTraceEquivalenceTest is expected to fail predictably, forcing either an operator escalation (delaying the phase) or an undocumented digest re-pin (voiding the D-10 contract). Secondary risks are the manual baseline-pin workflow in Plan 03 and the cascading constructor changes in Plans 01–02, which are prone to compile-time regression in tests with manual bean instantiation. If the suggested pre-shuffle sort is adopted, the risk drops to **MEDIUM**.
 
 ---
 
 ## Consensus Summary
 
-All four reviewers rate the architectural shape **directionally sound** but converge on the same execution-time blast points: incomplete index/registry maintenance hooks, semantic-equivalence harness fragility, and iteration-order drift across the Plan 04 cut.
+All four reviewers agree the phase architecture is sound (sparse-set data structures right-sized, wave sequencing correct, EXPECTED_DIGESTS pin-before-refactor closes the self-agreement loophole). One issue dominates the risk profile and is flagged HIGH by **all four** independently.
 
 ### Agreed Strengths
 
-- **Wave sequencing 19-01 → 19-02 → 19-03 → 19-04 is correct.** Capturing the EXPECTED_DIGEST before the tick-handler refactor (Plan 03 before Plan 04) avoids the "refactor agrees with itself" trap. (gemini, claude, codex, opencode)
-- **Sparse-set / dense-array choice for `EligibleCellIndex` and `LiveEntityRegistry`** is the appropriate ECS-style data structure for O(1) sample/add/remove. (gemini, claude, codex, opencode)
-- **D-08/D-11 single-threaded mutation invariant preserved**, with `parallelStream` explicitly banned via grep gates; deferral of read-only parallelism to Phase 19.1 keeps blast radius small. (claude, codex, opencode)
-- **`ActionResolver.resolveMove` flagged as a hard requirement in Plan 02** prevents the stale-position trap that would otherwise leak into Plan 04. (claude, opencode)
-- **Plans avoid new dependencies and new wire-protocol surface.** (gemini, codex)
+- **Wave sequencing 01 → 02 → 03 → 04 with EXPECTED_DIGESTS pinned post-02/pre-04** — closes the "two wrong runs agree" trap. *(gemini, claude, codex, opencode)*
+- **Sparse-set data structures** (`EligibleCellIndex`, `LiveEntityRegistry`) — O(1) add/remove/sample, deterministic iteration, right scale for 256×256 grid + ≤256 entities. *(gemini, claude, codex, opencode)*
+- **Per-session SHA-256 digests** sidestep cross-session VT scheduling jitter; correct call. *(gemini, codex, opencode)*
+- **Lifecycle hook audit (REVIEWS H1/H3)** — exhaustive enumeration of `setEntity`/`clearEntity`/`unregisterByEntity` sites. *(claude, codex, opencode)*
+- **Concurrency hygiene preserved** — single-threaded mutation invariant kept, `parallelStream` banned via grep gate. *(gemini, claude)*
+- **Phase 17 contracts respected** — `E\|503\|GRID_FULL` wire shape and `RejectionToken` taxonomy unchanged. *(codex, opencode)*
 
-### Agreed Concerns (priority order — all four reviewers flagged unless noted)
+### Agreed Concerns
 
-1. **HIGH — `EligibleCellIndex.notifyChanged` hooks are incomplete (Plan 19-01).** Plan wires only `WorldWebSocketHandler.handleRegister` success path. Movement (`ActionResolver.resolveMove`), death (`DeathFinalizer.finalize*`), composite collapse/formation/dissolve, reproduce, and bonding all mutate occupancy without notifying the index. Result: stale eligibility set drifts from `WorldGrid`, producing false `GRID_FULL` under churn. *(All four reviewers — gemini H, claude H1, codex HIGH, opencode noted via lifecycle audit.)*
+**[CONSENSUS HIGH — flagged by all 4 reviewers] Plan 04 pre-shuffle order divergence.**
+Pre-Plan-04: `SimulationEngine` builds shuffle inputs via row-major grid scan (`x*H+y` order). Post-Plan-04: `LiveEntityRegistry.snapshot()` returns entries sorted by `entityId` (lexicographic). `Collections.shuffle(list, seededRng)` is deterministic *for a given input permutation* — different input order → different output permutation → different combat pairing → different deaths → different per-session digests. Plan 04 acknowledges this as a STOP/escalate edge case; reviewers treat it as the **expected outcome** of first execution unless mitigated.
 
-2. **HIGH — `GoldenTraceEquivalenceTest` driveScenario likely produces a vacuous baseline (Plan 19-03).** Synthetic `BotRegistry.register` without real `SessionRegistry` / `OutboundSender` wiring means `TickBroadcaster.onTick` skips every iteration (open-session check). Digest = SHA-256(""). Acceptance regex `[0-9a-f]{64}` matches the empty-digest, so EXPECTED_DIGEST passes by silently encoding "no frames sent." Plan 04 then refactors against a toothless gate. *(claude H4, codex HIGH, opencode MEDIUM, gemini implicit via "GoldenTraceCapture isolation".)*
+**Recommended fix (3-of-4 reviewers — gemini, claude, codex, opencode):** sort the snapshot (or sort the filtered list before each `Collections.shuffle` call site in `SimulationEngine`) by row-major linear index `position.x() * height + position.y()`, *not* by `entityId`. This preserves byte-for-byte shuffle equivalence across the cut. Document as a compatibility shim. `TickBroadcaster` does not need this sort — per-session hashing already neutralises its order-sensitivity (gemini explicitly).
 
-3. **HIGH — `LiveEntityRegistry` iteration-order determinism is unstable (Plans 19-02 / 19-04).** Swap-and-pop unregister mutates dense-array order after the first death; `TickBroadcaster` previously iterated `ConcurrentHashMap.values()` whose order also differs from insertion order. The two orders almost certainly diverge across the Plan 04 cut → digest mismatch. Plan 04 currently treats sort-by-entityId as a *reactive* fix; reviewers want it baked-in as the canonical order. *(All four — gemini H, claude M3, codex HIGH, opencode MEDIUM.)*
+**[CONSENSUS HIGH — flagged by gemini, codex, claude] Plan 03 `awaitAllSessionQueuesDrained` race.**
+The helper iterates `capture.sessionsSeen()` — populated *as frames drain*. On the first tick check, the set may be empty before the drain VT has emitted, the loop returns "all drained" prematurely, the next tick fires before the previous tick's frames finish, and digests become non-deterministic.
 
-4. **HIGH — Cross-session emit-order non-determinism in golden trace (Plan 19-03).** Per-session virtual-thread drain loops mean global SHA-256 over emit-order is sensitive to JVM scheduling. Reviewers recommend either per-session digests sorted by sessionId, OR capture at `offer()` (synchronous enqueue order) instead of post-send. *(claude H4 paths, codex MEDIUM, opencode HIGH.)*
+**Recommended fix:** track the explicit list of registered session IDs in the test driver; await `queueDepth(sid) == 0` for *those* IDs (not for `sessionsSeen()`).
 
-5. **HIGH — `EligibleCellIndex` `@PostConstruct` ordering vs `RockGenerator` is undefined.** Sibling `@PostConstruct` order is unspecified by Spring; if `EligibleCellIndex.initialize` fires before `RockGenerator`, rock cells get added to the eligible set permanently. Fix: `@DependsOn("rockGenerator")` or constructor-inject. *(gemini implicit, claude H2, codex HIGH.)*
+**[CONSENSUS HIGH — flagged by codex, opencode strongly] Bonded/composite identity ambiguity in `LiveEntityRegistry`.**
+Plans blur "grid occupant entity" vs "bot session entity". A `BondedPair` may correspond to two sessions; replacing `botRegistry.getAllBots()` with one live-entity entry can drop frames. Death-of-bonded-pair hooks may unregister `primaryEntityId`/`secondaryEntityId` while the registry stores the bonded-pair's grid-occupant ID, leaving a stale entry.
 
-6. **MEDIUM — Cross-thread read of `EnvironmentEngine.cellStatusCacheView()` from WS threads.** WS handler thread reads the cache that the tick thread rebuilds every tick; the per-event `Collections.unmodifiableMap` allocation also adds GC churn inside a 5×5 loop. *(codex HIGH, opencode MEDIUM.)*
+**Recommended fix:** either keep `TickBroadcaster` driven by `BotRegistry.snapshotSorted...` (codex) or add `sessionId` to `EntityEntry` so the lookup is direct (opencode); add a `LiveEntityRegistryInvariantTest` that compares registry contents against actual non-rock/non-nutrient occupied cells after scripted bond/composite/dissolve/death scenarios.
 
-7. **MEDIUM — Acceptance grep gates are loose.** `Collections.shuffle(.*simRng) >= 3` should be `== 3` (RNG consumption regression silently passes if a fourth shuffle is added); remaining-grid-loop bound `≤ 4` permits up to three unrefactored sites. *(claude M4 / M5, codex implicit "behavioral invariant tests where possible".)*
+**[CONSENSUS MEDIUM — flagged by gemini, opencode] Constructor cascade fragility.**
+Adding `EligibleCellIndex` + `LiveEntityRegistry` ctor params to `SimulationEngine`/`ActionResolver`/`DeathFinalizer`/`WorldWebSocketHandler` plus all alt/back-compat ctors in tests is high-touch. One missed `@SpringBootTest` manual instantiation = compile break that blocks the wave.
 
-8. **MEDIUM — Plan 19-02 misses entity-id-introducing sites.** BondFormation, CompositeFormation, ReproducerBud, dissolveToParticles, revertToBondedPair, executeCompositeMovement all create or remap entityIds; without matching `register/unregister/updatePosition` the registry and grid diverge. *(claude H3, codex HIGH.)*
-
-9. **MEDIUM — `DeathFinalizer` constructor-signature change collides with the back-compat 9-arg `SimulationEngine` ctor.** Plan 02 doesn't address it; will fail to compile or instantiate a registry-less DeathFinalizer in tests. *(claude M6.)*
-
-10. **MEDIUM — Plan 19-01 `PlacementDeterminismTest` bypasses `handleRegister`,** testing the index but not the D-06 contract ("registration arrival order → identical placements"). *(claude M2, codex MEDIUM.)*
+**[CONSENSUS MEDIUM — flagged by claude, opencode] EXPECTED_DIGESTS pinning is not CI-friendly.**
+Two-pass "run with placeholder, copy hex into Java source, recompile, re-run" workflow is manual and error-prone. **Recommended fix (opencode):** pin to a generate-if-missing resource file `src/test/resources/golden-trace-phase19.json` so the test is self-pinning on first run and read-only afterward; eliminates copy-paste step.
 
 ### Divergent Views
 
-- **Overall risk:** gemini=MEDIUM, opencode=MEDIUM, codex=MEDIUM-HIGH, claude=MEDIUM-HIGH. The split is mostly about how much weight to give the harness-fragility risk (claude/codex more pessimistic on H4) versus the architectural soundness (gemini/opencode more optimistic). All four agree the fixes are **localised, not architectural** — no plan needs to be redesigned.
+- **Severity of Plan 04 risk if shuffle-order issue is mitigated:** gemini drops to LOW, codex stays HIGH (cites identity-mapping for broadcasting as separate HIGH), claude drops to LOW under "Suggestion 1 Option A", opencode drops to MEDIUM. → identity-mapping fix should be made independently of shuffle-order fix.
+- **`evaluateEligibility` cost model:** opencode flags MEDIUM cost of repeated `worldGrid.getCell` reads inside the dirty bbox + suggests a pre-computed neighbour-count cache. Other reviewers treat current design as acceptable. Worth noting for Phase 21 benchmark observation but not blocking.
+- **`@DependsOn("rockGenerator")` sufficiency:** opencode flags it MEDIUM (only enforces `@PostConstruct` order, not synchronous Rock writes). Others treat as closed by H2. Verify `RockGenerator.initialize()` is fully synchronous before relying on `@DependsOn`.
+- **Lock ordering documentation:** gemini flags MEDIUM (`Index Monitor → Grid Read Lock`). Claude treats as closed/documented. Light-touch: add a one-line comment in `EligibleCellIndex` capturing the invariant.
 
-- **Where to centralise occupancy notifications:** opencode/codex suggest a `WorldGrid`-internal `GridMutationListener` callback (one place, automatic propagation); claude proposes enumerating every site in Plan 02; gemini proposes consolidating Plans 01 and 02 hooks since they fire at the same sites. The `GridMutationListener` route is the lowest-coupling option for future plans but adds Spring-awareness to `WorldGrid`.
+### Recommended pre-execution actions (in order)
 
-- **Listener placement inside vs outside `synchronized(session)` (Plan 03):** opencode flags as MEDIUM lock-extension risk; claude rates LOW (sub-µs digest update); codex says "must not run under session locks" and proposes capturing `(sessionId, bytes)` into a thread-safe queue post-send for offline digesting. The codex pattern is the safest of the three.
+1. **Adopt row-major sort in `LiveEntityRegistry.snapshot()`** (or per-call-site sort in `SimulationEngine` before each `Collections.shuffle`) — closes the unanimous HIGH. *(claude Suggestion 1A; codex Suggestion 1; gemini Suggestion 1; opencode Suggestion 1.)*
+2. **Fix `awaitAllSessionQueuesDrained`** — track registered session IDs explicitly, drop `sessionsSeen()`. *(gemini, codex, claude.)*
+3. **Decide bonded/composite identity model** — either (a) keep `TickBroadcaster` session-driven via `BotRegistry`, or (b) add `sessionId` to `EntityEntry`. Add `LiveEntityRegistryInvariantTest`. *(codex, opencode.)*
+4. **Move EXPECTED_DIGESTS to a generated resource file** — eliminates manual edit step, makes the gate autonomously executable. *(opencode.)*
+5. **Pre-flight signature check in Plan 03 Task 2** — verify `OutboundSender.attachSession` and `SessionRegistry.register` actual signatures before writing `driveScenario`. *(claude.)*
+6. **Enumerate `ActionResolver` entityId sources explicitly** in Plan 02 ("`ra.particle.id()` for Particle moves; `member.id()` for composite-member moves") so executor doesn't pick wrong field. *(claude.)*
 
-### Recommended Pre-Execution Fix List (all reviewers agree)
-
-1. Plan 01: wire `notifyChanged` at every `WorldGrid.{setEntity, clearEntity, trySetEntity}` site (or hook inside `WorldGrid` itself).
-2. Plan 01: add `@DependsOn("rockGenerator")` (or constructor-inject) to lock `@PostConstruct` order.
-3. Plan 02: enumerate and wire every entityId-introducing site (bonding, composite formation/dissolve/revert, reproduce, executeCompositeMovement).
-4. Plan 02: choose canonical iteration order — either insertion-stable removal OR `sort(Comparator.comparing(EntityEntry::entityId))` baked into snapshot.
-5. Plan 02: update the back-compat 9-arg `SimulationEngine` constructor for the new `DeathFinalizer` signature.
-6. Plan 03: drive the scenario through real WS clients (à la `HundredBotIntegrationTest`) OR inject mock-but-registered sessions; add `assertThat(capture.emitCount()).isGreaterThan(0)` and an "EXPECTED_DIGEST is not the empty-digest" gate.
-7. Plan 03: prefer per-session digests OR capture at `offer()` enqueue rather than post-send to remove virtual-thread scheduling jitter.
-8. Plan 03: confirm `tickEngine.runOneTick()` (or explicit `applicationEventPublisher.publishEvent(new TickEvent(t))`) drives the full `@Order` chain.
-9. Plan 04: bake `entries.sort(Comparator.comparing(...))` into the canonical replace-pattern; tighten grep gates to `Collections.shuffle(.*simRng) == 3` and remaining `for (int .. = 0` ≤ 1 (or ≤ 2 with explicit allowlist).
-10. Plan 01: replace `cellStatusCacheView()` map reads with a thread-safe snapshot or compute eligibility under `WorldGrid` read lock; hoist the view reference outside the 5×5 loop.
-
-### Next Step
-
-Feed back into planning:
-
-```
-/gsd-plan-phase 19 --reviews
-```
+With items 1–3 applied, all reviewers project the overall risk drops from HIGH/MEDIUM-HIGH to LOW/MEDIUM and the wave becomes autonomously executable.
