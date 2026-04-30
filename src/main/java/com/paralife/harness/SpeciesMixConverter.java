@@ -3,6 +3,8 @@ package com.paralife.harness;
 import com.paralife.bot.SpeciesMix;
 import picocli.CommandLine.ITypeConverter;
 
+import java.util.Locale;
+
 /**
  * Picocli type converter for {@link SpeciesMix} (D-15 / D-16).
  *
@@ -16,6 +18,9 @@ public final class SpeciesMixConverter implements ITypeConverter<SpeciesMix> {
 
     @Override
     public SpeciesMix convert(String value) {
+        // L-03 (Round B): tolerate operator finger-slips — surrounding whitespace and
+        // mixed/upper case. Numeric parsing is unaffected by lowercasing.
+        value = value.trim().toLowerCase(Locale.ROOT);
         if ("balanced".equals(value)) {
             return SpeciesMix.balanced();
         }

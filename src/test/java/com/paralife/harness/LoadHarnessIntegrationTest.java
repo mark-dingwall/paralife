@@ -10,6 +10,7 @@ import com.paralife.bot.BotIdentity;
 import com.paralife.bot.HeuristicBrain;
 import com.paralife.bot.RampUpSpec;
 import com.paralife.bot.SpeciesMix;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -21,6 +22,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -237,6 +239,58 @@ class LoadHarnessIntegrationTest {
         // All 3 bots failed to connect — connectFailuresTotal must be 3
         assertThat(fleet.connectFailuresTotal()).isEqualTo(3L);
         fleet.shutdown();
+    }
+
+    // --- H-02/H-03 (Round B): signal-path final report carries exit_reason + counters ---
+
+    @Test
+    void signalPathFinalReport_carriesExitReasonAndCounters(@TempDir Path tmp) throws Exception {
+        // H-02/H-03 fix: the shutdown hook itself now performs writeFinalReportOnce() before
+        // fleet.shutdown(), so the snapshot is taken while the bot list is still populated
+        // (counters > 0) AND while the entry is signal — both invariants required by D-17.
+        Path report = tmp.resolve("signal-final.json");
+
+        LoadHarness harness = new LoadHarness();
+        harness.serverUri = wsUri();
+        harness.count = 3;
+        harness.harnessId = "signal-final";
+        harness.rampUp = RampUpSpec.instant();
+        harness.speciesMix = SpeciesMix.balanced();
+        harness.durationSeconds = 30; // long enough that we trigger the hook before duration
+        harness.reportOut = report;
+        harness.reportMode = "overwrite";
+        harness.reportIntervalSeconds = 10;
+
+        Thread harnessVT = Thread.startVirtualThread(harness::call);
+
+        // Wait until at least one bot has registered so the counter snapshot is non-trivial.
+        Awaitility.await().atMost(Duration.ofSeconds(15)).until(() -> {
+            BotFleet f = harness.activeFleetForTest();
+            return f != null && f.peakRegistered() >= 1;
+        });
+
+        // Drive the hook body directly — equivalent to SIGINT/SIGTERM. Spawning a child JVM
+        // and signalling it would be the alternative, but driving the hook in-process is
+        // deterministic and avoids cross-platform signal portability issues.
+        harness.shutdownHookBody();
+
+        // Harness main thread should now exit through the duration-await -> writeFinalReportOnce
+        // (no-op CAS) -> fleet.shutdown -> return 0 path.
+        harnessVT.join(15_000);
+        assertThat(harnessVT.isAlive()).as("harness VT must exit after signal hook fires").isFalse();
+
+        JsonNode tree = MAPPER.readTree(report.toFile());
+        assertThat(tree.has("exit_reason")).isTrue();
+        assertThat(tree.get("exit_reason").asText())
+                .as("signal-path final report must carry exit_reason='signal'")
+                .isEqualTo("signal");
+        assertThat(tree.has("peak_registered")).isTrue();
+        assertThat(tree.get("peak_registered").asInt())
+                .as("peak_registered must be preserved through the signal-path write")
+                .isGreaterThanOrEqualTo(1);
+        // Monotonic counters must be present (not cleared by fleet.shutdown before the snapshot).
+        assertThat(tree.has("actions_sent_total")).isTrue();
+        assertThat(tree.has("perceptions_received_total")).isTrue();
     }
 
     // --- Round 2 Claude+OpenCode MEDIUM: shutdown hook removed after runInternal() ---

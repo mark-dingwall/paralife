@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@link AtomicBoolean#compareAndSet} so double-call from a shutdown hook and the main
  * {@code run()} path is safe — {@link BotClient#disconnect()} is invoked exactly once per bot.
  */
-public final class BotFleet {
+public class BotFleet {
 
     private static final Logger log = LoggerFactory.getLogger(BotFleet.class);
 
@@ -91,7 +91,16 @@ public final class BotFleet {
             // Register the onClose hook BEFORE connecting so no close event is missed.
             // CAS gate in BotClient.fireCloseCallbacks ensures decrement fires exactly once
             // even if disconnect() + Jetty @OnWebSocketClose both trigger (Round 2 Codex HIGH).
-            bot.onClose(() -> liveCount.decrementAndGet());
+            // H-01 (Round B): per-bot AtomicBoolean gate ensures the decrement only fires when
+            // the bot actually registered. Without this, partial-failure shutdown (connect or
+            // awaitRegistered failed -> never incremented) would still call disconnect() per
+            // bot via shutdown(), firing the onClose decrement and underflowing liveCount.
+            AtomicBoolean registered = new AtomicBoolean(false);
+            bot.onClose(() -> {
+                if (registered.compareAndSet(true, false)) {
+                    liveCount.decrementAndGet();
+                }
+            });
 
             bots.add(bot);
             String harnessTag = identity.harnessId().orElse("op");
@@ -104,6 +113,7 @@ public final class BotFleet {
                     bot.connect();
                     boolean ok = bot.awaitRegistered(15_000L);
                     if (ok) {
+                        registered.set(true);
                         int live = liveCount.incrementAndGet();
                         highWater.updateAndGet(prev -> Math.max(prev, live));
                     } else {

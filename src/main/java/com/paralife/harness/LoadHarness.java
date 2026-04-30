@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -64,7 +65,7 @@ public final class LoadHarness implements Callable<Integer> {
     int count;
 
     @Option(names = "--harness-id",
-            defaultValue = "${env:PARALIFE_HARNESS_HARNESS_ID}",
+            defaultValue = "${env:PARALIFE_HARNESS_ID}",
             description = "Harness identity (auto-generated if absent).")
     String harnessId;
 
@@ -103,6 +104,18 @@ public final class LoadHarness implements Callable<Integer> {
     // Retained for overwrite-mode header-merge across interval writes.
     private ReportSnapshot initialHeader;
 
+    // H-02/H-03 + M-01 (Round B): live state retained as instance fields so the
+    // shutdown hook body and tests can drive the same final-report code path.
+    // CAS-guarded single-write of the final report.
+    private final AtomicBoolean finalReportWritten = new AtomicBoolean(false);
+    // Live state captured at the start of runInternal(); cleared/replaced on each call.
+    private volatile BotFleet activeFleet;
+    private volatile ReportWriter activeWriter;
+    private volatile Instant activeStartedAt;
+    private volatile Thread activeReporterVT;
+    private volatile AtomicReference<String> activeExitReason;
+    private volatile CountDownLatch activeExitLatch;
+
     /**
      * Process entry point. Picocli executes {@link #call()} and routes the returned Integer
      * exit code to the process via a single exit call at the end of this method.
@@ -128,6 +141,13 @@ public final class LoadHarness implements Callable<Integer> {
     void validateAndDefault() {
         if (count < 1) {
             throw new IllegalArgumentException("--count must be >= 1 (got " + count + ")");
+        }
+        // M-02 (Round B): WARN above the D-02 5000-VT design ceiling per JVM. Not an error
+        // because the ceiling is design guidance, not a hard limit, but operators should split
+        // the load across multiple harness JVMs rather than push past it.
+        if (count > 5000) {
+            log.warn("--count={} exceeds D-02 5000-VT design ceiling per JVM. " +
+                    "Recommend splitting across multiple harness JVMs.", count);
         }
         if (reportIntervalSeconds < 10 || reportIntervalSeconds > 300) {
             throw new IllegalArgumentException(
@@ -178,6 +198,9 @@ public final class LoadHarness implements Callable<Integer> {
                 durationSeconds == 0 ? "indefinite" : Integer.toString(durationSeconds),
                 rampUp);
 
+        // Reset CAS so a single LoadHarness instance can be reused across calls (tests).
+        finalReportWritten.set(false);
+
         BotFleet fleet = new BotFleet();
         BotFactory factory = new BotFactory(serverUri);
         BotIdentity identity = BotIdentity.harness(harnessId);
@@ -220,14 +243,23 @@ public final class LoadHarness implements Callable<Integer> {
             }
         });
 
-        // Round 2 Codex HIGH: single shutdown hook, single exitReason = "signal".
-        // SIGINT and SIGTERM cannot be reliably distinguished by JVM shutdown hooks.
+        // Publish live state so the shutdown hook body (and the test seam below) can call
+        // writeFinalReportOnce() / fleet.shutdown() / exitLatch.countDown() against the
+        // same instances the duration path uses.
+        activeFleet = fleet;
+        activeWriter = writer;
+        activeStartedAt = startedAt;
+        activeReporterVT = reporterVT;
+        activeExitReason = exitReason;
+        activeExitLatch = exitLatch;
+
+        // H-02/H-03 (Round B): single shutdown hook performs the FINAL report write itself
+        // before fleet.shutdown(), so the snapshot is taken while the bot list still has
+        // accumulated counters. The hook completes the write before returning so JVM halt
+        // cannot truncate it. SIGINT and SIGTERM cannot be reliably distinguished by JVM
+        // shutdown hooks; both produce exitReason = "signal".
         // Round 2 Claude+OpenCode MEDIUM: capture the Thread reference for removal in finally.
-        Thread shutdownHook = new Thread(() -> {
-            exitReason.compareAndSet(null, "signal");
-            fleet.shutdown();
-            exitLatch.countDown();
-        }, "load-harness-shutdown");
+        Thread shutdownHook = new Thread(this::shutdownHookBody, "load-harness-shutdown");
         Runtime.getRuntime().addShutdownHook(shutdownHook);
 
         try {
@@ -237,7 +269,7 @@ public final class LoadHarness implements Callable<Integer> {
             } catch (Exception e) {
                 log.error("Fleet launch failed: {}", e.getMessage(), e);
                 exitReason.set("fatal-error");
-                writeFinalReport(writer, fleet, startedAt, exitReason.get());
+                writeFinalReportOnce();
                 return 2;
             }
 
@@ -263,8 +295,10 @@ public final class LoadHarness implements Callable<Integer> {
                 }
             }
 
-            String reason = exitReason.get() != null ? exitReason.get() : "duration-reached";
-            writeFinalReport(writer, fleet, startedAt, reason);
+            // Duration-reached path: hook may already have run the final write (signal-then-duration
+            // race). writeFinalReportOnce CAS-guards that case to a no-op.
+            exitReason.compareAndSet(null, "duration-reached");
+            writeFinalReportOnce();
             fleet.shutdown(); // idempotent — BotFleet.shutdownDone CAS guards double-call (Plan 04).
             return 0;
 
@@ -278,7 +312,75 @@ public final class LoadHarness implements Callable<Integer> {
                 // JVM is already shutting down — hook is being executed; removal not possible.
             }
             reporterVT.interrupt();
+            // Release strong refs so a reused harness instance doesn't pin prior state.
+            activeFleet = null;
+            activeWriter = null;
+            activeStartedAt = null;
+            activeReporterVT = null;
+            activeExitReason = null;
+            activeExitLatch = null;
         }
+    }
+
+    /**
+     * Body of the JVM shutdown hook. Package-private so {@code LoadHarnessIntegrationTest}
+     * can drive the signal path deterministically without spawning a child JVM.
+     *
+     * <p>Order: set exit_reason -> writeFinalReportOnce -> fleet.shutdown -> exitLatch.countDown.
+     * The final-report write happens BEFORE fleet.shutdown() so the bot list is still populated
+     * when the snapshot is taken (H-03). CAS-guarded single write means the duration path's
+     * subsequent writeFinalReportOnce() is a no-op (H-02).
+     */
+    void shutdownHookBody() {
+        AtomicReference<String> reasonRef = activeExitReason;
+        if (reasonRef != null) {
+            reasonRef.compareAndSet(null, "signal");
+        }
+        writeFinalReportOnce();
+        BotFleet f = activeFleet;
+        if (f != null) {
+            f.shutdown();
+        }
+        CountDownLatch latch = activeExitLatch;
+        if (latch != null) {
+            latch.countDown();
+        }
+    }
+
+    /**
+     * CAS-guarded single execution of the final-report write. Drains the periodic reporter VT
+     * first (M-01) so it cannot race the final write on the temp file or against ReportWriter
+     * state. Subsequent invocations are no-ops, regardless of which path (signal hook or
+     * duration-reached main thread) wins the CAS.
+     */
+    private void writeFinalReportOnce() {
+        if (!finalReportWritten.compareAndSet(false, true)) {
+            return;
+        }
+        Thread vt = activeReporterVT;
+        if (vt != null) {
+            vt.interrupt();
+            try {
+                vt.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        AtomicReference<String> reasonRef = activeExitReason;
+        String reason = (reasonRef != null && reasonRef.get() != null)
+                ? reasonRef.get()
+                : "duration-reached";
+        ReportWriter w = activeWriter;
+        BotFleet f = activeFleet;
+        Instant t0 = activeStartedAt;
+        if (w != null && f != null && t0 != null) {
+            writeFinalReport(w, f, t0, reason);
+        }
+    }
+
+    /** Test seam: live fleet during runInternal(). null when not running. */
+    BotFleet activeFleetForTest() {
+        return activeFleet;
     }
 
     private void writeCounters(ReportWriter w, BotFleet fleet,

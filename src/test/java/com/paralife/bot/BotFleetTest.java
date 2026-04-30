@@ -217,6 +217,28 @@ class BotFleetTest {
     }
 
     @Test
+    void connectFailures_doNotUnderflowLiveCount() throws Exception {
+        // H-01 (Round B): when bots fail to register (connect rejected or timeout),
+        // BotFleet.shutdown() still calls disconnect() on every bot in the list. The
+        // close-callback decrement must NOT fire for bots that never registered, so
+        // currentRegistered() must end at 0, not negative.
+        BotFleet badFleet = new BotFleet();
+        // Port 1 (tcpmux) is reserved and effectively never open — connect will fail.
+        BotFactory badFactory = new BotFactory("ws://localhost:1/ws/world");
+        try {
+            badFleet.launch("ws://localhost:1/ws/world", 5, BotIdentity.operator(),
+                    RampUpSpec.instant(), SpeciesMix.balanced(), badFactory);
+            badFleet.awaitAllSettled().get(20, TimeUnit.SECONDS);
+            badFleet.shutdown();
+            assertThat(badFleet.currentRegistered())
+                    .as("liveCount must not underflow when all 5 bots fail to register")
+                    .isEqualTo(0);
+        } finally {
+            badFleet.shutdown();
+        }
+    }
+
+    @Test
     void rateSpec50_10Bots_allStartWithin1Second() throws Exception {
         long start = System.currentTimeMillis();
         fleet.launch(serverUri, 10, BotIdentity.operator(),

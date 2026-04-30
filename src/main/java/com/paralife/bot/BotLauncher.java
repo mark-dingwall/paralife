@@ -20,7 +20,9 @@ import java.util.Optional;
  * for backwards compatibility — {@code BotFleet.awaitAllSettled().get(30, ...)} replicates
  * the same behaviour.
  *
- * @deprecated Use {@link BotFleet} directly. This facade will be removed in a future phase.
+ * @deprecated Use {@link BotFleet} directly. Removal is tracked under backlog item
+ *     {@code BACKLOG-18-L4} (filed via {@code /gsd-add-backlog} as a follow-up to the
+ *     Phase 18 Chunk B Round B remediation); this facade will be removed in a future phase.
  */
 @Deprecated(since = "0.18", forRemoval = true)
 public class BotLauncher {

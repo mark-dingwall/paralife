@@ -186,6 +186,16 @@ class LoadHarnessOptionsTest {
     }
 
     @Test
+    void envVar_harnessId_namedCorrectly() throws Exception {
+        // M-03 (Round B): the env var name is PARALIFE_HARNESS_ID, not the duplicated
+        // PARALIFE_HARNESS_HARNESS_ID — spec at 18-HARNESS.md §158 is the source of truth.
+        var field = LoadHarness.class.getDeclaredField("harnessId");
+        var option = field.getAnnotation(picocli.CommandLine.Option.class);
+        assertThat(option).isNotNull();
+        assertThat(option.defaultValue()).isEqualTo("${env:PARALIFE_HARNESS_ID}");
+    }
+
+    @Test
     void envVar_syntax_annotationPresent() throws Exception {
         // Verify that the LoadHarness @Option annotations actually use ${env:PARALIFE_HARNESS_
         // syntax (not bare ${PARALIFE_HARNESS_). This is the Round 2 Codex HIGH requirement.

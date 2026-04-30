@@ -17,8 +17,14 @@ import com.paralife.world.Entity.ParticleType;
  * {@link ParticleType#values()}. This ensures that future enum reordering (e.g. adding a new
  * value between CATALYST and MEMBRANE) cannot silently change the species distribution for
  * existing load tests and benchmarks.
+ *
+ * <p><b>Round B L-02 amendment — explicit balanced sentinel.</b>
+ * The 4-arg canonical constructor carries an explicit {@code balanced} flag set only by the
+ * {@link #balanced()} factory. {@link #pickFor} branches on that flag rather than on a
+ * float-tolerance check against {@code 1.0/3}, so a manually constructed near-balanced mix
+ * (e.g. {@code 0.334:0.333:0.333}) reliably uses position-based partitioning.
  */
-public record SpeciesMix(double cFrac, double mFrac, double sFrac) {
+public record SpeciesMix(double cFrac, double mFrac, double sFrac, boolean isBalanced) {
 
     /**
      * Round 2 OpenCode MEDIUM: hardcoded order so enum reordering of
@@ -28,6 +34,13 @@ public record SpeciesMix(double cFrac, double mFrac, double sFrac) {
             { ParticleType.CATALYST, ParticleType.MEMBRANE, ParticleType.SPORE };
 
     public SpeciesMix {
+        // M-04 (Round B): reject non-finite fractions BEFORE the sum check, because
+        // NaN propagates through arithmetic and `NaN > 0.001` is false — the sum check
+        // would silently accept (NaN, 0.5, 0.5).
+        if (!Double.isFinite(cFrac) || !Double.isFinite(mFrac) || !Double.isFinite(sFrac)) {
+            throw new IllegalArgumentException("Species fractions must be finite (got "
+                    + cFrac + ", " + mFrac + ", " + sFrac + ")");
+        }
         double sum = cFrac + mFrac + sFrac;
         if (Math.abs(sum - 1.0) > 0.001) {
             throw new IllegalArgumentException(
@@ -38,8 +51,17 @@ public record SpeciesMix(double cFrac, double mFrac, double sFrac) {
         }
     }
 
+    /**
+     * Public 3-arg constructor: weighted mode. Delegates to the canonical 4-arg form with
+     * {@code balanced=false} so a manually constructed near-(1/3, 1/3, 1/3) mix never
+     * silently flips into round-robin behaviour.
+     */
+    public SpeciesMix(double cFrac, double mFrac, double sFrac) {
+        this(cFrac, mFrac, sFrac, false);
+    }
+
     public static SpeciesMix balanced() {
-        return new SpeciesMix(1.0 / 3, 1.0 / 3, 1.0 / 3);
+        return new SpeciesMix(1.0 / 3, 1.0 / 3, 1.0 / 3, true);
     }
 
     /**
@@ -54,8 +76,9 @@ public record SpeciesMix(double cFrac, double mFrac, double sFrac) {
      * @return species char: {@code 'C'}, {@code 'M'}, or {@code 'S'}
      */
     public char pickFor(int i, int count) {
-        // Balanced: round-robin over the fixed ORDERED_TYPES array.
-        if (Math.abs(cFrac - 1.0 / 3) < 0.001 && Math.abs(mFrac - 1.0 / 3) < 0.001) {
+        // Balanced: round-robin over the fixed ORDERED_TYPES array. L-02 (Round B): branch
+        // on the explicit `balanced` sentinel rather than a float-tolerance check.
+        if (isBalanced) {
             ParticleType t = ORDERED_TYPES[i % ORDERED_TYPES.length];
             return switch (t) {
                 case CATALYST -> 'C';

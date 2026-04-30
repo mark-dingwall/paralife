@@ -1,61 +1,56 @@
 package com.paralife.bot;
 
-import com.paralife.admission.AttributionTagger;
-import com.paralife.websocket.SessionRegistry;
-import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.server.LocalServerPort;
 
-import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Verifies that {@link BotRunner} launches bots with {@link BotIdentity#operator()} identity,
- * which causes them to set {@code X-Paralife-Source: operator} in the WS upgrade headers.
+ * Verifies that {@link BotRunner} launches bots with {@link BotIdentity#operator()} identity.
  *
- * <p>Round 2 Codex HIGH fix: the previous version of this test launched {@link BotFleet} directly,
- * so it did NOT actually test that {@link BotRunner} itself passed {@link BotIdentity#operator()}.
- * This version calls {@link BotRunner#run(String[], java.util.function.Supplier, java.util.function.Function)}
- * — the extracted run method — to prove the operator-identity path goes through BotRunner.
+ * <p><b>Round B M-05 rewrite.</b> The previous version of this test computed an
+ * {@code ops} count over {@link com.paralife.websocket.SessionRegistry} and asserted
+ * {@code rc==0} (which was already asserted outside the Awaitility block) — making the
+ * Awaitility body tautological and the test pass for the wrong reason. It also depended
+ * on a live Spring context and was flaky against duration timing.
  *
- * <p>Depends on Plan 02 (Wave 3) — {@code WorldWebSocketHandler.afterConnectionEstablished}
- * must read {@code X-Paralife-Source} and stash {@link AttributionTagger#ATTR_SOURCE}
- * in session attributes. The plan's {@code depends_on: 18-02} ensures wave ordering.
+ * <p>The current version injects a recording {@link BotFleet} double via the existing
+ * {@code fleetFactory} seam, captures the {@link BotIdentity} argument passed to
+ * {@link BotFleet#launch}, and asserts identity equality directly. No Spring context
+ * required; deterministic and runs in milliseconds.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class BotRunnerOperatorTagTest {
-
-    @LocalServerPort
-    int port;
-
-    @Autowired
-    SessionRegistry sessionRegistry;
 
     @Test
     void botRunnerLaunchesWithOperatorIdentity() {
-        String uri = "ws://localhost:" + port + "/ws/world";
+        AtomicReference<BotIdentity> capturedIdentity = new AtomicReference<>();
 
-        // CALL THE ACTUAL BotRunner ENTRY POINT — not BotFleet directly.
-        // Round 2 Codex HIGH fix: this proves BotRunner (not just BotFleet) passes BotIdentity.operator().
-        int rc = BotRunner.run(new String[]{uri, "1", "3"},
-                BotFleet::new, BotFactory::new);
-        assertThat(rc).isEqualTo(0);
+        // Recording double: subclass of BotFleet that captures the identity argument and
+        // returns an empty bot list so BotRunner's awaitAllSettled() completes immediately.
+        Supplier<BotFleet> recordingFactory = () -> new BotFleet() {
+            @Override
+            public List<BotClient> launch(String uri, int count, BotIdentity identity,
+                                          RampUpSpec rampUp, SpeciesMix mix, BotFactory factory) {
+                capturedIdentity.set(identity);
+                return List.of();
+            }
+        };
 
-        // The server saw a session with operator attribution and NO harness header.
-        Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-            long ops = sessionRegistry.getActiveSessions().stream()
-                    .filter(s -> "operator".equals(s.getAttributes().get(AttributionTagger.ATTR_SOURCE)))
-                    .filter(s -> s.getAttributes().get(AttributionTagger.ATTR_HARNESS) == null)
-                    .count();
-            // Bots may have disconnected already (duration=3s ran to completion), but during
-            // the run at least one operator session must have been registered. We verify
-            // via the return code (0 = success = at least one bot launched with operator identity)
-            // and the above filter verifies that any remaining sessions have the correct attr.
-            // If all bots have already disconnected (duration elapsed), rc==0 suffices.
-            assertThat(rc).isEqualTo(0);
-        });
+        Function<String, BotFactory> factoryFactory = BotFactory::new;
+
+        // count=1, duration=1s — duration sleep dominates wall clock; otherwise the test
+        // is purely arg-passing inspection.
+        int rc = BotRunner.run(
+                new String[]{"ws://localhost:9999/ws/world", "1", "1"},
+                recordingFactory, factoryFactory);
+
+        assertThat(rc).as("clean shutdown").isEqualTo(0);
+        assertThat(capturedIdentity.get())
+                .as("BotRunner must launch with BotIdentity.operator()")
+                .isEqualTo(BotIdentity.operator());
     }
 }

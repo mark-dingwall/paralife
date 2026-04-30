@@ -71,10 +71,16 @@ public final class ReportWriter {
     public void writeOverwrite(Path target, ReportSnapshot snapshot) throws IOException {
         Path dir = target.toAbsolutePath().getParent();
         if (dir != null) Files.createDirectories(dir);
-        Path tmp = resolvedSibling(target, ".tmp");
+        // M-01 (Round B): unique per-call tmp filename so concurrent callers (or the
+        // periodic reporter VT racing the final write) cannot truncate each other's tmp
+        // file. Files.createTempFile guarantees uniqueness via the OS.
+        Path tmpDir = (dir == null) ? Path.of(".") : dir;
+        Path tmp = Files.createTempFile(tmpDir, target.getFileName().toString() + ".", ".tmp");
         try (OutputStream out = Files.newOutputStream(tmp,
-                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                StandardOpenOption.WRITE)) {
+                StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE,
+                // L-01 (Round B): O_SYNC parity with appendJsonlCounter so tmp contents are
+                // durable on disk before atomic-rename, matching the append-mode contract.
+                StandardOpenOption.SYNC)) {
             mapper.writeValue(out, snapshot);
         }
         atomicReplace(tmp, target);

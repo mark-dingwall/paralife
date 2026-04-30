@@ -7,6 +7,11 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -127,6 +132,44 @@ class ReportWriterTest {
         assertThat(tree.has("currentRegistered")).isFalse();
         assertThat(tree.has("connectFailuresTotal")).isFalse();
         assertThat(tree.has("actionsSentTotal")).isFalse();
+    }
+
+    // --- M-01 (Round B): concurrent overwrite must not produce a torn file ---
+
+    @Test
+    void concurrentWriteOverwrite_neverProducesTornFile(@TempDir Path tmp) throws Exception {
+        // M-01 fix: writeOverwrite uses a unique per-call tmp filename
+        // (Files.createTempFile) so concurrent callers cannot truncate each other's tmp file
+        // or race on the atomic-rename source path. The final target file must always parse
+        // as valid JSON, and no IOException must escape.
+        Path target = tmp.resolve("report.json");
+        ReportWriter writer = new ReportWriter();
+        int N = 50;
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(N);
+        List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
+
+        for (int i = 0; i < N; i++) {
+            final int x = i;
+            Thread.startVirtualThread(() -> {
+                try {
+                    start.await();
+                    writer.writeOverwrite(target, ReportSnapshot.merge(buildHeader(),
+                            ReportSnapshot.counters(x, x, 0L, 0L, 0L, 0L, 0L, 0L, 0L, null)));
+                } catch (Throwable t) {
+                    errors.add(t);
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+        start.countDown();
+        assertThat(done.await(15, TimeUnit.SECONDS)).isTrue();
+        assertThat(errors).as("no IOException must escape concurrent writes").isEmpty();
+
+        JsonNode tree = MAPPER.readTree(target.toFile());
+        assertThat(tree.isObject()).as("final target must parse as valid JSON").isTrue();
+        assertThat(tree.has("harness_id")).isTrue();
     }
 
     // --- JSONL append mode tests ---

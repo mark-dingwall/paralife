@@ -3,6 +3,8 @@ package com.paralife.harness;
 import com.paralife.bot.RampUpSpec;
 import picocli.CommandLine.ITypeConverter;
 
+import java.util.Locale;
+
 /**
  * Picocli type converter for {@link RampUpSpec} (D-15 / D-16).
  *
@@ -17,6 +19,8 @@ public final class RampUpConverter implements ITypeConverter<RampUpSpec> {
 
     @Override
     public RampUpSpec convert(String value) {
+        // L-03 (Round B): tolerate surrounding whitespace and mixed/upper case.
+        value = value.trim().toLowerCase(Locale.ROOT);
         if ("instant".equals(value)) {
             return RampUpSpec.instant();
         }
