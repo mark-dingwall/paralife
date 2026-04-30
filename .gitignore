@@ -20,6 +20,10 @@ Thumbs.db
 # GSD runtime (STATE.md is engine-managed)
 .gsd/STATE.md
 
+# GSD2 SQLite store — defunct after migration to GSD1 .planning/ on 2026-04-11
+# (file is created empty by tooling on session start; archived M001 data lives in .gsd/milestones/)
+.gsd/gsd.db
+
 # GSD fixtures — Phase 16 long-run test per-run dump (D-06b; rollover N=5)
 /.planning/phases/16-emergent-behavior-tests/fixtures/*.json
 

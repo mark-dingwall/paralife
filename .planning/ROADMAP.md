@@ -56,7 +56,8 @@ Plans:
 - [x] 17-10-PLAN.md — Migration: delete PopulationCapConfig, migrate application.yml + LoadTest, ActionResolver D-09 counter, CLAUDE.md Outbound concurrency
 - [x] 17-11-PLAN.md — Integration tests: STALLED recovery, hysteresis gate, log markers
 
-### Phase 18: External Load Harness & Harness Identity
+### Phase 18: External Load Harness & Harness Identity ✅
+**Status:** Verified 2026-04-28 — see `phases/18-external-load-harness-harness-identity/18-VERIFICATION.md` (4/4 SC; status: human_needed for `loadHarnessJar` `--help` smoke; cross-AI review remediation chunks A/B/C complete 2026-04-30, full suite green)
 **Goal:** Build the first-class external load harness that scales past `BotRunner`'s single-process limit and attributes sessions and metrics per harness instance.
 **Depends on:** Phase 17 (durable admission contract must exist before scale traffic is generated)
 **Requirements:** SCALE-03, SCALE-04, SCALE-05
@@ -68,12 +69,12 @@ Plans:
 - Harness behavior is documented well enough to reproduce benchmark runs.
 
 Plans:
-- [ ] 18-01-PLAN.md — BotIdentity + BotClientOptions + BotClient handshake-header injection (SCALE-04 client foundation)
-- [ ] 18-02-PLAN.md — Server-side handshake-header read + ATTR_SOURCE/ATTR_HARNESS + HARNESS log markers + ADMISSION/BACKPRESSURE marker extensions (SCALE-04 server ingress)
-- [ ] 18-03-PLAN.md — AttributionTagger + AdmissionConfig.AttributionConfig + two-tag metric emission + MeterFilter cardinality cap (SCALE-04 metric surface + T-18-02 mitigation)
-- [ ] 18-04-PLAN.md — BotFactory seam (D-19) + BotFleet async launcher (D-04) + BotRunner regression (SCALE-03 / SCALE-05)
-- [ ] 18-05-PLAN.md — LoadHarness main + Picocli CLI + JSON/JSONL ReportWriter + Gradle loadHarnessJar/runHarness tasks (SCALE-03)
-- [ ] 18-06-PLAN.md — 18-HARNESS.md spec doc + CLAUDE.md Connection model + AttributionRebindTest + LoadTest harness-tagged migration (SCALE-03/04/05 lock-in)
+- [x] 18-01-PLAN.md — BotIdentity + BotClientOptions + BotClient handshake-header injection (SCALE-04 client foundation)
+- [x] 18-02-PLAN.md — Server-side handshake-header read + ATTR_SOURCE/ATTR_HARNESS + HARNESS log markers + ADMISSION/BACKPRESSURE marker extensions (SCALE-04 server ingress)
+- [x] 18-03-PLAN.md — AttributionTagger + AdmissionConfig.AttributionConfig + two-tag metric emission + MeterFilter cardinality cap (SCALE-04 metric surface + T-18-02 mitigation)
+- [x] 18-04-PLAN.md — BotFactory seam (D-19) + BotFleet async launcher (D-04) + BotRunner regression (SCALE-03 / SCALE-05)
+- [x] 18-05-PLAN.md — LoadHarness main + Picocli CLI + JSON/JSONL ReportWriter + Gradle loadHarnessJar/runHarness tasks (SCALE-03)
+- [x] 18-06-PLAN.md — 18-HARNESS.md spec doc + CLAUDE.md Connection model + AttributionRebindTest + LoadTest harness-tagged migration (SCALE-03/04/05 lock-in)
 
 ### Phase 19: High-Density Placement & Partition-Aware World Execution
 **Goal:** Introduce scale-path world execution and placement mechanics that keep dense runs fair, reproducible, and semantically equivalent to current behavior.
