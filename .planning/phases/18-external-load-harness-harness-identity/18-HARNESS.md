@@ -22,7 +22,8 @@ never by sharing a single connection across multiple entities.
 
 **WS:entity 1:1** — every entity on the grid has exactly one WebSocket session, and every WebSocket
 session owns exactly one entity during the Alive phase. Enforced by the session FSM in
-`WorldWebSocketHandler` (see `17-ADMISSION.md §3`).
+`WorldWebSocketHandler` (see `17-ADMISSION.md §3`). Exception: STALLED-held entities during the
+grace window (Phase 17 D-13) sit on the grid with no active session pending rebind.
 
 **Multi-entity-per-session is strongly discouraged but not banned.** Exceptions are reviewed
 case-by-case; deviation requires an explicit justification in an ADR or future-phase spec. The WS
@@ -77,7 +78,7 @@ The header path was chosen over:
 - A control frame — adds a round-trip without buying flexibility.
 
 Server reads headers in `WorldWebSocketHandler.afterConnectionEstablished` via
-`session.getUpgradeRequest().getHeaders()` and stashes as session attributes
+`session.getHandshakeHeaders()` (Spring `WebSocketSession` API) and stashes as session attributes
 (`AttributionTagger.ATTR_SOURCE`, `AttributionTagger.ATTR_HARNESS`). These attributes are
 preserved across the STALLED-pivot rebind path (T-18-04 mitigation — see §9).
 
@@ -224,17 +225,22 @@ Phase 18 extends the Phase 17 log marker channels with two new sources and a new
 
 ### Existing Channels Extended (D-13)
 
-All existing `ADMISSION`, `BACKPRESSURE`, `TICK-HEALTH` markers gain `source=<v>[ harness=<id>]` fields:
+All existing `ADMISSION` and `BACKPRESSURE` markers gain `source=<v>[ harness=<id>]` fields.
+TICK-HEALTH stays scalar (server-global property — no per-session origin to attribute):
 
 ```
 ADMISSION rejected tick=<n> session=<sid> reason=<token> source=<v> [harness=<id>]
 BACKPRESSURE stalled tick=<n> session=<sid> source=<v> [harness=<id>]
 BACKPRESSURE resumed tick=<n> session=<sid> entity=<eid> source=<v> [harness=<id>]
+BACKPRESSURE held-on-close tick=<n> session=<sid> status=<s> entity=<eid> source=<v> [harness=<id>]
 TICK-HEALTH degraded tick=<n> work-ms=<ms> high-water-pct=<pct>
 TICK-HEALTH recovered tick=<n> work-ms=<ms> low-water-pct=<pct>
 ```
 
-`harness=<id>` field is present only when `source=harness`. TICK-HEALTH stays scalar (server-global).
+`harness=<id>` field is present only when `source=harness`. `BACKPRESSURE held-on-close` is
+emitted by `WorldWebSocketHandler` when a transport-close occurs while the entity is held under
+the STALLED grace window — operational signal that an entity is awaiting rebind, distinct from
+the lifecycle `HARNESS disconnected reason=stalled-held` marker below.
 
 ### New Channel: HARNESS (D-14)
 
@@ -245,10 +251,8 @@ HARNESS connected    tick=<n> session=<sid> harness=<id|-> source=<v> active=<co
 HARNESS disconnected tick=<n> session=<sid> harness=<id|-> source=<v> reason=<reason>
 ```
 
-Where `<reason>` ∈ `{<token>, graceful, stalled-held}`:
+Where `<reason>` ∈ `{graceful, stalled-held}`:
 
-- `<token>` — Phase 17 D-14 admission/backpressure rejection token (e.g. `world-full`,
-  `tick-overload`, `reconnect-required`, etc.); see `17-ADMISSION.md §1`.
 - `graceful` — clean disconnect, no STALLED state, no rejection.
 - `stalled-held` — session was in STALLED state when the underlying transport closed; entity is
   held under grace window for potential rebind (Phase 17 D-13 STALLED-pivot). NEW in Phase 18 —
@@ -374,9 +378,11 @@ java -jar build/libs/paralife-*-load-harness.jar \
   --report-interval 30
 ```
 
-### 1000-bot stress (4×250 multi-instance)
+### 500-bot stress (2×250 multi-instance)
 
-Run four independent harness processes simultaneously, each contributing 250 bots:
+Run two independent harness processes simultaneously, each contributing 250 bots. The pattern
+generalises trivially — for 4×250, add Terminal 3/4 with `stress-C`/`stress-D` and pass all four
+files to `jq` at the bottom:
 
 ```bash
 # Terminal 1
@@ -421,7 +427,7 @@ gauge per-instance without any built-in coordinator.
 
 | Threat ID | Category | Component | Disposition | Mitigation |
 |-----------|----------|-----------|-------------|-----------|
-| T-18-01 | Tampering — header injection | `X-Paralife-Harness` / `X-Paralife-Source` headers | Accept (operator-trusted input) | Sanitized by `AttributionSanitizer.sanitizeHarnessId`: regex `^[A-Za-z0-9-]{1,32}$` + ASCII control-char rejection (0x00–0x1F, 0x7F). Malformed ids are truncated or replaced with `unknown`. Source values not in `SOURCE_TAXONOMY` → `unknown`. |
+| T-18-01 | Tampering — header injection | `X-Paralife-Harness` / `X-Paralife-Source` headers | Accept (operator-trusted input) | Sanitized by `AttributionSanitizer.sanitizeHarnessId`: regex `^[A-Za-z0-9-]{1,32}$`. Malformed ids are **rejected** (`Optional.empty`) — not truncated; the WS handler then folds `source` to `unknown` (`source=harness ⇔ harness id present` invariant). Source values not in `SOURCE_TAXONOMY` → `unknown`. |
 | T-18-02 | DoS — Micrometer cardinality explosion | `harness` tag in `paralife.admission.*` | Mitigate | Primary: `AttributionTagger.foldHarnessIfOverCap` caps at 64 distinct ids + folds to `overflow`. Defense-in-depth: `MeterFilter.maximumAllowableTags` in `AdmissionMetrics`. One-time WARN on first fold. |
 | T-18-03 | Information disclosure — harness id in proxy logs | `X-Paralife-Harness` as HTTP header | Accept | Harness ids are non-secret operator labels, not authentication credentials. URL query params were explicitly rejected for this reason (D-06). |
 | T-18-04 | Information disclosure — silent attribution loss after STALLED-pivot rebind | `ResumeTokenRegistry.tryRebind` + new-session ATTR stash | Mitigate | `BotClient.connect()` re-sends `X-Paralife-Source` / `X-Paralife-Harness` on every `connect()` call (identity is a `final` field). Locked by `AttributionRebindTest` which exercises the full STALLED → E\|408 → reconnect → rebind cycle and asserts gauge and session attribute continuity. |
@@ -432,13 +438,15 @@ gauge per-instance without any built-in coordinator.
 
 ### Header Injection (T-18-01)
 
-`AttributionSanitizer.sanitizeHarnessId(String)` is the single server-side enforcement point:
+`AttributionSanitizer.sanitizeHarnessId(String)` is the single server-side enforcement point.
+Two-step gate — no truncation, no character stripping:
 
-1. Null / blank → `null` (no `X-Paralife-Harness` attribute stored).
-2. Truncate to 32 chars (D-07 `MAX_HARNESS_ID_LENGTH`).
-3. Strip ASCII control chars (0x00–0x1F, 0x7F) — defense-in-depth.
-4. Regex match `^[A-Za-z0-9-]{1,32}$` after truncation and stripping.
-5. Non-matching → `null` (treated as absent).
+1. Null / blank → `Optional.empty()` (no `X-Paralife-Harness` attribute stored).
+2. Regex match `^[A-Za-z0-9-]{1,32}$` — non-matching → `Optional.empty()`.
+
+The regex character class already excludes ASCII control chars (including CR/LF), spaces,
+and over-length input, so explicit truncation/stripping steps are unnecessary. See §2 for
+the canonical-id policy this enforces.
 
 `AttributionTagger.sourceOf(session)` validates source against `SOURCE_TAXONOMY`. Any value not in
 the taxonomy falls back to `unknown`.
@@ -482,8 +490,9 @@ multi-instance sweeps; the per-harness JSONL format is designed with this in min
 
 ### `BotFactory` Seam (D-19)
 
-`BotFactory.create(species, identity, claimEntityId, claimToken)` is the single choke-point for
-bot construction. `claimEntityId` / `claimToken` params are reserved no-ops today. When 999.2 ships,
+`BotFactory.create(char species, BotIdentity identity, Optional<String> claimEntityId, Optional<String> claimToken)`
+is the single choke-point for bot construction. `claimEntityId` / `claimToken` params are reserved
+no-ops today (always `Optional.empty()` from current call sites). When 999.2 ships,
 a new bot-driven offspring event will trigger `BotFactory.create` with a non-null claim token,
 minting a fresh WS connection to the same entity. No fleet-abstraction rework required.
 

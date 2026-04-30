@@ -7,6 +7,7 @@ import com.paralife.bot.HeuristicBrain;
 import com.paralife.engine.TickEngine;
 import com.paralife.websocket.SessionRegistry;
 import com.paralife.websocket.WorldWebSocketHandler;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.awaitility.Awaitility;
@@ -35,8 +36,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <h2>Round 2 amendments applied</h2>
  * <ul>
  *   <li><b>OpenCode MEDIUM (pre-flight signature check):</b> {@link #verifyMarkStalledSignature()}
- *       uses reflection to assert {@code markStalled(WebSocketSession, long)} exists before any
- *       test logic runs. Fails fast on signature drift rather than at compile time.</li>
+ *       belt-and-braces signature pin. Compile-time already catches direct drift; this tripwire
+ *       only adds value if a back-compat overload absorbs the existing call site.</li>
  *   <li><b>Codex MEDIUM (before/after gauge comparison):</b> the unknown-source gauge is
  *       snapshotted BEFORE the STALLED pivot; after rebind we assert it has NOT grown.
  *       Avoids brittleness against shared-registry state from prior tests.</li>
@@ -70,10 +71,11 @@ class AttributionRebindTest {
     /**
      * Round 2 OpenCode MEDIUM amendment: pre-flight signature check via reflection.
      *
-     * <p>Asserts that {@code WorldWebSocketHandler.markStalled(WebSocketSession, long)}
-     * exists with exactly the expected parameter types. If the signature drifted during
-     * plan execution, this fails fast here — before the test reaches the actual call site —
-     * giving a clear error rather than an obscure compile failure or NPE.
+     * <p>Belt-and-braces signature pin. Compile-time already catches direct drift on
+     * the existing call site below; this reflection check only adds value if a
+     * back-compat overload absorbs the original signature (e.g. someone adds
+     * {@code markStalled(WebSocketSession)} alongside the {@code long}-taking variant
+     * and the call site silently picks the new one). Harmless and zero cost otherwise.
      *
      * @throws NoSuchMethodException if the signature doesn't match expectations
      */
@@ -106,6 +108,15 @@ class AttributionRebindTest {
         // an absolute value < 1.0, which would be brittle against shared-registry state
         // from prior tests polluting the shared MeterRegistry.
         double unknownBefore = readUnknownGauge();
+
+        // F1 / F10 amendment: snapshot the rebound counter and the harness-bucket
+        // stalled gauge BEFORE the STALLED pivot. Post-rebind we assert:
+        //   - rebound counter incremented (proves tryRebind() succeeded vs falling
+        //     through to a fresh Allow with a new entityId — see AdmissionGate Guard 4),
+        //   - stalled-sessions{harness=test-attribution} returned to its pre-stall
+        //     value (proves decStalledBucketByTags fired on the rebind path).
+        double reboundBefore = readReboundCounter();
+        double stalledHarnessBefore = readStalledHarnessGauge();
 
         // Find the server-side session that carries harness=test-attribution and
         // force the STALLED transition. The new ATTR_HARNESS attribute is set in
@@ -178,12 +189,51 @@ class AttributionRebindTest {
                         + "(before=" + unknownBefore + ", after=" + unknownAfter + ")")
                 .isLessThanOrEqualTo(unknownBefore);
 
+        // F1: rebound counter must have incremented. AdmissionGate increments
+        // M_REBOUND only on tryRebind() success; a fresh-Allow fallthrough with a new
+        // entityId would still pass the gauge/session-attribute checks above but would
+        // NOT bump this counter. This is the strongest invariant lock for "an actual
+        // rebind happened" vs "a brand-new registration that happened to carry the
+        // same headers".
+        double reboundAfter = readReboundCounter();
+        assertThat(reboundAfter - reboundBefore)
+                .as("paralife.backpressure.rebound counter must have incremented — "
+                        + "proves tryRebind() succeeded rather than falling through to "
+                        + "Allow.INSTANCE with a fresh entityId "
+                        + "(before=" + reboundBefore + ", after=" + reboundAfter + ")")
+                .isGreaterThanOrEqualTo(1.0);
+
+        // F10: harness-bucket stalled gauge must have returned to its pre-stall level.
+        // The stalled.sessions{source=harness, harness=test-attribution} gauge is
+        // incremented when markStalled fires and decremented by decStalledBucketByTags
+        // on successful rebind. Asserting it returned to the snapshot value locks
+        // that decrement call site.
+        double stalledHarnessAfter = readStalledHarnessGauge();
+        assertThat(stalledHarnessAfter)
+                .as("paralife.backpressure.stalled.sessions{harness=test-attribution} "
+                        + "gauge must have returned to its pre-stall value after rebind — "
+                        + "proves decStalledBucketByTags fired "
+                        + "(before=" + stalledHarnessBefore + ", after=" + stalledHarnessAfter + ")")
+                .isLessThanOrEqualTo(stalledHarnessBefore);
+
         bot.disconnect();
     }
 
     private double readUnknownGauge() {
         Gauge g = meterRegistry.find("paralife.admission.active.entities")
                 .tags("source", "unknown")
+                .gauge();
+        return g == null ? 0.0 : g.value();
+    }
+
+    private double readReboundCounter() {
+        Counter c = meterRegistry.find("paralife.backpressure.rebound").counter();
+        return c == null ? 0.0 : c.count();
+    }
+
+    private double readStalledHarnessGauge() {
+        Gauge g = meterRegistry.find("paralife.backpressure.stalled.sessions")
+                .tags("source", "harness", "harness", "test-attribution")
                 .gauge();
         return g == null ? 0.0 : g.value();
     }
