@@ -2,7 +2,7 @@
 phase: 19
 plan: 03
 type: execute
-wave: 2
+wave: 3
 depends_on: [19-02]
 files_modified:
   - src/main/java/com/paralife/websocket/OutboundSender.java
@@ -19,18 +19,19 @@ must_haves:
     - "GoldenTraceEquivalenceTest passes BEFORE Plan 04 (entity-list iteration) is merged — the test serves as the oracle for that refactor."
     - "Test captures outbound frame bytes via a test-only seam on OutboundSender (or equivalent), not by mocking individual handlers — captures the actual wire output."
     - "Digest is SHA-256 over the concatenation of (sessionId, frame.bytes()) tuples in deterministic order per tick."
+    - "A baseline digest is captured against the post-Plan-02 codebase (BEFORE Plan 04 lands) and pinned as `EXPECTED_DIGEST` in the test source. The acceptance contract is: hashA == hashB AND hashA == EXPECTED_DIGEST. Plan 04 must keep this assertion green — that is the D-10 promise made operational."
     - "LiveEntityRegistry is in place (Plan 02 dependency satisfied) so that the test runs through the same code paths as Plan 04 will modify."
   artifacts:
     - path: src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java
-      provides: "@SpringBootTest dual-run determinism gate. Runs a 50-tick scenario with N bots at fixed seed, captures all outbound frame bytes, computes SHA-256 digest, then resets and runs again. Asserts digests are byte-equal. Fails if Plan 04 refactor changes any observable wire output."
-      min_lines: 120
+      provides: "@SpringBootTest dual-run determinism gate. Runs a 50-tick scenario with N bots at fixed seed, captures all outbound frame bytes, computes SHA-256 digest, then resets and runs again. Asserts digestA == digestB AND digestA == EXPECTED_DIGEST (a private static final hex constant pinned during this plan, BEFORE Plan 04 lands). Fails if Plan 04 refactor changes any observable wire output."
+      min_lines: 130
     - path: src/test/java/com/paralife/engine/GoldenTraceCapture.java
-      provides: "Test-only frame-byte accumulator. Subscribes to a frame-emit hook on OutboundSender (or wraps the bean) and feeds (sessionId, frameBytes) into a MessageDigest in tick-stable order."
-      min_lines: 60
+      provides: "Test-only frame-byte accumulator. Subscribes to a frame-emit hook on OutboundSender (or wraps the bean) and feeds (sessionId, frameBytes) into a MessageDigest in tick-stable order. Exposes digest as both byte[] and lowercase hex String for EXPECTED_DIGEST pinning."
+      min_lines: 70
   key_links:
     - from: src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java
       to: src/test/java/com/paralife/engine/GoldenTraceCapture.java
-      via: "@Autowired wiring; test asserts hashA == hashB across two driven runs"
+      via: "@Autowired wiring; test asserts hashA == hashB across two driven runs AND hashA == EXPECTED_DIGEST against a pinned baseline"
       pattern: "GoldenTraceCapture"
     - from: src/test/java/com/paralife/engine/GoldenTraceCapture.java
       to: src/main/java/com/paralife/websocket/OutboundSender.java
@@ -39,14 +40,26 @@ must_haves:
 ---
 
 <objective>
-Build the **D-10 semantic-equivalence gate** — a `GoldenTraceEquivalenceTest` that captures all outbound WebSocket frame bytes during a fixed-seed scenario, computes a SHA-256 digest, and asserts byte-equality across two consecutive runs. This test must exist and pass **before** Plan 04 lands. Once Plan 04 refactors tick-handler iteration to use `LiveEntityRegistry.snapshot()`, this test is the oracle that proves the refactor changed nothing observable.
+Build the **D-10 semantic-equivalence gate** — a `GoldenTraceEquivalenceTest` that captures all outbound WebSocket frame bytes during a fixed-seed scenario, computes a SHA-256 digest, asserts byte-equality across two consecutive runs, **and** asserts the digest equals a pinned baseline constant captured against the post-Plan-02 / pre-Plan-04 codebase. This test must exist and pass **before** Plan 04 lands. Once Plan 04 refactors tick-handler iteration to use `LiveEntityRegistry.snapshot()`, this test is the oracle that proves the refactor changed nothing observable.
 
-Per RESEARCH.md Open Question 3: full equivalence (frames + metric counters) is aspirational; perception-frame digest is the **minimum-viable contract**. This plan ships the minimum-viable contract.
+Per RESEARCH.md Open Question 3 (RESOLVED): full equivalence (frames + metric counters) is aspirational; perception-frame digest is the **minimum-viable contract**. Metric-counter equivalence is deferred to Phase 21 benchmark gate. This plan ships the minimum-viable contract.
 
-Purpose: Without this gate, Plan 04 cannot prove D-10. The test serves both as the merge-gate during execution and as the regression sentinel for any future tick-handler change.
-Output: One new production-test seam on `OutboundSender` (test-only frame-emit listener), one test capture helper, one @SpringBootTest equivalence gate.
+**Critical sequencing — the EXPECTED_DIGEST pin:**
 
-**Wave assignment rationale:** This plan sits in Wave 2 — depends on Plan 02 (LiveEntityRegistry must exist so the seeded test exercises the same DI graph Plan 04 will modify) but does NOT depend on Plan 01 (placement seed contract is independently tested by Plan 01's PlacementDeterminismTest). Plan 04 (Wave 3) blocks on this plan because the test must be passing before the refactor lands.
+The naive design (assert only `hashA == hashB`) is insufficient: hashA and hashB are both computed in the same JVM run after Plan 04 lands, so the test would pass even if Plan 04 changed observable output (both runs would simply produce the same wrong digest). The fix is to **capture the baseline digest against the pre-Plan-04 codebase, hard-code it as a constant, and assert subsequent runs equal that constant.**
+
+Workflow within this plan (executed in order, in this plan's wave):
+  1. Land Task 1 (FrameEmitListener seam + capture helper) — this is purely additive instrumentation.
+  2. Land Task 2 step (a): write the test scaffold WITHOUT the EXPECTED_DIGEST pin yet.
+  3. Run the test once on the post-Plan-02 codebase. The test prints the digest produced by Run 1 (e.g. `BASELINE DIGEST: 9f1c…`).
+  4. Pin that digest as `private static final String EXPECTED_DIGEST = "9f1c…";` in the test source.
+  5. Re-run the test — it must now pass `hashA == hashB == EXPECTED_DIGEST`.
+  6. Commit. Plan 04's acceptance includes that this same test continues to pass — same EXPECTED_DIGEST.
+
+Purpose: Without this gate, Plan 04 cannot prove D-10. The test serves as the merge-gate during execution and as the regression sentinel for any future tick-handler change.
+Output: One new production-test seam on `OutboundSender` (test-only frame-emit listener), one test capture helper, one @SpringBootTest equivalence gate with a pinned baseline digest.
+
+**Wave assignment rationale:** This plan sits in Wave 3 — depends on Plan 02 (LiveEntityRegistry must exist so the seeded test exercises the same DI graph Plan 04 will modify). Plan 04 (Wave 4) blocks on this plan because the test must be passing with EXPECTED_DIGEST pinned before the refactor lands.
 </objective>
 
 <execution_context>
@@ -208,11 +221,24 @@ public class GoldenTraceCapture {
         if (!sessionsSeen.contains(sessionId)) sessionsSeen.add(sessionId);
     }
 
+    /**
+     * Finalise and return the digest as a raw byte array. Calling this
+     * resets the underlying MessageDigest, so use {@link #digestAsHex()}
+     * if you want a stable display form for pinning.
+     */
     public synchronized byte[] currentDigest() {
-        // clone-safe digest via reset+update would be preferred; MessageDigest
-        // doesn't easily clone. Instead, finalise here — the caller drives one
-        // run, calls finalize(), reset(), drives second run.
         return digest.digest();
+    }
+
+    /**
+     * Convenience: lowercase hex of currentDigest(). Use this to print the
+     * baseline digest during EXPECTED_DIGEST pinning.
+     */
+    public synchronized String digestAsHex() {
+        byte[] d = digest.digest();
+        StringBuilder sb = new StringBuilder(d.length * 2);
+        for (byte b : d) sb.append(String.format("%02x", b));
+        return sb.toString();
     }
 
     public synchronized void reset() {
@@ -241,29 +267,35 @@ This class is in `src/test/java`, NOT in production code. It's a plain class, no
     - File `src/test/java/com/paralife/engine/GoldenTraceCapture.java` exists.
     - `grep -c "MessageDigest.getInstance(\"SHA-256\")" src/test/java/com/paralife/engine/GoldenTraceCapture.java` == 1
     - `grep -c "public synchronized void onEmit" src/test/java/com/paralife/engine/GoldenTraceCapture.java` == 1
+    - `grep -c "digestAsHex" src/test/java/com/paralife/engine/GoldenTraceCapture.java` >= 1 (helper for EXPECTED_DIGEST pinning in Task 2)
     - `./gradlew test` exits 0 (regression — listener=null in production runs, no observable change)
   </acceptance_criteria>
-  <done>FrameEmitListener seam wired into OutboundSender at the post-sendMessage point inside synchronized(session); production listener is null; GoldenTraceCapture computes SHA-256 over (sessionId,bytes) emit pairs; full regression suite green.</done>
+  <done>FrameEmitListener seam wired into OutboundSender at the post-sendMessage point inside synchronized(session); production listener is null; GoldenTraceCapture computes SHA-256 over (sessionId,bytes) emit pairs and exposes both byte[] and hex String forms; full regression suite green.</done>
 </task>
 
 <task type="auto" tdd="true">
-  <name>Task 2: Author GoldenTraceEquivalenceTest — dual-run digest equality</name>
+  <name>Task 2: Author GoldenTraceEquivalenceTest — dual-run digest equality + pinned EXPECTED_DIGEST baseline</name>
   <files>src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java</files>
   <read_first>
     - src/test/java/com/paralife/engine/EnvironmentDeterminismTest.java (lines 1–207 — full template; copy @SpringBootTest setup, @TestPropertySource, resetAll pattern, dual-run drive structure)
     - src/main/java/com/paralife/engine/TickEngine.java (find the test-only tick-advance method — `runOneTick()` or `tickOnce()`; confirms how to drive ticks deterministically with auto-start=false)
     - src/main/java/com/paralife/websocket/OutboundSender.java (the FrameEmitListener seam from Task 1)
-    - src/test/java/com/paralife/engine/GoldenTraceCapture.java (helper from Task 1)
+    - src/test/java/com/paralife/engine/GoldenTraceCapture.java (helper from Task 1; use `digestAsHex()` for the baseline pin print)
     - src/main/java/com/paralife/engine/LiveEntityRegistry.java (Plan 02 dependency — confirms `clearForTest()` and `snapshot()` are available)
-    - .planning/phases/19-high-density-placement-partition-aware-world-execution/19-RESEARCH.md (§Code Examples — Golden-Trace Test Pattern; §Open Questions Q3 — minimum viable contract)
+    - .planning/phases/19-high-density-placement-partition-aware-world-execution/19-RESEARCH.md (§Code Examples — Golden-Trace Test Pattern; §Open Questions Q3 RESOLVED — minimum viable contract)
     - .planning/phases/19-high-density-placement-partition-aware-world-execution/19-PATTERNS.md (lines 374–388 — golden-trace test analog)
   </read_first>
   <behavior>
-    - byteIdenticalOutputAcrossTwoRuns: drive a fixed-seed 50-tick scenario, capture digest A; reset all state; drive the same scenario again, capture digest B; assert hashA equals hashB.
+    - byteIdenticalOutputAcrossTwoRuns: drive a fixed-seed 50-tick scenario, capture digest A; reset all state; drive the same scenario again, capture digest B; assert hashA equals hashB AND hashA equals EXPECTED_DIGEST.
     - emitCountIsConsistent: capture.emitCount() is identical across the two runs (sanity check before digest comparison).
     - testIsSelfConsistentBeforeAnyRefactor: this test passes on the codebase **as it stands today** (Plan 02 wired LiveEntityRegistry but did not change tick handlers). If it doesn't pass on baseline, the harness has non-determinism that must be fixed BEFORE Plan 04 runs.
+    - baselineDigestIsPinned: a `private static final String EXPECTED_DIGEST = "<hex>"` constant exists in the test source; the test asserts the run's hex digest equals this constant. The constant is captured against the post-Plan-02 / pre-Plan-04 codebase during this plan's execution.
   </behavior>
   <action>
+**Two-pass workflow (executed in order):**
+
+**Pass 1 — write the scaffold without the pin, capture the baseline digest:**
+
 1. Create `src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java`:
 
 ```java
@@ -291,13 +323,15 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
  *
  * <p>Drives a fixed-seed scenario twice in the same JVM, captures all outbound
  * frame bytes via the OutboundSender FrameEmitListener seam, computes SHA-256
- * digests, asserts byte-equality. This test is the oracle for Plan 04
- * (entity-list iteration refactor) — Plan 04 must not change observable
- * output, and this test will fail loudly if it does.
+ * digests, asserts byte-equality across runs AND byte-equality against a pinned
+ * baseline digest captured against the post-Plan-02 / pre-Plan-04 codebase.
  *
- * <p>Per RESEARCH.md Open Question 3, this is the minimum-viable contract:
- * outbound frame bytes only. Metric counter equivalence is deferred to
- * Phase 21 benchmark gate.
+ * <p>Plan 04 (entity-list iteration refactor) must keep this test green —
+ * the EXPECTED_DIGEST is the operational form of the D-10 promise.
+ *
+ * <p>Per RESEARCH.md Open Question 3 (RESOLVED), this is the minimum-viable
+ * contract: outbound frame bytes only. Metric counter equivalence is deferred
+ * to Phase 21 benchmark gate.
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -308,6 +342,18 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
     "paralife.world.height=32"
 })
 class GoldenTraceEquivalenceTest {
+
+    /**
+     * Pinned baseline digest. Captured during Plan 03 execution against the
+     * post-Plan-02 / pre-Plan-04 codebase. Plan 04's refactor must produce
+     * the same digest — that is the D-10 promise made operational.
+     *
+     * To re-pin (e.g. after an intentional scenario change): comment out the
+     * EXPECTED_DIGEST assertion below, run the test, copy the printed
+     * "BASELINE DIGEST: <hex>" line into this constant, restore the assertion.
+     */
+    private static final String EXPECTED_DIGEST = "REPLACE_ME_AFTER_FIRST_RUN";
+
     @Autowired WorldGrid worldGrid;
     @Autowired LiveEntityRegistry liveEntityRegistry;
     @Autowired BotRegistry botRegistry;
@@ -334,17 +380,22 @@ class GoldenTraceEquivalenceTest {
         resetAll();
         driveScenario();
         long emitsA = capture.emitCount();
-        byte[] hashA = capture.currentDigest();
+        String hexA = capture.digestAsHex();
+
+        // Print for first-time baseline capture. Leave this print in — it is
+        // the operator's signal when re-pinning is needed.
+        System.out.println("BASELINE DIGEST: " + hexA);
 
         // Run 2
         capture.reset();
         resetAll();
         driveScenario();
         long emitsB = capture.emitCount();
-        byte[] hashB = capture.currentDigest();
+        String hexB = capture.digestAsHex();
 
         assertThat(emitsB).as("emit count stable across runs").isEqualTo(emitsA);
-        assertArrayEquals(hashA, hashB, "D-10 byte-identical outbound frames");
+        assertThat(hexB).as("D-10 byte-identical outbound frames (run B vs run A)").isEqualTo(hexA);
+        assertThat(hexA).as("D-10 EXPECTED_DIGEST baseline pinned in Plan 03; Plan 04 must not change this").isEqualTo(EXPECTED_DIGEST);
     }
 
     private void resetAll() {
@@ -382,6 +433,23 @@ class GoldenTraceEquivalenceTest {
 }
 ```
 
+**Pass 1 first run:** with `EXPECTED_DIGEST = "REPLACE_ME_AFTER_FIRST_RUN"`, the test will fail the third assertion. That is expected. Read the test output, locate the line `BASELINE DIGEST: <hex>`, copy the hex value.
+
+**Pass 2 — pin the baseline digest:**
+
+2. Edit `EXPECTED_DIGEST` in the test source to the captured hex value:
+
+```java
+private static final String EXPECTED_DIGEST = "<paste the 64-char hex from BASELINE DIGEST line>";
+```
+
+3. Re-run the test. All three assertions must now pass:
+   - `emitsB == emitsA`
+   - `hexB == hexA`
+   - `hexA == EXPECTED_DIGEST`
+
+4. Commit. Plan 04 acceptance includes that this test continues to pass with the same EXPECTED_DIGEST.
+
 **Important caveats for the executor:**
 
 (a) `WorldGrid.clear()`, `BotRegistry.clear()`, `LiveEntityRegistry.clearForTest()`, `WorldWebSocketHandler.resetSeed()` — confirm each exists. If `BotRegistry.clear()` is missing, add it as a test-only method (similar to `WorldGrid.clear()`).
@@ -392,12 +460,12 @@ class GoldenTraceEquivalenceTest {
 
 (d) Cross-session digest order: this test uses a deterministic single-threaded scenario, so emit order should be stable. If flake appears, switch to per-session digest map and compare entries.
 
-(e) **This test must pass on the baseline (post-Plan-02) codebase**. If it fails, the test infrastructure has a non-determinism bug — fix it BEFORE Plan 04 lands. Common culprits:
+(e) **The EXPECTED_DIGEST must be captured against the post-Plan-02 / pre-Plan-04 codebase.** If by accident this plan executes after Plan 04 has already been merged, the digest is contaminated and the D-10 promise is unenforceable. The wave structure (this plan = Wave 3, Plan 04 = Wave 4) prevents that — but if a re-run of this plan happens after Plan 04 lands, abort and re-pin against a clean checkout of the pre-Plan-04 baseline.
+
+(f) **This test must pass on the post-Plan-02 baseline**. If `hexA != hexB`, the test infrastructure has a non-determinism bug — fix it BEFORE pinning EXPECTED_DIGEST. Common culprits:
    - HashMap iteration order in TickBroadcaster (use LinkedHashMap or sort by sessionId)
    - ConcurrentHashMap.values() in BotRegistry (Plan 04 will replace with LiveEntityRegistry.snapshot, but until then the baseline test must still be deterministic — sort the values by entityId in the test driver if needed)
    - System.nanoTime / clock reads in any frame payload (should not be present, but check if digest fails)
-
-2. Run the test on the baseline (Plan 02 merged, Plan 04 not yet). It must pass. If it fails, the planner expected determinism that does not exist — investigate before proceeding to Plan 04.
   </action>
   <verify>
     <automated>./gradlew test --tests "com.paralife.engine.GoldenTraceEquivalenceTest"</automated>
@@ -407,12 +475,14 @@ class GoldenTraceEquivalenceTest {
     - `grep -c "@SpringBootTest" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` == 1
     - `grep -c "paralife.simulation.spawn.seed=42" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` == 1
     - `grep -c "byteIdenticalOutputAcrossTwoRuns" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` == 1
-    - `grep -c "assertArrayEquals(hashA, hashB" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` == 1
+    - `grep -c "private static final String EXPECTED_DIGEST" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` == 1
+    - `grep -E "EXPECTED_DIGEST = \"[0-9a-f]{64}\"" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` returns a match (a real 64-char lowercase-hex SHA-256 digest, NOT the placeholder `REPLACE_ME_AFTER_FIRST_RUN`)
+    - `grep -c "isEqualTo(EXPECTED_DIGEST)" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` == 1
     - `grep -c "outboundSender.setFrameEmitListener" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` >= 2 (set + clear in tearDown)
-    - `./gradlew test --tests "com.paralife.engine.GoldenTraceEquivalenceTest"` exits 0 (passes on the baseline — proves the test itself is deterministic; this is the precondition for Plan 04)
+    - `./gradlew test --tests "com.paralife.engine.GoldenTraceEquivalenceTest"` exits 0 (passes on the baseline with EXPECTED_DIGEST pinned — this is the precondition for Plan 04)
     - `./gradlew test` exits 0 (full regression remains green)
   </acceptance_criteria>
-  <done>GoldenTraceEquivalenceTest exists and passes on the post-Plan-02 baseline. The dual-run digest assertion is in place. Plan 04 cannot land without keeping this test green — D-10 enforced.</done>
+  <done>GoldenTraceEquivalenceTest exists and passes on the post-Plan-02 baseline. The dual-run digest assertion is in place AND the EXPECTED_DIGEST baseline is pinned (real 64-char hex constant, not the placeholder). Plan 04 cannot land without keeping this test green against the same EXPECTED_DIGEST — D-10 enforced.</done>
 </task>
 
 </tasks>
@@ -429,20 +499,21 @@ class GoldenTraceEquivalenceTest {
 | Threat ID | Category | Component | Disposition | Mitigation Plan |
 |-----------|----------|-----------|-------------|-----------------|
 | T-19-08 | Tampering | Test seam left wired in production by mistake | mitigate | Listener defaults to null; setter is the only way to wire one. Acceptance criterion `grep` confirms no production code calls setFrameEmitListener. |
-| T-19-09 | Repudiation | Plan 04 changes observable output undetected | mitigate | This test IS the mitigation. Failure = visible CI break. |
+| T-19-09 | Repudiation | Plan 04 changes observable output undetected | mitigate | This test IS the mitigation — EXPECTED_DIGEST pinned against pre-Plan-04 baseline. Failure = visible CI break. |
+| T-19-09a | Tampering | EXPECTED_DIGEST re-pinned silently after a tick-handler change without operator review | mitigate | Re-pinning workflow is documented inline in the test (comment out assertion, capture, restore). Any commit changing EXPECTED_DIGEST is conspicuous in code review. |
 </threat_model>
 
 <verification>
-- `./gradlew test --tests "com.paralife.engine.GoldenTraceEquivalenceTest"` — passes on the baseline (Plan 02 merged, Plan 04 not yet started).
+- `./gradlew test --tests "com.paralife.engine.GoldenTraceEquivalenceTest"` — passes on the baseline (Plan 02 merged, Plan 04 not yet started) WITH EXPECTED_DIGEST pinned.
 - `./gradlew test` — full regression remains green.
 - The FrameEmitListener seam exists on OutboundSender; production listener is null.
-- The test runs deterministically: emitCount and digest equal across two consecutive runs.
+- The test runs deterministically: emitCount and digest equal across two consecutive runs AND the digest equals the pinned EXPECTED_DIGEST.
 </verification>
 
 <success_criteria>
-- Semantic-equivalence gate exists and is green BEFORE Plan 04 begins.
+- Semantic-equivalence gate exists and is green BEFORE Plan 04 begins, with EXPECTED_DIGEST pinned.
 - The test captures the actual wire output (frame bytes post-sendMessage), not a mocked surface.
-- A future change to any tick handler that alters observable output causes this test to fail.
+- The pinned digest constant operationalises the D-10 promise: any future change to any tick handler that alters observable output causes this test to fail loudly, not silently agree with a cohort run.
 - D-10 is enforced as a CI-visible regression gate, not as a planning aspiration.
 </success_criteria>
 

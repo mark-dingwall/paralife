@@ -589,22 +589,25 @@ At the current admission cap of 256 entities on a 256×256 grid:
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Where exactly does `LiveEntityRegistry` get notified of entity deaths?**
    - What we know: `BotRegistry.unregisterByEntity()` is called on death. `DeathFinalizer` or `SimulationEngine.processDeaths()` drives this.
    - What's unclear: Whether death cleanup goes through a single choke point (easy to hook) or multiple sites.
    - Recommendation: Planner reads `DeathFinalizer.java` to identify all `botRegistry.unregisterByEntity()` call sites before writing the task.
+   - **RESOLVED:** Hook lands in `DeathFinalizer` (PATTERNS.md finding 2). `DeathFinalizer` was created cycle-4 specifically as the cross-bean death-cleanup choke point — every `botRegistry.unregisterByEntity` call in production code currently lives inside one of its `finalize*Death` methods. Plan 02 wires `liveEntityRegistry.unregister(...)` immediately after each existing `botRegistry.unregisterByEntity(...)` call site (`finalizeParticleDeath` line 84, `finalizeBondedPairDeath` lines 102/103, `finalizeCompositeMemberDeath` per the recursive variant). `BotRegistry.java` itself is NOT modified — coupling stays at the call sites.
 
 2. **Should `EligibleCellIndex` live in `com.paralife.world` or `com.paralife.engine`?**
    - What we know: It depends on `WorldGrid` (via event hooks at `trySetEntity`/`clearEntity`) but also on `EnvironmentEngine.cellStatusCache` (for constraint-2/3 evaluation).
    - What's unclear: Whether the index should be a `@Component` Spring bean or a plain collaborator injected into `WorldWebSocketHandler`.
    - Recommendation: `com.paralife.engine` as a `@Component`. `WorldGrid` should call a notification method on `EligibleCellIndex` after each mutation (or `WorldWebSocketHandler` calls it after `trySetEntity` succeeds). Either is fine; keeping `WorldGrid` pure (not Spring-aware) slightly favours the second option.
+   - **RESOLVED:** `com.paralife.engine.EligibleCellIndex` as a `@Component` Spring bean. `WorldWebSocketHandler` is the notifier — it calls `eligibleCellIndex.notifyChanged(x, y)` after each successful `worldGrid.trySetEntity(...)`. This keeps `WorldGrid` Spring-unaware (preserves the existing layer split) while still giving the index timely 5×5-bbox refreshes. `@PostConstruct` walks the grid once after rocks are placed to seed the initial eligible set. Constructor-injected into `WorldWebSocketHandler` alongside `BotRegistry`, `EnvironmentEngine`, `SimulationConfig`, `WorldGrid`.
 
 3. **Golden-trace test scope: what frames to capture?**
    - What we know: D-10 says "byte-identical observable output (tick frames, perception frames, action results, metric counters)".
    - What's unclear: Capturing all frame bytes requires a test WebSocket client. Metric counters require Actuator scrapes. This is significant test infrastructure.
    - Recommendation: Start with SHA-256 digest of all `sendMessage` payloads captured via a mock `OutboundSender`; defer metric counter comparison to Phase 21 benchmark gate. Flag in the plan that full equivalence is aspirational; perception-frame digest is the minimum viable contract.
+   - **RESOLVED:** SHA-256 digest of all successfully-sent `sendMessage` payloads, captured via a test-only `FrameEmitListener` seam on `OutboundSender` (listener fires inside `synchronized(session)` immediately after `session.sendMessage` returns). Digest input is `(sessionId UTF-8 bytes, 0x00 separator, frameBytes)` per emit, in emit order. Plan 03 captures the digest against the post-Plan-02 / pre-Plan-04 codebase and pins it as a `private static final String EXPECTED_DIGEST` constant in `GoldenTraceEquivalenceTest`; the test asserts both `hashA == hashB` (intra-run determinism) AND `hashA == EXPECTED_DIGEST` (cross-plan equivalence) so Plan 04 cannot silently agree with itself. Metric-counter equivalence is deferred to the Phase 21 benchmark gate.
 
 ---
 
