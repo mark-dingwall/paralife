@@ -80,12 +80,18 @@ Plans:
 **Goal:** Introduce scale-path world execution and placement mechanics that keep dense runs fair, reproducible, and semantically equivalent to current behavior.
 **Depends on:** Phase 18 (real harness needed to exercise dense placement)
 **Requirements:** SCALE-06, SCALE-07
-**Plans:** 0 plans
+**Plans:** 4 plans
 **Success Criteria:**
 - High-density runs avoid pathological spawn collision patterns against rocks and occupied cells.
 - World execution gains a partition-aware path or equivalent scale structure that can grow without changing observed simulation semantics.
 - Current simulation semantics remain stable at existing milestone workloads.
 - Deterministic or explainable placement behavior exists for repeated large runs.
+
+Plans:
+- [ ] 19-01-placement-index-PLAN.md — EligibleCellIndex sparse-set + WorldWebSocketHandler placement refactor + 3 Wave-0 tests (SCALE-06)
+- [ ] 19-02-live-entity-registry-PLAN.md — LiveEntityRegistry bean + lifecycle hooks at WS register / DeathFinalizer / SimulationEngine.collapseToMember (SCALE-07 foundation)
+- [ ] 19-03-golden-trace-equivalence-PLAN.md — OutboundSender FrameEmitListener seam + GoldenTraceEquivalenceTest (D-10 semantic-equivalence gate, must be green BEFORE Plan 04 lands) (SCALE-07)
+- [ ] 19-04-entity-list-iteration-PLAN.md — SimulationEngine + EnvironmentEngine per-entity segments + TickBroadcaster.onTick @Order(50) consume LiveEntityRegistry.snapshot() (SCALE-07)
 
 ### Phase 20: Connection Multiplexing & Runtime Tuning
 **Goal:** Reduce socket/process overhead and tune the runtime for sustained high bot counts without regressing the compact protocol semantics.
