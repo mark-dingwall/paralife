@@ -173,8 +173,16 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     /** Single active mutagen event (D-03 — max 1). Null when no event active. */
     private MutagenEvent activeMutagen;
 
-    /** D-41: per-tick status caches — derived read-only projections from shadow grids. */
-    private final Map<Position, Byte> cellStatusCache = new HashMap<>();
+    /**
+     * D-41 + REVIEWS CONSENSUS-H4: WS thread ({@code EligibleCellIndex.notifyChanged})
+     * reads this concurrently with tick-thread {@link #buildStatusCaches()} mutation.
+     * To eliminate the HashMap concurrent-read race, this field is {@code volatile}
+     * and always points at an IMMUTABLE {@code Map.copyOf} snapshot. Tick-thread
+     * mutates {@link #cellStatusStaging} privately, then publishes a new immutable
+     * snapshot in one volatile write at the end of buildStatusCaches.
+     */
+    private volatile Map<Position, Byte> cellStatusCache = Map.of();
+    private final Map<Position, Byte> cellStatusStaging = new HashMap<>();
     private final Map<String, Byte> entityStatusCache = new HashMap<>();
 
     /**
@@ -321,7 +329,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         try {
             // Always rebuild caches and expire buffs, even when config.enabled() is false,
             // so PerceptionBroadcaster reads a consistent empty surface (Pitfall 7).
-            cellStatusCache.clear();
+            // REVIEWS CONSENSUS-H4: staging map is reset here; volatile snapshot published
+            // at end of buildStatusCaches().
+            cellStatusStaging.clear();
             entityStatusCache.clear();
             buffRegistry.expireBuffs(event.tickNumber());
             // Plan 15-08 Task 2: sweep expired FLEEING records each tick so
@@ -878,6 +888,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         int w = worldGrid.getWidth();
         int h = worldGrid.getHeight();
 
+        // REVIEWS CONSENSUS-H4: all mutations go through cellStatusStaging.
         // Toxin bits (from Plan 02).
         if (nonZeroToxinCellCount > 0 || activeToxin != null) {
             for (int x = 0; x < w; x++) {
@@ -887,9 +898,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
 
                     Position pos = new Position(x, y);
                     if (intensity >= toxinThreshold) {
-                        Byte prior = cellStatusCache.get(pos);
+                        Byte prior = cellStatusStaging.get(pos);
                         byte merged = (byte) ((prior == null ? 0 : prior) | CELL_STATUS_TOXIN_PRESENT);
-                        cellStatusCache.put(pos, merged);
+                        cellStatusStaging.put(pos, merged);
                     }
                     Cell cell = worldGrid.getCell(x, y);
                     String id = EntityIds.entityIdOf(cell.occupant());
@@ -908,9 +919,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 int strain = mutagenGrid[x][y] & 0xFF;
                 if (strain == 0) continue;
                 Position pos = new Position(x, y);
-                Byte prior = cellStatusCache.get(pos);
+                Byte prior = cellStatusStaging.get(pos);
                 byte merged = (byte) ((prior == null ? 0 : prior) | CELL_STATUS_MUTAGEN_ZONE);
-                cellStatusCache.put(pos, merged);
+                cellStatusStaging.put(pos, merged);
             }
         }
 
@@ -934,6 +945,10 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 entityStatusCache.put(id, merged);
             }
         }
+
+        // REVIEWS CONSENSUS-H4: publish immutable snapshot via single volatile write.
+        // WS thread reads the volatile field directly — always sees a coherent Map.copyOf.
+        this.cellStatusCache = Map.copyOf(cellStatusStaging);
     }
 
     public int toxinIntensityAt(Position pos) {
@@ -1228,7 +1243,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         synchronized (envCleanupHooksBean.getPendingGrants()) {
             envCleanupHooksBean.getPendingGrants().clear();
         }
-        cellStatusCache.clear();
+        // REVIEWS CONSENSUS-H4: reset staging + publish empty volatile snapshot.
+        this.cellStatusCache = Map.of();
+        cellStatusStaging.clear();
         entityStatusCache.clear();
         fleeing.clear();
         envDamageAppliedThisTick = false;
@@ -1293,7 +1310,8 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
      */
     public void onTickEnvOnlyForTest(long tickNumber) {
         try {
-            cellStatusCache.clear();
+            // REVIEWS CONSENSUS-H4: reset staging; volatile snapshot published at end of buildStatusCaches().
+            cellStatusStaging.clear();
             entityStatusCache.clear();
             buffRegistry.expireBuffs(tickNumber);
             expireFleeing(tickNumber);
@@ -1397,7 +1415,8 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     }
 
     Map<Position, Byte> cellStatusCacheView() {
-        return Collections.unmodifiableMap(cellStatusCache);
+        // REVIEWS CONSENSUS-H4: volatile field is already an immutable Map.copyOf snapshot.
+        return cellStatusCache;
     }
 
     Map<String, Byte> entityStatusCacheView() {
@@ -1547,7 +1566,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         activeMutagen = null;
         nonZeroToxinCellCount = 0;
         envDamageAppliedThisTick = false;
-        cellStatusCache.clear();
+        // REVIEWS CONSENSUS-H4: reset staging + publish empty volatile snapshot.
+        this.cellStatusCache = Map.of();
+        cellStatusStaging.clear();
         entityStatusCache.clear();
     }
 
