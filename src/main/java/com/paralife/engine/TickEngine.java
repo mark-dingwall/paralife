@@ -6,10 +6,11 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -56,8 +57,8 @@ public class TickEngine {
         this(config, eventPublisher, new SimpleMeterRegistry());
     }
 
-    @PostConstruct
-    void init() {
+    @EventListener(ApplicationReadyEvent.class)
+    void onApplicationReady() {
         if (config.autoStart()) {
             start();
         }

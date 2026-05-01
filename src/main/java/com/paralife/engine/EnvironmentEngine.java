@@ -177,12 +177,13 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
      * D-41 + REVIEWS CONSENSUS-H4: WS thread ({@code EligibleCellIndex.notifyChanged})
      * reads this concurrently with tick-thread {@link #buildStatusCaches()} mutation.
      * To eliminate the HashMap concurrent-read race, this field is {@code volatile}
-     * and always points at an IMMUTABLE {@code Map.copyOf} snapshot. Tick-thread
-     * mutates {@link #cellStatusStaging} privately, then publishes a new immutable
-     * snapshot in one volatile write at the end of buildStatusCaches.
+     * and always points at a stable read-only view. Tick-thread mutates a private
+     * staging map, then at end of buildStatusCaches swaps it in via one volatile
+     * write and allocates a fresh staging map for the next tick (O(1) handoff —
+     * no per-tick copy of N status entries).
      */
     private volatile Map<Position, Byte> cellStatusCache = Map.of();
-    private final Map<Position, Byte> cellStatusStaging = new HashMap<>();
+    private Map<Position, Byte> cellStatusStaging = new HashMap<>();
     private final Map<String, Byte> entityStatusCache = new HashMap<>();
 
     /**
@@ -946,9 +947,15 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             }
         }
 
-        // REVIEWS CONSENSUS-H4: publish immutable snapshot via single volatile write.
-        // WS thread reads the volatile field directly — always sees a coherent Map.copyOf.
-        this.cellStatusCache = Map.copyOf(cellStatusStaging);
+        // REVIEWS CONSENSUS-H4: publish via single volatile write + swap-and-allocate.
+        // The just-built staging becomes the read-only published cache (wrapped in
+        // an unmodifiable view); a fresh map is installed for the next tick. This
+        // gives O(1) handoff with no per-tick copy of N status entries (Wave 1
+        // hotfix — `Map.copyOf` was O(N) and dominated tick cost in 256x256 grids
+        // with active toxin/mutagen). Stale published references stay safely
+        // immutable because the writer only ever mutates the *new* staging map.
+        this.cellStatusCache = Collections.unmodifiableMap(cellStatusStaging);
+        this.cellStatusStaging = new HashMap<>();
     }
 
     public int toxinIntensityAt(Position pos) {
