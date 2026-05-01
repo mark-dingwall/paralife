@@ -1,0 +1,218 @@
+package com.paralife.engine;
+
+import com.paralife.world.Cell;
+import com.paralife.world.Entity;
+import com.paralife.world.Position;
+import com.paralife.world.WorldGrid;
+import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.DependsOn;
+import org.springframework.stereotype.Component;
+
+import java.util.Arrays;
+import java.util.Map;
+import java.util.Random;
+
+/**
+ * Phase 19 SCALE-06 (D-01..D-06): O(1) sparse-set of cells eligible for bot
+ * register/respawn placement. Replaces the 50-retry random-scan in
+ * {@code WorldWebSocketHandler}.
+ *
+ * <p>Eligibility = (no occupant) AND (cell not FLAG_OVERCROWDED per
+ * {@code cellStatusCache} bit 0) AND (placing here would NOT push any adjacent
+ * occupied Moore neighbour over {@code overcrowdingThreshold}).
+ * Maintained incrementally via {@link #notifyChanged(int, int)} on a 5×5
+ * dirty bbox.
+ *
+ * <p><b>Lifecycle hook discipline (REVIEWS MEDIUM-1):</b> only STRUCTURAL grid
+ * mutations call notifyChanged. Energy-only writes (applyDeltaToOccupant,
+ * processEnergyDecay, processOvercrowding penalty, combat damage withEnergy,
+ * toxin/mutagen damage) MUST NOT — they don't change occupancy.
+ *
+ * <p><b>Lock-order invariant (REVIEWS L1):</b> index-monitor → grid-read-lock.
+ * {@code synchronized(this)} (the index monitor) is acquired before
+ * {@link WorldGrid#getCell} (which acquires the grid read lock). Tick handlers
+ * must call {@code notifyChanged} AFTER the WorldGrid mutation returns, never
+ * inside the write lock.
+ *
+ * <p><b>Init order (REVIEWS H2 + L2):</b> {@code @DependsOn("rockGenerator")}
+ * forces this bean's @PostConstruct to run after RockGenerator's;
+ * RockGenerator.initialize() is synchronous (verified pre-flight per L2).
+ *
+ * <p><b>Cell-status read (REVIEWS CONSENSUS-H4):</b> reads
+ * {@link EnvironmentEngine#cellStatusCacheView()}, which returns a volatile
+ * immutable {@code Map.copyOf} snapshot. Safe for concurrent WS-thread reads
+ * with no risk of ConcurrentModificationException.
+ *
+ * <p>// PERF: REVIEWS MEDIUM-9 — {@code cache.get(new Position(x, y))} allocates a
+ * Position per cell × 25 per notifyChanged call. Acceptable at current scale;
+ * Phase 21 benchmark may revisit (option: packed-int cache key).
+ */
+@Component
+@DependsOn("rockGenerator")
+public class EligibleCellIndex {
+
+    private static final Logger log = LoggerFactory.getLogger(EligibleCellIndex.class);
+    private static final int DIRTY_BBOX_RADIUS = 2;
+
+    private final WorldGrid worldGrid;
+    private final EnvironmentEngine environmentEngine;
+    private final SimulationConfig simulationConfig;
+
+    private final int width;
+    private final int height;
+    /** Dense array: eligible cell linear indices, packed [0..size-1]. */
+    private final int[] dense;
+    /** Back-map: posInDense[linearIdx] = position of that index in dense[], or -1 if absent. */
+    private final int[] posInDense;
+    private int size = 0;
+
+    public EligibleCellIndex(WorldGrid worldGrid,
+                             EnvironmentEngine environmentEngine,
+                             SimulationConfig simulationConfig) {
+        this.worldGrid = worldGrid;
+        this.environmentEngine = environmentEngine;
+        this.simulationConfig = simulationConfig;
+        this.width = worldGrid.getWidth();
+        this.height = worldGrid.getHeight();
+        int total = width * height;
+        this.dense = new int[total];
+        this.posInDense = new int[total];
+        Arrays.fill(posInDense, -1);
+    }
+
+    @PostConstruct
+    public void initialize() {
+        Map<Position, Byte> snap = environmentEngine.cellStatusCacheView();
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                if (evaluateEligibility(x, y, snap)) addInternal(x, y);
+            }
+        }
+        log.info("EligibleCellIndex initialised: {} eligible cells of {} total", size, width * height);
+    }
+
+    /**
+     * Linearisation: {@code x * height + y}.
+     * REVIEWS R2-13 — see EligibleCellIndexRectangularTest for parity proof on non-square grids.
+     */
+    int toIndex(int x, int y) {
+        return x * height + y;
+    }
+
+    Position fromIndex(int idx) {
+        return new Position(idx / height, idx % height);
+    }
+
+    /** Add cell (x,y) to the eligible set. No-op if already present. Thread-safe. */
+    public synchronized void add(int x, int y) {
+        addInternal(x, y);
+    }
+
+    private void addInternal(int x, int y) {
+        int idx = toIndex(x, y);
+        if (posInDense[idx] >= 0) return; // already present
+        dense[size] = idx;
+        posInDense[idx] = size;
+        size++;
+    }
+
+    /** Remove cell (x,y) from the eligible set. No-op if absent. Thread-safe. */
+    public synchronized void remove(int x, int y) {
+        removeInternal(x, y);
+    }
+
+    private void removeInternal(int x, int y) {
+        int idx = toIndex(x, y);
+        int pos = posInDense[idx];
+        if (pos < 0) return; // not present
+        // Swap-and-pop: move last element into this slot
+        int last = dense[size - 1];
+        dense[pos] = last;
+        posInDense[last] = pos;
+        posInDense[idx] = -1;
+        size--;
+    }
+
+    /**
+     * O(1) uniform sample. Returns {@code null} iff eligible set is empty (→ GRID_FULL).
+     * Uses exactly 1 call to {@code rng.nextInt(size)} per successful sample.
+     */
+    public synchronized Position sample(Random rng) {
+        if (size == 0) return null;
+        int idx = dense[rng.nextInt(size)];
+        return fromIndex(idx);
+    }
+
+    /** Returns the number of cells currently in the eligible set. */
+    public synchronized int eligibleCount() {
+        return size;
+    }
+
+    /**
+     * Re-evaluate eligibility for the 5×5 Moore bbox around (px, py). Toroidal
+     * wrap via {@code Math.floorMod}. Cell-status cache is read exactly once per
+     * call and hoisted — REVIEWS MEDIUM-1 / O3 (single cellStatusCacheView() per notifyChanged).
+     *
+     * <p>Lock order: acquires index monitor ({@code synchronized(this)}) then
+     * internally calls {@code worldGrid.getCell} (grid read lock). This order
+     * is index-monitor → grid-read-lock and must not be inverted.
+     */
+    public synchronized void notifyChanged(int px, int py) {
+        Map<Position, Byte> hoistedCache = environmentEngine.cellStatusCacheView();
+        for (int dy = -DIRTY_BBOX_RADIUS; dy <= DIRTY_BBOX_RADIUS; dy++) {
+            for (int dx = -DIRTY_BBOX_RADIUS; dx <= DIRTY_BBOX_RADIUS; dx++) {
+                int cx = Math.floorMod(px + dx, width);
+                int cy = Math.floorMod(py + dy, height);
+                if (evaluateEligibility(cx, cy, hoistedCache)) {
+                    addInternal(cx, cy);
+                } else {
+                    removeInternal(cx, cy);
+                }
+            }
+        }
+    }
+
+    private boolean evaluateEligibility(int x, int y, Map<Position, Byte> cellStatusCache) {
+        // Constraint 1: cell must be unoccupied.
+        Cell cell = worldGrid.getCell(x, y);
+        if (cell.hasOccupant()) return false;
+
+        // Constraint 2: cell must not be flagged OVERCROWDED (bit 0 of cellStatusCache).
+        // PERF: REVIEWS MEDIUM-9 — Position allocation per cache lookup acknowledged.
+        Byte status = cellStatusCache.get(new Position(x, y));
+        if (status != null && (status & 0x01) != 0) return false;
+
+        // Constraint 3: placing here must not push any adjacent occupied cell over threshold.
+        int threshold = simulationConfig.overcrowdingThreshold();
+        for (Position nPos : worldGrid.getNeighbors(x, y)) {
+            Cell nCell = worldGrid.getCell(nPos.x(), nPos.y());
+            Entity occ = nCell.occupant();
+            // Only Particle and BondedPair count as live occupants for overcrowding.
+            if (!(occ instanceof Entity.Particle) && !(occ instanceof Entity.BondedPair)) continue;
+            int neighborCount = countOccupiedMooreNeighbours(nPos.x(), nPos.y());
+            if (neighborCount == threshold - 1) return false;
+        }
+        return true;
+    }
+
+    private int countOccupiedMooreNeighbours(int x, int y) {
+        int count = 0;
+        for (Position nPos : worldGrid.getNeighbors(x, y)) {
+            Entity occ = worldGrid.getCell(nPos.x(), nPos.y()).occupant();
+            if (occ instanceof Entity.Particle || occ instanceof Entity.BondedPair) count++;
+        }
+        return count;
+    }
+
+    /**
+     * Test helper — wipe the index and rebuild from current grid state.
+     * Mirrors the @PostConstruct init; call after {@code worldGrid.clear()} in tests.
+     */
+    public synchronized void rebuildForTest() {
+        Arrays.fill(posInDense, -1);
+        size = 0;
+        initialize();
+    }
+}
