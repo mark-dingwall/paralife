@@ -66,6 +66,19 @@ public class DeathFinalizer {
     }
 
     /**
+     * Phase 19 SCALE-07 (REVIEWS H3): LiveEntityRegistry lifecycle hooks at
+     * every death/structural-clear site. Setter-injected (same pattern as
+     * {@link EligibleCellIndex}) so pre-Phase-19 unit tests that construct
+     * {@code DeathFinalizer} directly compile unchanged.
+     */
+    private LiveEntityRegistry liveEntityRegistry;
+
+    @Autowired(required = false)
+    public void setLiveEntityRegistry(@Lazy LiveEntityRegistry liveEntityRegistry) {
+        this.liveEntityRegistry = liveEntityRegistry;
+    }
+
+    /**
      * Plan 14-06 Task 1: monotonic counter of death-finalize events. Increments
      * at the TOP of each finalize* method BEFORE collaborator calls, so the
      * counter reflects "a death was attempted" even if a downstream exception
@@ -97,6 +110,8 @@ public class DeathFinalizer {
         deathEventCount++;
         String id = p.id();
         botRegistry.unregisterByEntity(id);
+        // Phase 19 SCALE-07 (REVIEWS H3): unregister from LiveEntityRegistry immediately after BotRegistry.
+        if (liveEntityRegistry != null) liveEntityRegistry.unregister(id);
         buffRegistry.unregisterEntity(id);
         hooks.clearInfectionOnDeath(id);
         hooks.applyCompost(new Position(x, y));
@@ -117,7 +132,10 @@ public class DeathFinalizer {
         String secondaryId = bp.secondaryEntityId();
 
         botRegistry.unregisterByEntity(primaryId);
+        // Phase 19 SCALE-07 (REVIEWS H3): symmetry unregister for child ids (idempotent if absent).
+        if (liveEntityRegistry != null) liveEntityRegistry.unregister(primaryId);
         botRegistry.unregisterByEntity(secondaryId);
+        if (liveEntityRegistry != null) liveEntityRegistry.unregister(secondaryId);
 
         buffRegistry.unregisterEntity(primaryId);
         buffRegistry.unregisterEntity(secondaryId);
@@ -130,6 +148,8 @@ public class DeathFinalizer {
         worldGrid.clearEntity(x, y);
         // REVIEWS MEDIUM-1 / Phase 19 SCALE-06: STRUCTURAL clear — notify eligible-cell index.
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(x, y);
+        // Phase 19 SCALE-07 (REVIEWS H3): unregister BondedPair's own grid-occupant id on death.
+        if (liveEntityRegistry != null) liveEntityRegistry.unregister(bp.id());
         log.debug("BondedPair death finalised: bp={} primary={} secondary={} pos=({},{})",
                 bp.id(), primaryId, secondaryId, x, y);
     }

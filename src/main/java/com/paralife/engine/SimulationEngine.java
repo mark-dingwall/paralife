@@ -234,6 +234,20 @@ public class SimulationEngine {
         this.eligibleCellIndex = eligibleCellIndex;
     }
 
+    /**
+     * Phase 19 SCALE-07 (REVIEWS H3): LiveEntityRegistry lifecycle hooks at every
+     * structural entity-creation, entity-death, and composite-restructure site.
+     * Setter-injected (same pattern as {@link EligibleCellIndex}) so pre-Phase-19
+     * unit tests that construct {@code SimulationEngine} directly compile unchanged.
+     * Guarded on null at every hook site.
+     */
+    private LiveEntityRegistry liveEntityRegistry;
+
+    @Autowired(required = false)
+    public void setLiveEntityRegistry(@Lazy LiveEntityRegistry liveEntityRegistry) {
+        this.liveEntityRegistry = liveEntityRegistry;
+    }
+
     public int getLastTickBondCount() {
         return lastTickBondCount.get();
     }
@@ -605,6 +619,12 @@ public class SimulationEngine {
                         bondingConfig.bondDecayCostMax(),
                         simRng
                 );
+                // Phase 19 SCALE-07 (REVIEWS H3): bond-formation — unregister both particles, register the BondedPair.
+                if (liveEntityRegistry != null) {
+                    liveEntityRegistry.unregister(bond.predator.id());
+                    liveEntityRegistry.unregister(bond.prey.id());
+                    liveEntityRegistry.register(bondedPair.id(), bond.primaryPos, java.util.Optional.empty());
+                }
                 worldGrid.setEntity(bond.primaryPos.x(), bond.primaryPos.y(), bondedPair);
                 // Phase 19 SCALE-06 — STRUCTURAL: bond formed at primary position.
                 if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(bond.primaryPos.x(), bond.primaryPos.y());
@@ -670,6 +690,14 @@ public class SimulationEngine {
                 var member2 = new Entity.CompositeMember(memberId2, compositeId, cf.bp2().primaryType(), role2,
                         individualEnergy2, cf.bp2().maxEnergy() / 2);
 
+                // Phase 19 SCALE-07 (REVIEWS H3): composite-formation — unregister both BondedPairs,
+                // register both CompositeMember grid-occupants (CONSENSUS-H1 OPTION B: Optional.empty()).
+                if (liveEntityRegistry != null) {
+                    liveEntityRegistry.unregister(cf.bp1().id());
+                    liveEntityRegistry.unregister(cf.bp2().id());
+                    liveEntityRegistry.register(memberId1, cf.pos1(), java.util.Optional.empty());
+                    liveEntityRegistry.register(memberId2, cf.pos2(), java.util.Optional.empty());
+                }
                 // Place on grid
                 worldGrid.setEntity(cf.pos1().x(), cf.pos1().y(), member1);
                 // Phase 19 SCALE-06 — STRUCTURAL: composite member placed at pos1.
@@ -998,6 +1026,8 @@ public class SimulationEngine {
     void cleanupCompositeMemberCellViaFinalizer(Entity.CompositeMember cm, Position pos) {
         String id = cm.id();
         botRegistry.unregisterByEntity(id);
+        // Phase 19 SCALE-07 (REVIEWS H3): unregister from LiveEntityRegistry immediately after BotRegistry.
+        if (liveEntityRegistry != null) liveEntityRegistry.unregister(id);
         buffRegistry.unregisterEntity(id);
         hooks.clearInfectionOnDeath(id);
         hooks.applyCompost(pos);
@@ -1077,6 +1107,13 @@ public class SimulationEngine {
             var bondedPair = new Entity.BondedPair(
                     "bp-" + cm.id(), cm.type(), cm.type(), cm.energy(), cm.maxEnergy(),
                     cm.id(), cm.id());
+            // Phase 19 SCALE-07 (REVIEWS H3): revert — unregister all composite members, register resulting BondedPair.
+            if (liveEntityRegistry != null) {
+                for (String survivingId : composite.getMemberIds()) {
+                    liveEntityRegistry.unregister(survivingId);
+                }
+                liveEntityRegistry.register(bondedPair.id(), pos, java.util.Optional.empty());
+            }
             worldGrid.setEntity(pos.x(), pos.y(), bondedPair);
             // Phase 19 SCALE-06 — STRUCTURAL: composite reverted to bonded-pair.
             if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
@@ -1126,6 +1163,11 @@ public class SimulationEngine {
             Cell cell = worldGrid.getCell(pos.x(), pos.y());
             if (cell.occupant() instanceof Entity.CompositeMember cm) {
                 var particle = new Particle(cm.id() + "-p", cm.type(), cm.energy(), cm.maxEnergy());
+                // Phase 19 SCALE-07 (REVIEWS H3): dissolve — unregister member, register resulting particle.
+                if (liveEntityRegistry != null) {
+                    liveEntityRegistry.unregister(cm.id());
+                    liveEntityRegistry.register(particle.id(), pos, java.util.Optional.empty());
+                }
                 worldGrid.setEntity(pos.x(), pos.y(), particle);
                 // Phase 19 SCALE-06 — STRUCTURAL: composite dissolved, particle placed.
                 if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
@@ -1158,15 +1200,20 @@ public class SimulationEngine {
                 Position pos = composite.getPositionForMember(memberId);
                 if (pos == null) {
                     botRegistry.unregisterByEntity(memberId);
+                    // Phase 19 SCALE-07 (REVIEWS H3): panic-zone — no-position member unregister.
+                    if (liveEntityRegistry != null) liveEntityRegistry.unregister(memberId);
                     buffRegistry.unregisterEntity(memberId);
                     hooks.clearInfectionOnDeath(memberId);
                     continue;
                 }
                 Cell memberCell = worldGrid.getCell(pos.x(), pos.y());
                 if (memberCell.occupant() instanceof Entity.CompositeMember cm) {
+                    // cleanupCompositeMemberCellViaFinalizer already contains the liveEntityRegistry.unregister hook.
                     cleanupCompositeMemberCellViaFinalizer(cm, pos);
                 } else {
                     botRegistry.unregisterByEntity(memberId);
+                    // Phase 19 SCALE-07 (REVIEWS H3): panic-zone non-member cell clear.
+                    if (liveEntityRegistry != null) liveEntityRegistry.unregister(memberId);
                     buffRegistry.unregisterEntity(memberId);
                     hooks.clearInfectionOnDeath(memberId);
                     worldGrid.clearEntity(pos.x(), pos.y());

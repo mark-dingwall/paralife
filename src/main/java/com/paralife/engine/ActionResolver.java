@@ -235,6 +235,18 @@ public class ActionResolver {
     }
 
     /**
+     * Phase 19 SCALE-07 (REVIEWS H3): LiveEntityRegistry lifecycle hooks at every
+     * structural move/reproduce/composite-movement site. Setter-injected so
+     * pre-Phase-19 unit tests compile unchanged. Guarded on null.
+     */
+    private LiveEntityRegistry liveEntityRegistry;
+
+    @Autowired(required = false)
+    public void setLiveEntityRegistry(@Lazy LiveEntityRegistry liveEntityRegistry) {
+        this.liveEntityRegistry = liveEntityRegistry;
+    }
+
+    /**
      * Plan 14-05: setter-inject {@link BuffRegistry} after construction.
      */
     @Autowired(required = false)
@@ -516,6 +528,8 @@ public class ActionResolver {
         worldGrid.setEntity(target.x(), target.y(), placed);
         // Phase 19 SCALE-06 — STRUCTURAL: entity placed at target cell.
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
+        // Phase 19 SCALE-07 (REVIEWS H3 / MED-3): updatePosition for solo Particle move.
+        if (liveEntityRegistry != null) liveEntityRegistry.updatePosition(ra.particle.id(), target);
         botRegistry.updatePosition(ra.sessionId, target);
         return true;
     }
@@ -594,6 +608,8 @@ public class ActionResolver {
         worldGrid.setEntity(target.x(), target.y(), child);
         // Phase 19 SCALE-06 — STRUCTURAL: child spawned at target.
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
+        // Phase 19 SCALE-07 (REVIEWS H3): register reproduce child (CONSENSUS-H1 OPTION B: Optional.empty()).
+        if (liveEntityRegistry != null) liveEntityRegistry.register(child.id(), target, java.util.Optional.empty());
 
         Particle updatedParent = ra.particle.withEnergy(ra.particle.energy() - reproduceCost);
         // Energy-only update — EXCLUDED from notifyChanged (REVIEWS MEDIUM-1).
@@ -610,6 +626,8 @@ public class ActionResolver {
                 worldGrid.setEntity(bonusTarget.x(), bonusTarget.y(), bonusChild);
                 // Phase 19 SCALE-06 — STRUCTURAL: bonus child spawned.
                 if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(bonusTarget.x(), bonusTarget.y());
+                // Phase 19 SCALE-07 (REVIEWS H3): register bonus child.
+                if (liveEntityRegistry != null) liveEntityRegistry.register(bonusChild.id(), bonusTarget, java.util.Optional.empty());
                 claimedCells.add(bonusTarget);
             }
         }
@@ -787,6 +805,8 @@ public class ActionResolver {
         worldGrid.setEntity(target.x(), target.y(), child);
         // Phase 19 SCALE-06 — STRUCTURAL: composite-reproducer child spawned.
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
+        // Phase 19 SCALE-07 (REVIEWS H3): register composite-reproducer bud child.
+        if (liveEntityRegistry != null) liveEntityRegistry.register(child.id(), target, java.util.Optional.empty());
 
         int reproduceCostDrained = composite.drainEnergy(reproduceCost);
         if (reproduceCostDrained < reproduceCost) {
@@ -1006,6 +1026,8 @@ public class ActionResolver {
             worldGrid.setEntity(target.x(), target.y(), member);
             // Phase 19 SCALE-06 — STRUCTURAL: composite member placed at target.
             if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
+            // Phase 19 SCALE-07 (REVIEWS H3 / MED-3): updatePosition per composite member move.
+            if (liveEntityRegistry != null) liveEntityRegistry.updatePosition(member.id(), target);
 
             botRegistry.getSessionForEntity(member.id()).ifPresent(sid ->
                     botRegistry.updatePosition(sid, target));

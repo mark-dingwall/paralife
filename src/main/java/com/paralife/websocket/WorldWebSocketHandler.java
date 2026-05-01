@@ -16,6 +16,7 @@ import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.ActionResolver;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.EligibleCellIndex;
+import com.paralife.engine.LiveEntityRegistry;
 import com.paralife.engine.MetabolicProfile;
 import com.paralife.engine.SpawnConfig;
 import com.paralife.engine.TickEngine;
@@ -134,6 +135,13 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
      */
     private final EligibleCellIndex eligibleCellIndex;
 
+    /**
+     * Phase 19 SCALE-07 (REVIEWS H3 / MEDIUM-6): LiveEntityRegistry for lifecycle
+     * hooks at bot register and cleanup paths. Null when passed from back-compat ctors
+     * (same null-guard pattern as eligibleCellIndex / admissionGate).
+     */
+    private final LiveEntityRegistry liveEntityRegistry;
+
     @Autowired
     public WorldWebSocketHandler(SessionRegistry sessionRegistry,
                                   WorldGrid worldGrid,
@@ -148,7 +156,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
                                   ResumeTokenRegistry resumeTokenRegistry,
                                   AdmissionConfig admissionConfig,
                                   AdmissionMetrics admissionMetrics,
-                                  EligibleCellIndex eligibleCellIndex) {
+                                  EligibleCellIndex eligibleCellIndex,
+                                  LiveEntityRegistry liveEntityRegistry) {
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
         this.tickEngine = tickEngine;
@@ -165,6 +174,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         // is guaranteed by Spring when this ctor is @Autowired). Back-compat ctors explicitly
         // pass null and do not exercise the placement path — this is documented and intentional.
         this.eligibleCellIndex = eligibleCellIndex;
+        this.liveEntityRegistry = liveEntityRegistry;
         this.spawnRng = buildRng();
         // respawnConfig is kept only to satisfy Plan 10 migration; cap logic is in AdmissionGate.
         // maxRespawnsPerSession removed — AdmissionGate.evaluate handles the respawn-cap guard.
@@ -189,7 +199,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
                 metabolicProfile, spawnConfig, RespawnConfig.defaults(),
                 /* admissionGate */ null, /* outboundSender */ null,
                 /* resumeTokenRegistry */ null, AdmissionConfig.defaults(),
-                /* admissionMetrics */ null, /* eligibleCellIndex */ null);
+                /* admissionMetrics */ null, /* eligibleCellIndex */ null,
+                /* liveEntityRegistry */ null);
     }
 
     /**
@@ -553,6 +564,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
 
         botRegistry.register(session.getId(), entityId, pos);
+        // Phase 19 SCALE-07 (REVIEWS H3 / MEDIUM-6): register entityId+sessionId in LiveEntityRegistry.
+        if (liveEntityRegistry != null) liveEntityRegistry.register(entityId, pos, Optional.of(session.getId()));
 
         // Issue ACTIVE resume token (D-13: first sync carries S|<entityId>|<resumeToken>).
         String resumeToken = (resumeTokenRegistry != null)
@@ -741,6 +754,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
                 // REVIEWS MED-6: notify eligible-cell index after structural grid clear.
                 if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
             });
+            // Phase 19 SCALE-07 (REVIEWS MEDIUM-6): unregister from LiveEntityRegistry on stalled-close path.
+            if (liveEntityRegistry != null) liveEntityRegistry.unregister(entityId);
             botRegistry.unregisterBySession(sessionId);
             if (admissionGate != null) admissionGate.releaseSlot();
         }
@@ -783,6 +798,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
             // REVIEWS MED-6: notify eligible-cell index after structural grid clear.
             if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
         });
+        // Phase 19 SCALE-07 (REVIEWS MEDIUM-6): unregister from LiveEntityRegistry on cleanupBot.
+        if (liveEntityRegistry != null && entityId != null) liveEntityRegistry.unregister(entityId);
         botRegistry.unregisterBySession(sessionId);
 
         if (wasRegistered && admissionGate != null) {
