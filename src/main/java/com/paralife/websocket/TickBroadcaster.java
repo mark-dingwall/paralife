@@ -173,6 +173,18 @@ public class TickBroadcaster {
         this.worldWebSocketHandler = handler;
     }
 
+    /**
+     * Phase 19 SCALE-07 D-10 (Rule 1 — inter-run state leak fix): clears per-session
+     * roster hash cache so two consecutive test runs with the same sessionIds produce
+     * identical g-block suppression decisions (stale cache from run 1 would cause
+     * run 2 to suppress g blocks that run 1 sent, breaking digest equivalence).
+     *
+     * <p>Test-only — production sessions are never reused across entity lifetimes.
+     */
+    public void clearStateForTest() {
+        lastRosterHashBySession.clear();
+    }
+
     @EventListener
     @Order(50) // After SimulationEngine(10) + ActionResolver(20) — tick-pipeline perception step.
     public void onTick(TickEvent event) {

@@ -190,6 +190,26 @@ public class ActionResolver {
     }
 
     /**
+     * Phase 19 SCALE-07 D-10 (Rule 1 — inter-run state leak fix): clears per-entity
+     * state maps that persist beyond a single run. Required in addition to
+     * {@link #resetSeed()} when two driveScenario calls share the same bean instance
+     * and the second run reuses the same entityIds as the first.
+     *
+     * <p>{@code lastReproducedTick} entries keyed by entityId prevent reproduction
+     * for a cooldown window. Stale entries from run 1 that share entityIds with run 2
+     * (e.g. {@code trace-bot-9}) would suppress reproduction in run 2, producing
+     * different per-session digest output and breaking the equivalence gate.
+     *
+     * <p>Test-only — production code never reuses entityIds across entity lifetimes.
+     */
+    public void clearStateForTest() {
+        compositeTicksSinceMove.clear();
+        lastReproducedTick.clear();
+        pendingActions.getAndSet(new ConcurrentHashMap<>());
+        pendingVoteBallots.getAndSet(new ConcurrentHashMap<>());
+    }
+
+    /**
      * Convenience constructor for tests predating Plan 15-06 that don't need
      * an AlarmQueue wired in (falls back to a fresh local instance — verb-L
      * dispatch still works, the queue is just not shared with the broadcaster).
