@@ -64,6 +64,39 @@ class EntityListIterationTest {
         verify(registry, atLeastOnce()).snapshot();
     }
 
+    // ── EnvironmentEngine ────────────────────────────────────────────
+
+    /**
+     * Verify that {@code EnvironmentEngine.onTickEnvOnlyForTest} calls
+     * {@code liveEntityRegistry.snapshot()} for per-entity segments.
+     * RED before Plan 04 refactor; GREEN after.
+     */
+    @Test
+    void environmentEngine_onTick_callsSnapshotForPerEntitySegments() {
+        // Place + register a particle so the BUFFED scan has something to iterate.
+        registry.register("env1", new Position(2, 2), Optional.empty());
+        grid.setEntity(2, 2, new Particle("env1", ParticleType.CATALYST, 50));
+
+        EnvCleanupHooksBean hooksBean = new EnvCleanupHooksBean();
+        BuffRegistry buffRegistry = new BuffRegistry();
+        CompositeRegistry composites = mock(CompositeRegistry.class);
+        DeathFinalizer finalizer = new DeathFinalizer(grid, botRegistry, buffRegistry,
+                composites, hooksBean, null);
+
+        EnvironmentEngine env = new EnvironmentEngine(grid,
+                new SeasonTracker(new SeasonsConfig(200, 0.0)),
+                EnvironmentConfig.defaults(), buffRegistry,
+                FertilityConfig.defaults(), finalizer, hooksBean,
+                new java.util.Random(42L));
+        hooksBean.registerCompostSink(env::applyCompost);
+        env.setLiveEntityRegistry(registry);
+
+        env.onTickEnvOnlyForTest(1L);
+
+        // After Plan 04 refactor, snapshot() is called at least once.
+        verify(registry, atLeastOnce()).snapshot();
+    }
+
     // ── helpers ─────────────────────────────────────────────────────
 
     private BondingConfig noBonding() {

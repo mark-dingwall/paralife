@@ -314,6 +314,20 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     }
 
     /**
+     * Phase 19 SCALE-07: live entity registry for O(N) per-entity iteration.
+     * Setter-injected (same pattern as SimulationEngine) so pre-Phase-19 unit tests
+     * that construct {@code EnvironmentEngine} directly continue to compile unchanged.
+     * Null-guarded at every hook site.
+     */
+    private LiveEntityRegistry liveEntityRegistry;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setLiveEntityRegistry(
+            @org.springframework.context.annotation.Lazy LiveEntityRegistry liveEntityRegistry) {
+        this.liveEntityRegistry = liveEntityRegistry;
+    }
+
+    /**
      * Register ourselves as the compost sink on the shared hooks bean so
      * {@link DeathFinalizer}'s death-cleanup pipeline can flow compost events
      * back through this engine (D-24/D-25).
