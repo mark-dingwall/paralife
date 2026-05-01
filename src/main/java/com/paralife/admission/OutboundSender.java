@@ -50,6 +50,9 @@ import java.util.function.BiConsumer;
  * <p><b>Frame-size metric:</b> {@link AdmissionMetrics#recordFrameSize(int)} is called in the
  * drain loop after encode — single measurement point. Callers such as {@code TickBroadcaster}
  * must NOT add a duplicate {@code recordFrameSize} call (codex MEDIUM).
+ *
+ * <p><b>Test seam (Phase 19 D-10):</b> {@link #setFrameEmitListener} registers a callback
+ * invoked after each {@code sendMessage}; null in production. See {@link FrameEmitListener}.
  */
 @Component
 public class OutboundSender {
@@ -61,6 +64,31 @@ public class OutboundSender {
     private final ConcurrentHashMap<String, ArrayBlockingQueue<Frame>> queues = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Thread> senderThreads = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AtomicBoolean> overflowFiredFlags = new ConcurrentHashMap<>();
+
+    /**
+     * Phase 19 SCALE-07 D-10: test-only seam for capturing outbound frame bytes.
+     * Invoked AFTER {@code session.sendMessage} succeeds, still inside {@code synchronized(session)},
+     * so the post-drain {@code synchronized(session)} barrier in tests covers in-flight callbacks.
+     * Production listener is always {@code null}.
+     *
+     * <p>Catch in the drain loop is {@code Exception} (NOT {@code Throwable}) per REVIEWS LOW-10:
+     * {@code OutOfMemoryError} / {@code StackOverflowError} still propagate per JVM contract.
+     */
+    @FunctionalInterface
+    public interface FrameEmitListener {
+        void onEmit(String sessionId, byte[] frameBytes);
+    }
+
+    /** Test-only. Null in production. Volatile so the drain-VT sees assignments from the test thread. */
+    private volatile FrameEmitListener frameEmitListener;
+
+    /**
+     * Registers a {@link FrameEmitListener} invoked after each successful {@code sendMessage}.
+     * Pass {@code null} to clear. Test-only — production code must not call this.
+     */
+    public void setFrameEmitListener(FrameEmitListener listener) {
+        this.frameEmitListener = listener;
+    }
 
     /** Set by Plan 07 at startup. Receives (sessionId, queueCapacity) on overflow — fired ONCE per attach. */
     private volatile BiConsumer<String, Integer> overflowCallback;
@@ -180,10 +208,22 @@ public class OutboundSender {
                 if (!session.isOpen()) continue;
                 try {
                     String encoded = PerceptionCodec.encode(frame);
-                    int byteLen = encoded.getBytes(StandardCharsets.UTF_8).length;
-                    metrics.recordFrameSize(byteLen);
+                    byte[] encodedBytes = encoded.getBytes(StandardCharsets.UTF_8);
+                    metrics.recordFrameSize(encodedBytes.length);
                     synchronized (session) {
                         session.sendMessage(new TextMessage(encoded));
+                        // Phase 19 SCALE-07 D-10: invoke test seam INSIDE the monitor so
+                        // the post-drain synchronized(session) barrier in tests covers it.
+                        // REVIEWS LOW-10: catch Exception, NOT Throwable — OOM/SOE propagate.
+                        FrameEmitListener emitListener = frameEmitListener;
+                        if (emitListener != null) {
+                            try {
+                                emitListener.onEmit(session.getId(), encodedBytes);
+                            } catch (Exception listenerEx) {
+                                log.warn("FrameEmitListener threw for session={}: {}",
+                                        session.getId(), listenerEx.toString());
+                            }
+                        }
                     }
                 } catch (IOException e) {
                     log.warn("Send failed for session={}: {}", session.getId(), e.getMessage());
