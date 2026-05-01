@@ -22,7 +22,8 @@ Prove the architecture handles large-scale externally driven load without losing
 
 ### World Scaling
 
-- [ ] **SCALE-06**: High-density runs use placement behavior that avoids pathological collisions with rocks and already-occupied cells.
+- [x] **SCALE-06
+**: High-density runs use placement behavior that avoids pathological collisions with rocks and already-occupied cells.
 - [ ] **SCALE-07**: World execution gains a partition-aware or equivalently decomposed scale path that can grow without changing observed simulation semantics.
 
 ### Transport & Runtime Efficiency
