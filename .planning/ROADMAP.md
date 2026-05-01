@@ -89,7 +89,7 @@ Plans:
 
 Plans:
 - [ ] 19-01-placement-index-PLAN.md — EligibleCellIndex sparse-set + WorldWebSocketHandler placement refactor + 3 Wave-0 tests (SCALE-06)
-- [ ] 19-02-live-entity-registry-PLAN.md — LiveEntityRegistry bean + lifecycle hooks at WS register / DeathFinalizer / SimulationEngine.collapseToMember (SCALE-07 foundation)
+- [ ] 19-02-live-entity-registry-PLAN.md — LiveEntityRegistry bean + lifecycle hooks at WS register / DeathFinalizer / SimulationEngine.{revertToBondedPair, dissolveToParticles, updateBotRegistryForFormation, checkPanicZone} (SCALE-07 foundation)
 - [ ] 19-03-golden-trace-equivalence-PLAN.md — OutboundSender FrameEmitListener seam + GoldenTraceEquivalenceTest (D-10 semantic-equivalence gate, must be green BEFORE Plan 04 lands) (SCALE-07)
 - [ ] 19-04-entity-list-iteration-PLAN.md — SimulationEngine + EnvironmentEngine per-entity segments + TickBroadcaster.onTick @Order(50) consume LiveEntityRegistry.snapshot() (SCALE-07)
 

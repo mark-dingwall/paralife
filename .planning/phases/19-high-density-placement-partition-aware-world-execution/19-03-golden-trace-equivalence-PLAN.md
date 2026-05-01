@@ -544,8 +544,15 @@ class GoldenTraceEquivalenceTest {
         // Use direct worldGrid + registry registration so adjacency is guaranteed.
         seedAdjacentBondingPair("seed-pred", "seed-prey", 5, 5, 5, 6,
             Entity.ParticleType.CATALYST, Entity.ParticleType.CATALYST.prey(), 200);
+        // CHECKER-ROUND-3 WARNING #4 — post-seed worldGrid assertion: confirms
+        // the seeded pair actually landed before the main tick loop drives bond formation.
+        assertThat(worldGrid.getCell(5, 5).occupant()).isInstanceOf(Entity.Particle.class);
+        assertThat(worldGrid.getCell(5, 6).occupant()).isInstanceOf(Entity.Particle.class);
+
         seedAdjacentBondingPair("seed-pred-2", "seed-prey-2", 9, 9, 9, 10,
             Entity.ParticleType.MEMBRANE, Entity.ParticleType.MEMBRANE.prey(), 200);
+        assertThat(worldGrid.getCell(9, 9).occupant()).isInstanceOf(Entity.Particle.class);
+        assertThat(worldGrid.getCell(9, 10).occupant()).isInstanceOf(Entity.Particle.class);
 
         // Step 2: register the remaining bots randomly via attemptPlacementForTest.
         for (int i = 0; i < BOT_COUNT - 4; i++) {
@@ -685,6 +692,11 @@ Re-run. With the file present, `loadExpectedDigests()` parses it; `assertThat(ma
       `grep -cE "paralife\\.world\\.width=16|paralife\\.world\\.height=16" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` >= 2
       `grep -cE "paralife\\.bonding\\.bonding-probability=1\\.0" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` == 1
       `grep -cE "seedAdjacentBondingPair" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` >= 2 (called for 2 seed pairs)
+      **CHECKER-ROUND-3 WARNING #4 — post-seed worldGrid assertions:**
+      `grep -cE "worldGrid\.getCell\(5, 5\)\.occupant\(\)\)\.isInstanceOf\(Entity\.Particle" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` >= 1
+      `grep -cE "worldGrid\.getCell\(5, 6\)\.occupant\(\)\)\.isInstanceOf\(Entity\.Particle" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` >= 1
+      `grep -cE "worldGrid\.getCell\(9, 9\)\.occupant\(\)\)\.isInstanceOf\(Entity\.Particle" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` >= 1
+      `grep -cE "worldGrid\.getCell\(9, 10\)\.occupant\(\)\)\.isInstanceOf\(Entity\.Particle" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` >= 1
       `grep -cE "bondAndCompositeFormationCount" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` >= 2
       `grep -cE "isGreaterThan\\(0\\)" src/test/java/com/paralife/engine/GoldenTraceEquivalenceTest.java` >= 2 (emit count + formation count)
     - **REVIEWS CONSENSUS-H3 — post-drain monitor barrier:**

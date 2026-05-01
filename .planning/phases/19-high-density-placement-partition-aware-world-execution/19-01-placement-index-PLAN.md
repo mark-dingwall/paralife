@@ -852,7 +852,7 @@ Run `./gradlew compileTestJava` as fast gate, then `./gradlew test`.
     - `grep -cE "incLostRace|paralife\\.placement\\.lost-race\\.total" src/main/java/com/paralife/admission/AdmissionMetrics.java` >= 2
     - `grep -cE "public Optional<Position> attemptPlacementForTest" src/main/java/com/paralife/websocket/WorldWebSocketHandler.java` == 1 (REVIEWS CONSENSUS-H6 — PUBLIC modifier)
     - `grep -cE "Optional<Position> attemptPlacementForTest" src/main/java/com/paralife/websocket/WorldWebSocketHandler.java | head -1` shows `public Optional<Position>` (no package-private signature exists)
-    - `grep -cE "eligibleCellIndex\\.notifyChanged" src/main/java/com/paralife/websocket/WorldWebSocketHandler.java` >= 4 (placement, lost-race retry, cleanupByEntityId, cleanupBot — REVIEWS MED-6)
+    - `grep -cE "eligibleCellIndex\\.notifyChanged" src/main/java/com/paralife/websocket/WorldWebSocketHandler.java` == 4 (placement, lost-race retry, cleanupByEntityId, cleanupBot — REVIEWS MED-6)
     - `grep -cE "eligibleCellIndex\\.notifyChanged" src/main/java/com/paralife/engine/DeathFinalizer.java` == 2 (exact list: line 88, line 113)
     - `grep -cE "eligibleCellIndex\\.notifyChanged" src/main/java/com/paralife/engine/ActionResolver.java` == 11 (exact list: lines 483, 497, 534, 536, 569, 582, 634, 636, 753, 962, 968 — REVIEWS LOW-11 exact-list discipline)
     - `grep -cE "eligibleCellIndex\\.notifyChanged" src/main/java/com/paralife/engine/SimulationEngine.java` == 9 (exact list: lines 589, 590, 651, 652, 977, 1051, 1098, 1139, 1185)

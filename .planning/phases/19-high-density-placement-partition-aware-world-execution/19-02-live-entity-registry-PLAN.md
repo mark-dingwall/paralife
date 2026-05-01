@@ -48,7 +48,7 @@ must_haves:
       pattern: "liveEntityRegistry\\.unregister"
     - from: src/main/java/com/paralife/engine/SimulationEngine.java
       to: src/main/java/com/paralife/engine/LiveEntityRegistry.java
-      via: "Hooks at: bond-formation (lines 589/590 — unregister predator+prey, register bondedPair); composite-formation (lines 651/652 — unregister bp1+bp2, register member1+member2); collapseToMember unregister sites (lines 719, 725); handleMemberDeath shared cleanup (line 977 unregisterByEntity); processDeaths member sweeps (lines 1127, 1136); revertToBondedPair (line 1051 — unregister member, register bondedPair); dissolveToParticles (line 1098 — unregister member, register particle); checkPanicZone clearEntity site (line 1139)"
+      via: "Hooks at: bond-formation (lines 589/590 — unregister predator+prey, register bondedPair); composite-formation (lines 651/652 — unregister bp1+bp2, register member1+member2); updateBotRegistryForFormation unregister sites (lines 719, 725 — inside composite-formation method called at lines 666/667 from attemptCompositeFormation); handleMemberDeath shared cleanup (line 977 unregisterByEntity); processDeaths member sweeps (lines 1127, 1136); revertToBondedPair (line 1051 — unregister member, register bondedPair); dissolveToParticles (line 1098 — unregister member, register particle); checkPanicZone clearEntity site (line 1139)"
       pattern: "liveEntityRegistry\\.(register|unregister|updatePosition)"
     - from: src/main/java/com/paralife/websocket/WorldWebSocketHandler.java
       to: src/main/java/com/paralife/engine/LiveEntityRegistry.java
@@ -607,7 +607,7 @@ liveEntityRegistry.updatePosition(member.id(), target);
     - `grep -cE "liveEntityRegistry\\.unregister" src/main/java/com/paralife/websocket/WorldWebSocketHandler.java` >= 2 (REVIEWS MEDIUM-6 — cleanupByEntityId + cleanupBot)
     - `grep -cE "liveEntityRegistry\\.unregister" src/main/java/com/paralife/engine/DeathFinalizer.java` >= 4 (line 84 particle; lines 102/103 bonded pair child unreg symmetry; line 113 BondedPair own id)
     - `grep -cE "private final LiveEntityRegistry liveEntityRegistry" src/main/java/com/paralife/engine/DeathFinalizer.java` == 1
-    - **SimulationEngine — exact-list discipline (REVIEWS LOW-11):** every hook has a known anchor. The total count is `>= 14` (3 bond-formation ops; 4 composite-formation ops; 1 handleMemberDeath; 2 revert ops; 2 dissolve ops; 2 checkPanicZone unreg + ≥0 panic-zone register if applicable). `grep -cE "liveEntityRegistry\\.(register|unregister|updatePosition)" src/main/java/com/paralife/engine/SimulationEngine.java` >= 14
+    - **SimulationEngine — exact-list discipline (REVIEWS LOW-11):** every hook has a known anchor. The total count is `== 14` (CHECKER-ROUND-3 BLOCKER #2 — exact-count gate, not loose threshold) (3 bond-formation ops; 4 composite-formation ops; 1 handleMemberDeath; 2 revert ops; 2 dissolve ops; 2 checkPanicZone unreg + ≥0 panic-zone register if applicable). `grep -cE "liveEntityRegistry\\.(register|unregister|updatePosition)" src/main/java/com/paralife/engine/SimulationEngine.java` == 14
     - `grep -cE "Optional\\.empty\\(\\)" src/main/java/com/paralife/engine/SimulationEngine.java` >= 4 (server-internal entries — bond, composite formation, revert, dissolve)
     - **Energy-only sites NOT hooked (REVIEWS MEDIUM-2):**
       `bash -c 'sed -n "692,705p" src/main/java/com/paralife/engine/SimulationEngine.java | grep -c liveEntityRegistry'` == 0
@@ -779,40 +779,69 @@ class LiveEntityRegistryInvariantTest {
 
     @Test
     void registryMatchesGridOccupantsAfterCompositeFormation() {
-        // Composite formation requires two adjacent BondedPairs of compatible types.
-        // Bootstrap: place two BondedPair instances directly via worldGrid.setEntity
-        // and register them, then trigger a tick to fire composite formation.
-        // (If composite formation requires specific BondedPair type pairing, re-read
-        // SimulationEngine.attemptCompositeFormation for the exact rule and adjust.)
+        // CHECKER-ROUND-3 BLOCKER #1 fix: the previous version drove 100 ticks with 2
+        // randomly-placed bots — adjacency was unlikely, so bond/composite formation
+        // probably never fired and the invariant assertion passed vacuously on an empty
+        // grid. This version BOOTSTRAPS composite formation by placing two adjacent
+        // BondedPair instances directly via worldGrid.setEntity, drives ticks until
+        // attemptCompositeFormation fires, then asserts that ≥2 CompositeMember
+        // occupants exist on the grid. The post-tick assertion is the GATE that
+        // exercises the lifecycle hooks at lines 651/652 (composite-formation
+        // setEntity) and lines 719/725 (updateBotRegistryForFormation unregister).
+        //
+        // bondingProbability=1.0 from @TestPropertySource forces the probabilistic
+        // path to fire on every eligible adjacency. If composite formation requires
+        // additional state (e.g. minimum age tick counter), drive enough ticks that
+        // the formation path is reachable. If a deterministic SimulationEngine seam
+        // is needed, add one — @Disabled is NOT acceptable per REVIEWS MEDIUM-4.
 
         Position bp1Pos = new Position(10, 10);
-        Position bp2Pos = new Position(10, 11);
-        // Construct BondedPair instances — re-grep Entity.BondedPair constructor signature
-        // and bondedPair "type" semantics. Use the same invariants the production code uses
-        // (predator type, prey type, energies >= composite threshold).
-        // For test scope: use SimulationEngine direct hooks if needed; or fall back to
-        // driving multiple ticks until composite formation occurs. Either path satisfies
-        // REVIEWS MEDIUM-4 — the assertion below is the gate.
+        Position bp2Pos = new Position(10, 11);   // adjacent to bp1Pos
+        // Construct BondedPair instances directly. Re-grep Entity.BondedPair ctor
+        // signature at execution time; the shape below is illustrative.
+        // Energies must be ≥ composite-formation energy threshold (re-grep
+        // SimulationEngine for the threshold field; default ≥200 is a safe upper bound).
+        Entity.BondedPair bp1 = Entity.BondedPair.spawn(
+            "bp-1", Entity.ParticleType.CATALYST, Entity.ParticleType.CATALYST.prey(), 200);
+        Entity.BondedPair bp2 = Entity.BondedPair.spawn(
+            "bp-2", Entity.ParticleType.MEMBRANE, Entity.ParticleType.MEMBRANE.prey(), 200);
+        assertThat(worldGrid.trySetEntity(bp1Pos.x(), bp1Pos.y(), bp1)).isTrue();
+        assertThat(worldGrid.trySetEntity(bp2Pos.x(), bp2Pos.y(), bp2)).isTrue();
+        liveEntityRegistry.register("bp-1", bp1Pos, Optional.empty());
+        liveEntityRegistry.register("bp-2", bp2Pos, Optional.empty());
+        eligibleCellIndex.notifyChanged(bp1Pos.x(), bp1Pos.y());
+        eligibleCellIndex.notifyChanged(bp2Pos.x(), bp2Pos.y());
 
-        // (Implementation note: this test is MANDATORY per REVIEWS MEDIUM-4. If the
-        // production composite-formation rule is too elaborate to script in <50 lines,
-        // the implementer must add a SimulationEngine test seam OR drive the formation
-        // via repeated TickEvent publishes with deterministic seed. @Disabled is NOT
-        // acceptable.)
-
-        // For the minimum viable assertion structure:
-        Optional<Position> a = handler.attemptPlacementForTest("bot-A", Entity.ParticleType.CATALYST, 200);
-        Optional<Position> b = handler.attemptPlacementForTest("bot-B", Entity.ParticleType.CATALYST.prey(), 200);
-        assertThat(a).isPresent();
-        assertThat(b).isPresent();
-
-        // Drive enough ticks that some bond + composite formation event occurs.
-        // Even at ~10 bots × 50 ticks the probabilistic path may not fire; the
-        // invariant still must hold WHATEVER state the grid is in.
-        for (int t = 0; t < 100; t++) {
+        // Drive ticks until composite formation fires.
+        for (int t = 0; t < 50; t++) {
             publisher.publishEvent(new TickEvent(t));
             assertRegistryAgreesWithGrid();   // invariant must hold every tick
+
+            long compositeMemberCount = liveEntityRegistry.snapshot().stream()
+                .filter(e -> worldGrid.getCell(e.position().x(), e.position().y())
+                    .occupant() instanceof Entity.CompositeMember)
+                .count();
+            if (compositeMemberCount >= 2) break;
         }
+
+        // CHECKER-ROUND-3 hard post-tick assertion: composite formation MUST have fired,
+        // exercising the lifecycle hooks at lines 651/652 + 719/725.
+        long compositeMemberCount = liveEntityRegistry.snapshot().stream()
+            .filter(e -> worldGrid.getCell(e.position().x(), e.position().y())
+                .occupant() instanceof Entity.CompositeMember)
+            .count();
+        assertThat(compositeMemberCount)
+            .as("CHECKER-ROUND-3 — composite formation must fire so the lifecycle "
+              + "hooks at SimulationEngine lines 651/652 (composite-formation setEntity) "
+              + "+ 719/725 (updateBotRegistryForFormation unregister) are exercised. "
+              + "Vacuous-pass on empty grid is a regression.")
+            .isGreaterThanOrEqualTo(2);
+
+        // Source BondedPair ids must NOT be in the registry post-formation.
+        Set<String> regIds = new HashSet<>();
+        for (LiveEntityRegistry.EntityEntry e : liveEntityRegistry.snapshot()) regIds.add(e.entityId());
+        assertThat(regIds).as("source BondedPair id NOT in registry post-composite").doesNotContain("bp-1");
+        assertThat(regIds).as("source BondedPair id NOT in registry post-composite").doesNotContain("bp-2");
     }
 
     private void assertRegistryAgreesWithGrid() {
@@ -852,6 +881,11 @@ class LiveEntityRegistryInvariantTest {
     - `grep -c "registryMatchesGridOccupantsAfterDeath" src/test/java/com/paralife/engine/LiveEntityRegistryInvariantTest.java` == 1
     - `grep -c "registryMatchesGridOccupantsAfterBondFormation" src/test/java/com/paralife/engine/LiveEntityRegistryInvariantTest.java` == 1 (MANDATORY — REVIEWS MEDIUM-4)
     - `grep -c "registryMatchesGridOccupantsAfterCompositeFormation" src/test/java/com/paralife/engine/LiveEntityRegistryInvariantTest.java` == 1 (MANDATORY — REVIEWS MEDIUM-4)
+    - **CHECKER-ROUND-3 BLOCKER #1 — composite-formation post-tick assertion present:**
+      `grep -cE "compositeMemberCount" src/test/java/com/paralife/engine/LiveEntityRegistryInvariantTest.java` >= 2 (loop check + final assertion)
+      `grep -cE "isGreaterThanOrEqualTo\(2\)" src/test/java/com/paralife/engine/LiveEntityRegistryInvariantTest.java` >= 1 (gates against vacuous-pass on empty grid)
+      `grep -cE "Entity\.CompositeMember" src/test/java/com/paralife/engine/LiveEntityRegistryInvariantTest.java` >= 2 (filter expression appears twice — loop + final)
+      `grep -cE "Entity\.BondedPair\.spawn" src/test/java/com/paralife/engine/LiveEntityRegistryInvariantTest.java` >= 2 (two adjacent BondedPairs seeded directly)
     - `grep -c "@Disabled" src/test/java/com/paralife/engine/LiveEntityRegistryInvariantTest.java` == 0 (REVIEWS MEDIUM-4 — no escape)
     - `grep -c "sessionIdAgreesWithBotRegistry" src/test/java/com/paralife/engine/LiveEntityRegistryInvariantTest.java` == 0 (CONSENSUS-H1 OPTION B — DROPPED)
     - `grep -cE "Entity\\.Rock|Entity\\.Nutrient" src/test/java/com/paralife/engine/LiveEntityRegistryInvariantTest.java` >= 1
