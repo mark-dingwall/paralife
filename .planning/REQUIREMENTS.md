@@ -58,8 +58,8 @@ Prove the architecture handles large-scale externally driven load without losing
 | SCALE-03 | Phase 18 | Pending |
 | SCALE-04 | Phase 18 | Pending |
 | SCALE-05 | Phase 18 | Pending |
-| SCALE-06 | Phase 19 | Pending |
-| SCALE-07 | Phase 19 | Pending |
+| SCALE-06 | Phase 19 | Complete |
+| SCALE-07 | Phase 19 | Complete |
 | SCALE-08 | Phase 20 | Pending |
 | SCALE-09 | Phase 20 | Pending |
 | SCALE-10 | Phase 21 | Pending |
