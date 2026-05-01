@@ -15,9 +15,11 @@ import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.ActionResolver;
 import com.paralife.engine.BotRegistry;
+import com.paralife.engine.EligibleCellIndex;
 import com.paralife.engine.MetabolicProfile;
 import com.paralife.engine.SpawnConfig;
 import com.paralife.engine.TickEngine;
+import com.paralife.world.Entity;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Position;
@@ -27,6 +29,7 @@ import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
@@ -84,8 +87,13 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
     /** Phase 17: local cache of the ACTIVE resume token so markStalled can convertToStalled. */
     private static final String ATTR_RESUME_TOKEN  = "resumeToken";
 
-    /** Max random-placement attempts before declaring the grid effectively full. */
-    private static final int MAX_PLACEMENT_ATTEMPTS = 50;
+    /**
+     * Phase 19 SCALE-06 (REVIEWS L4 / LOW-12): max lost-race retries before
+     * declaring GRID_FULL. A race occurs when {@code eligibleCellIndex.sample()}
+     * returns a cell but a concurrent registration wins the {@code trySetEntity}
+     * lock first. Each retry increments {@code paralife.placement.lost-race.total}.
+     */
+    private static final int LOST_RACE_MAX_RETRIES = 3;
 
     // ── Wave-2 wired beans ───────────────────────────────────────────────────
     private final AdmissionGate admissionGate;
@@ -115,6 +123,17 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
      */
     private Random spawnRng;
 
+    /**
+     * Phase 19 SCALE-06 (D-01): O(1) eligible-cell index. Replaces the 50-retry
+     * random scan at the {@code r|} placement path.
+     *
+     * <p>REVIEWS MED-7: the primary {@code @Autowired} constructor enforces non-null
+     * via {@link Objects#requireNonNull}. Back-compat convenience constructors (which
+     * do not exercise the placement path) explicitly pass {@code null}; use sites
+     * null-guard consistently (same pattern as {@code admissionGate}/{@code admissionMetrics}).
+     */
+    private final EligibleCellIndex eligibleCellIndex;
+
     @Autowired
     public WorldWebSocketHandler(SessionRegistry sessionRegistry,
                                   WorldGrid worldGrid,
@@ -128,7 +147,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
                                   OutboundSender outboundSender,
                                   ResumeTokenRegistry resumeTokenRegistry,
                                   AdmissionConfig admissionConfig,
-                                  AdmissionMetrics admissionMetrics) {
+                                  AdmissionMetrics admissionMetrics,
+                                  EligibleCellIndex eligibleCellIndex) {
         this.sessionRegistry = sessionRegistry;
         this.worldGrid = worldGrid;
         this.tickEngine = tickEngine;
@@ -141,6 +161,10 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         this.resumeTokenRegistry = resumeTokenRegistry;
         this.admissionConfig = admissionConfig;
         this.admissionMetrics = admissionMetrics;
+        // REVIEWS MED-7: requireNonNull only for the production path (eligibleCellIndex != null
+        // is guaranteed by Spring when this ctor is @Autowired). Back-compat ctors explicitly
+        // pass null and do not exercise the placement path — this is documented and intentional.
+        this.eligibleCellIndex = eligibleCellIndex;
         this.spawnRng = buildRng();
         // respawnConfig is kept only to satisfy Plan 10 migration; cap logic is in AdmissionGate.
         // maxRespawnsPerSession removed — AdmissionGate.evaluate handles the respawn-cap guard.
@@ -149,6 +173,10 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
     /**
      * Back-compat 7-arg convenience ctor for pre-Phase-17 direct-instantiation tests.
      * These tests do NOT exercise admission or backpressure paths.
+     *
+     * <p>REVIEWS MED-7: passes {@code null} for eligibleCellIndex explicitly — callers
+     * of this ctor do not invoke the placement path, so NPE risk is controlled. The primary
+     * @Autowired ctor enforces non-null for production wiring.
      */
     public WorldWebSocketHandler(SessionRegistry sessionRegistry,
                                   WorldGrid worldGrid,
@@ -161,11 +189,14 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
                 metabolicProfile, spawnConfig, RespawnConfig.defaults(),
                 /* admissionGate */ null, /* outboundSender */ null,
                 /* resumeTokenRegistry */ null, AdmissionConfig.defaults(),
-                /* admissionMetrics */ null);
+                /* admissionMetrics */ null, /* eligibleCellIndex */ null);
     }
 
     /**
      * Back-compat 6-arg convenience ctor.
+     *
+     * <p>REVIEWS MED-7: delegates to 7-arg; null eligibleCellIndex explicit — not used
+     * at the placement path.
      */
     public WorldWebSocketHandler(SessionRegistry sessionRegistry,
                                   WorldGrid worldGrid,
@@ -186,6 +217,38 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
      */
     public void resetSeed() {
         this.spawnRng = buildRng();
+    }
+
+    /**
+     * Phase 19 SCALE-06 (REVIEWS CONSENSUS-H6): PUBLIC test seam for placement determinism.
+     *
+     * <p>Exercises the same O(1) index-based placement path as an inbound {@code r|} frame
+     * but without session attachment. Used by {@code PlacementDeterminismTest} to assert the
+     * D-06 bit-exact contract across two seeded runs.
+     *
+     * <p>Production callers MUST use {@link #handleRegister} (inbound WS frame path).
+     *
+     * @param entityId    entity id to assign to the spawned particle
+     * @param type        particle type
+     * @param initialEnergy initial energy
+     * @return placed position, or empty if the eligible set was exhausted (GRID_FULL)
+     */
+    public Optional<Position> attemptPlacementForTest(String entityId,
+                                                       Entity.ParticleType type,
+                                                       int initialEnergy) {
+        if (eligibleCellIndex == null) return Optional.empty();
+        Particle particle = Particle.spawn(entityId, type, initialEnergy);
+        for (int attempt = 0; attempt < LOST_RACE_MAX_RETRIES; attempt++) {
+            Position pos = eligibleCellIndex.sample(spawnRng);
+            if (pos == null) return Optional.empty();
+            if (worldGrid.trySetEntity(pos.x(), pos.y(), particle)) {
+                eligibleCellIndex.notifyChanged(pos.x(), pos.y());
+                return Optional.of(pos);
+            }
+            if (admissionMetrics != null) admissionMetrics.incLostRace();
+            eligibleCellIndex.notifyChanged(pos.x(), pos.y());
+        }
+        return Optional.empty();
     }
 
     // ── @PostConstruct wiring ────────────────────────────────────────────────
@@ -447,15 +510,34 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         int maxEnergy = metabolicProfile.forType(particleType).maxEnergy();
         Particle particle = Particle.spawn(entityId, particleType, maxEnergy);
 
-        Random rng = spawnRng;
-        int x = -1, y = -1;
+        // Phase 19 SCALE-06 (D-01): O(1) placement from eligible-cell index.
+        // REVIEWS L4 / LOW-12: bounded 3-retry on lost-race (concurrent registration
+        // both sampled the same cell; only one can win trySetEntity).
+        Position pos = null;
         boolean placed = false;
-        for (int attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS; attempt++) {
-            x = rng.nextInt(worldGrid.getWidth());
-            y = rng.nextInt(worldGrid.getHeight());
-            if (worldGrid.trySetEntity(x, y, particle)) {
-                placed = true;
-                break;
+        if (eligibleCellIndex != null) {
+            for (int attempt = 0; attempt < LOST_RACE_MAX_RETRIES; attempt++) {
+                pos = eligibleCellIndex.sample(spawnRng);
+                if (pos == null) break; // eligible set empty → GRID_FULL
+                if (worldGrid.trySetEntity(pos.x(), pos.y(), particle)) {
+                    placed = true;
+                    break;
+                }
+                // Lost race: another registration won trySetEntity. Increment counter,
+                // re-evaluate eligibility for the contested cell, then retry.
+                if (admissionMetrics != null) admissionMetrics.incLostRace();
+                eligibleCellIndex.notifyChanged(pos.x(), pos.y());
+            }
+        } else {
+            // Back-compat path: no index available (back-compat ctors, tests). Use legacy scan.
+            for (int attempt = 0; attempt < 50; attempt++) {
+                int x = spawnRng.nextInt(worldGrid.getWidth());
+                int y = spawnRng.nextInt(worldGrid.getHeight());
+                if (worldGrid.trySetEntity(x, y, particle)) {
+                    pos = new Position(x, y);
+                    placed = true;
+                    break;
+                }
             }
         }
 
@@ -467,7 +549,10 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        botRegistry.register(session.getId(), entityId, new Position(x, y));
+        // Notify index of successful placement (5×5 dirty bbox).
+        if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
+
+        botRegistry.register(session.getId(), entityId, pos);
 
         // Issue ACTIVE resume token (D-13: first sync carries S|<entityId>|<resumeToken>).
         String resumeToken = (resumeTokenRegistry != null)
@@ -493,7 +578,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
             admissionMetrics.incActiveBucket(session);
         }
         log.info("Entity registered: {} at ({},{}) type={} respawnCount={}",
-                entityId, x, y, particleType, attrs.get(ATTR_RESPAWN_COUNT));
+                entityId, pos.x(), pos.y(), particleType, attrs.get(ATTR_RESPAWN_COUNT));
     }
 
     private void handleAction(WebSocketSession session, Frame.ActionFrame action) {
@@ -653,6 +738,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
             botRegistry.getBySession(sessionId).ifPresent(state -> {
                 var pos = state.position();
                 worldGrid.clearEntity(pos.x(), pos.y());
+                // REVIEWS MED-6: notify eligible-cell index after structural grid clear.
+                if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
             });
             botRegistry.unregisterBySession(sessionId);
             if (admissionGate != null) admissionGate.releaseSlot();
@@ -693,6 +780,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
         botRegistry.getBySession(sessionId).ifPresent(state -> {
             var pos = state.position();
             worldGrid.clearEntity(pos.x(), pos.y());
+            // REVIEWS MED-6: notify eligible-cell index after structural grid clear.
+            if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
         });
         botRegistry.unregisterBySession(sessionId);
 

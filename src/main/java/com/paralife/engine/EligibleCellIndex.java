@@ -7,7 +7,9 @@ import com.paralife.world.WorldGrid;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.DependsOn;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
@@ -57,7 +59,15 @@ public class EligibleCellIndex {
     private static final int DIRTY_BBOX_RADIUS = 2;
 
     private final WorldGrid worldGrid;
-    private final EnvironmentEngine environmentEngine;
+    /**
+     * Setter-injected to break the construction cycle:
+     * {@code EligibleCellIndex} → {@code EnvironmentEngine} → {@code DeathFinalizer}
+     * → {@code setEligibleCellIndex} → {@code EligibleCellIndex} (already in creation).
+     * Tests that construct {@code EligibleCellIndex} directly pass {@code environmentEngine}
+     * via the package-private 3-arg constructor — Spring uses the 2-arg {@code @Autowired}
+     * constructor plus this setter.
+     */
+    private EnvironmentEngine environmentEngine;
     private final SimulationConfig simulationConfig;
 
     private final int width;
@@ -68,9 +78,30 @@ public class EligibleCellIndex {
     private final int[] posInDense;
     private int size = 0;
 
-    public EligibleCellIndex(WorldGrid worldGrid,
-                             EnvironmentEngine environmentEngine,
-                             SimulationConfig simulationConfig) {
+    /**
+     * Spring-used constructor. {@link EnvironmentEngine} is injected via
+     * {@link #setEnvironmentEngine} after construction to break the circular dependency.
+     */
+    @Autowired
+    public EligibleCellIndex(WorldGrid worldGrid, SimulationConfig simulationConfig) {
+        this.worldGrid = worldGrid;
+        this.environmentEngine = null; // filled by setter before @PostConstruct
+        this.simulationConfig = simulationConfig;
+        this.width = worldGrid.getWidth();
+        this.height = worldGrid.getHeight();
+        int total = width * height;
+        this.dense = new int[total];
+        this.posInDense = new int[total];
+        Arrays.fill(posInDense, -1);
+    }
+
+    /**
+     * Package-private constructor for unit tests that supply the environment engine
+     * directly (avoids Spring context; tests in {@code com.paralife.engine} package).
+     */
+    EligibleCellIndex(WorldGrid worldGrid,
+                      EnvironmentEngine environmentEngine,
+                      SimulationConfig simulationConfig) {
         this.worldGrid = worldGrid;
         this.environmentEngine = environmentEngine;
         this.simulationConfig = simulationConfig;
@@ -82,9 +113,15 @@ public class EligibleCellIndex {
         Arrays.fill(posInDense, -1);
     }
 
+    @Autowired
+    public void setEnvironmentEngine(@Lazy EnvironmentEngine environmentEngine) {
+        this.environmentEngine = environmentEngine;
+    }
+
     @PostConstruct
     public void initialize() {
-        Map<Position, Byte> snap = environmentEngine.cellStatusCacheView();
+        Map<Position, Byte> snap = environmentEngine != null
+                ? environmentEngine.cellStatusCacheView() : Map.of();
         for (int x = 0; x < width; x++) {
             for (int y = 0; y < height; y++) {
                 if (evaluateEligibility(x, y, snap)) addInternal(x, y);
@@ -160,7 +197,8 @@ public class EligibleCellIndex {
      * is index-monitor → grid-read-lock and must not be inverted.
      */
     public synchronized void notifyChanged(int px, int py) {
-        Map<Position, Byte> hoistedCache = environmentEngine.cellStatusCacheView();
+        Map<Position, Byte> hoistedCache = environmentEngine != null
+                ? environmentEngine.cellStatusCacheView() : Map.of();
         for (int dy = -DIRTY_BBOX_RADIUS; dy <= DIRTY_BBOX_RADIUS; dy++) {
             for (int dx = -DIRTY_BBOX_RADIUS; dx <= DIRTY_BBOX_RADIUS; dx++) {
                 int cx = Math.floorMod(px + dx, width);

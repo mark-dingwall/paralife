@@ -7,6 +7,7 @@ import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -51,6 +52,20 @@ public class DeathFinalizer {
     private final SimulationEngine simulationEngine;
 
     /**
+     * Phase 19 SCALE-06 (REVIEWS MEDIUM-1): notify the eligible-cell index after
+     * structural grid clears (death removes occupant → cell may become eligible).
+     * Setter-injected (same pattern as {@code EnvironmentEngine} in {@code ActionResolver})
+     * so pre-Phase-19 unit tests that construct {@code DeathFinalizer} directly compile
+     * unchanged; those tests do not exercise the placement path.
+     */
+    private EligibleCellIndex eligibleCellIndex;
+
+    @Autowired(required = false)
+    public void setEligibleCellIndex(@Lazy EligibleCellIndex eligibleCellIndex) {
+        this.eligibleCellIndex = eligibleCellIndex;
+    }
+
+    /**
      * Plan 14-06 Task 1: monotonic counter of death-finalize events. Increments
      * at the TOP of each finalize* method BEFORE collaborator calls, so the
      * counter reflects "a death was attempted" even if a downstream exception
@@ -86,6 +101,8 @@ public class DeathFinalizer {
         hooks.clearInfectionOnDeath(id);
         hooks.applyCompost(new Position(x, y));
         worldGrid.clearEntity(x, y);
+        // REVIEWS MEDIUM-1 / Phase 19 SCALE-06: STRUCTURAL clear — notify eligible-cell index.
+        if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(x, y);
         log.debug("Particle death finalised: id={} pos=({},{})", id, x, y);
     }
 
@@ -111,6 +128,8 @@ public class DeathFinalizer {
 
         hooks.applyCompost(new Position(x, y));
         worldGrid.clearEntity(x, y);
+        // REVIEWS MEDIUM-1 / Phase 19 SCALE-06: STRUCTURAL clear — notify eligible-cell index.
+        if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(x, y);
         log.debug("BondedPair death finalised: bp={} primary={} secondary={} pos=({},{})",
                 bp.id(), primaryId, secondaryId, x, y);
     }

@@ -68,6 +68,8 @@ public class AdmissionMetrics {
     public static final String M_REBOUND            = "paralife.backpressure.rebound";
     public static final String M_TERMINAL_DROPOUT   = "paralife.backpressure.terminal.dropouts";
     public static final String M_STALLED_TOTAL      = "paralife.backpressure.stalled.total";
+    /** Phase 19 SCALE-06 (REVIEWS LOW-12): bounded lost-race retries counter. */
+    public static final String M_PLACEMENT_LOST_RACE = "paralife.placement.lost-race.total";
 
     /** Session attribute key for entity id — shared constant for callers that need it. */
     public static final String ATTR_ENTITY_ID = "entityId";
@@ -103,6 +105,8 @@ public class AdmissionMetrics {
     private final Counter terminalDropouts;
     private final Counter stalledTotal;
     private final DistributionSummary frameSize;
+    /** Phase 19 SCALE-06 (REVIEWS LOW-12): placement lost-race counter. */
+    private final Counter lostRace;
 
     // ── Constructor ──────────────────────────────────────────────────────────
 
@@ -159,6 +163,10 @@ public class AdmissionMetrics {
         this.frameSize = DistributionSummary.builder(M_FRAME_SIZE)
                 .description("Encoded outbound frame size in bytes")
                 .baseUnit("bytes")
+                .register(registry);
+        // Phase 19 SCALE-06 (REVIEWS LOW-12): placement lost-race retry counter.
+        this.lostRace = Counter.builder(M_PLACEMENT_LOST_RACE)
+                .description("Placement: sampled cell lost the trySetEntity race (bounded 3-retry)")
                 .register(registry);
     }
 
@@ -397,6 +405,9 @@ public class AdmissionMetrics {
     }
 
     // ── Scalar counters ──────────────────────────────────────────────────────
+
+    /** Phase 19 SCALE-06 (REVIEWS LOW-12): increment when placement loses the trySetEntity race. */
+    public void incLostRace()         { lostRace.increment(); }
 
     /** Increment when a STALLED session reconnects and rebinds its entity. */
     public void incRebound()          { rebound.increment(); }

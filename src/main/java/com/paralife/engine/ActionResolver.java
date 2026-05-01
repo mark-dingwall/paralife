@@ -13,6 +13,7 @@ import com.paralife.world.WorldGrid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
@@ -98,6 +99,14 @@ public class ActionResolver {
      * so tests that don't set it see the pure combat behavior.
      */
     private EnvironmentEngine environmentEngine;
+
+    /**
+     * Phase 19 SCALE-06 (REVIEWS MEDIUM-1): notify eligible-cell index at STRUCTURAL
+     * grid mutations only. Setter-injected so pre-Phase-19 unit tests that construct
+     * {@code ActionResolver} directly continue to compile unchanged.
+     * Guarded on null at every hook site.
+     */
+    private EligibleCellIndex eligibleCellIndex;
 
     /**
      * Plan 14-05: BuffRegistry read surface for buff effect application.
@@ -215,6 +224,14 @@ public class ActionResolver {
     @Autowired(required = false)
     public void setEnvironmentEngine(@org.springframework.context.annotation.Lazy EnvironmentEngine environmentEngine) {
         this.environmentEngine = environmentEngine;
+    }
+
+    /**
+     * Phase 19 SCALE-06: setter-inject {@link EligibleCellIndex} (REVIEWS MEDIUM-1).
+     */
+    @Autowired(required = false)
+    public void setEligibleCellIndex(@Lazy EligibleCellIndex eligibleCellIndex) {
+        this.eligibleCellIndex = eligibleCellIndex;
     }
 
     /**
@@ -481,6 +498,8 @@ public class ActionResolver {
 
         claimedCells.add(target);
         worldGrid.clearEntity(ra.bot.position().x(), ra.bot.position().y());
+        // Phase 19 SCALE-06 — STRUCTURAL: entity moved away from source cell.
+        if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(ra.bot.position().x(), ra.bot.position().y());
 
         Particle placed = ra.particle;
         if (targetCell.occupant() instanceof Nutrient) {
@@ -495,6 +514,8 @@ public class ActionResolver {
             placed = ra.particle.withEnergy(ra.particle.energy() + energyGain);
         }
         worldGrid.setEntity(target.x(), target.y(), placed);
+        // Phase 19 SCALE-06 — STRUCTURAL: entity placed at target cell.
+        if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
         botRegistry.updatePosition(ra.sessionId, target);
         return true;
     }
@@ -532,8 +553,12 @@ public class ActionResolver {
         Nutrient depleted = nutrient.consumed(energyGain);
         if (depleted.isDepleted()) {
             worldGrid.clearEntity(nutrientPos.x(), nutrientPos.y());
+            // Phase 19 SCALE-06 — STRUCTURAL: nutrient fully consumed, cell vacated.
+            if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(nutrientPos.x(), nutrientPos.y());
         } else {
             worldGrid.setEntity(nutrientPos.x(), nutrientPos.y(), depleted);
+            // Phase 19 SCALE-06 — STRUCTURAL: nutrient replaced with depleted instance.
+            if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(nutrientPos.x(), nutrientPos.y());
         }
     }
 
@@ -567,8 +592,11 @@ public class ActionResolver {
         Particle child = new Particle(childId, ra.particle.type(),
                 profile.childStartEnergy(), profile.maxEnergy());
         worldGrid.setEntity(target.x(), target.y(), child);
+        // Phase 19 SCALE-06 — STRUCTURAL: child spawned at target.
+        if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
 
         Particle updatedParent = ra.particle.withEnergy(ra.particle.energy() - reproduceCost);
+        // Energy-only update — EXCLUDED from notifyChanged (REVIEWS MEDIUM-1).
         worldGrid.setEntity(ra.bot.position().x(), ra.bot.position().y(), updatedParent);
 
         lastReproducedTick.put(ra.particle.id(), tickNumber);
@@ -580,6 +608,8 @@ public class ActionResolver {
                 Particle bonusChild = new Particle(bonusChildId, ra.particle.type(),
                         profile.childStartEnergy(), profile.maxEnergy());
                 worldGrid.setEntity(bonusTarget.x(), bonusTarget.y(), bonusChild);
+                // Phase 19 SCALE-06 — STRUCTURAL: bonus child spawned.
+                if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(bonusTarget.x(), bonusTarget.y());
                 claimedCells.add(bonusTarget);
             }
         }
@@ -632,8 +662,12 @@ public class ActionResolver {
         Nutrient depleted = nutrient.consumed(energyGain);
         if (depleted.isDepleted()) {
             worldGrid.clearEntity(nutrientPos.x(), nutrientPos.y());
+            // Phase 19 SCALE-06 — STRUCTURAL: nutrient fully consumed by feeder.
+            if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(nutrientPos.x(), nutrientPos.y());
         } else {
             worldGrid.setEntity(nutrientPos.x(), nutrientPos.y(), depleted);
+            // Phase 19 SCALE-06 — STRUCTURAL: nutrient replaced with depleted instance (feeder).
+            if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(nutrientPos.x(), nutrientPos.y());
         }
 
         int feederDrained = composite.drainEnergy(compositeConfig.feederActiveDrain());
@@ -751,6 +785,8 @@ public class ActionResolver {
         Particle child = new Particle(childId, rca.member.type(),
                 profile.childStartEnergy(), profile.maxEnergy());
         worldGrid.setEntity(target.x(), target.y(), child);
+        // Phase 19 SCALE-06 — STRUCTURAL: composite-reproducer child spawned.
+        if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
 
         int reproduceCostDrained = composite.drainEnergy(reproduceCost);
         if (reproduceCostDrained < reproduceCost) {
@@ -960,12 +996,16 @@ public class ActionResolver {
 
         for (Position pos : currentPositions) {
             worldGrid.clearEntity(pos.x(), pos.y());
+            // Phase 19 SCALE-06 — STRUCTURAL: composite member cleared from source.
+            if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
         }
         Map<String, Position> newPositions = new HashMap<>();
         for (int i = 0; i < targetPositions.size(); i++) {
             Position target = targetPositions.get(i);
             Entity.CompositeMember member = members.get(i);
             worldGrid.setEntity(target.x(), target.y(), member);
+            // Phase 19 SCALE-06 — STRUCTURAL: composite member placed at target.
+            if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
 
             botRegistry.getSessionForEntity(member.id()).ifPresent(sid ->
                     botRegistry.updatePosition(sid, target));

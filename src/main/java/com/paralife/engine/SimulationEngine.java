@@ -10,6 +10,8 @@ import com.paralife.world.WorldGrid;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
@@ -107,6 +109,14 @@ public class SimulationEngine {
      * safe — no volatile or AtomicReference needed.
      */
     private Random simRng;
+
+    /**
+     * Phase 19 SCALE-06 (REVIEWS MEDIUM-1): notify eligible-cell index at STRUCTURAL
+     * grid mutations only. Setter-injected so pre-Phase-19 unit tests that construct
+     * {@code SimulationEngine} directly continue to compile unchanged.
+     * Guarded on null at every hook site.
+     */
+    private EligibleCellIndex eligibleCellIndex;
 
     @org.springframework.beans.factory.annotation.Autowired
     public SimulationEngine(WorldGrid worldGrid, SimulationConfig config,
@@ -213,6 +223,15 @@ public class SimulationEngine {
      */
     public void resetSeed() {
         this.simRng = buildRng();
+    }
+
+    /**
+     * Phase 19 SCALE-06: setter-inject {@link EligibleCellIndex} (REVIEWS MEDIUM-1).
+     * Spring auto-wires this; pre-Phase-19 unit tests that don't set it see null-guarded no-op hooks.
+     */
+    @Autowired(required = false)
+    public void setEligibleCellIndex(@Lazy EligibleCellIndex eligibleCellIndex) {
+        this.eligibleCellIndex = eligibleCellIndex;
     }
 
     public int getLastTickBondCount() {
@@ -587,7 +606,11 @@ public class SimulationEngine {
                         simRng
                 );
                 worldGrid.setEntity(bond.primaryPos.x(), bond.primaryPos.y(), bondedPair);
+                // Phase 19 SCALE-06 — STRUCTURAL: bond formed at primary position.
+                if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(bond.primaryPos.x(), bond.primaryPos.y());
                 worldGrid.clearEntity(bond.secondaryPos.x(), bond.secondaryPos.y());
+                // Phase 19 SCALE-06 — STRUCTURAL: secondary position vacated (absorbed into bond).
+                if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(bond.secondaryPos.x(), bond.secondaryPos.y());
                 claimedForBonding.add(bond.primaryPos);
                 claimedForBonding.add(bond.secondaryPos);
                 // Phase 16 Plan 02 D-14: emergence signal (bonded-pair formed).
@@ -649,7 +672,11 @@ public class SimulationEngine {
 
                 // Place on grid
                 worldGrid.setEntity(cf.pos1().x(), cf.pos1().y(), member1);
+                // Phase 19 SCALE-06 — STRUCTURAL: composite member placed at pos1.
+                if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(cf.pos1().x(), cf.pos1().y());
                 worldGrid.setEntity(cf.pos2().x(), cf.pos2().y(), member2);
+                // Phase 19 SCALE-06 — STRUCTURAL: composite member placed at pos2.
+                if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(cf.pos2().x(), cf.pos2().y());
                 // Phase 16 Plan 02 D-14: emergence signal (composite formed).
                 emergenceMetrics.incComposite();
                 log.info("EMERGENCE composite-formed tick={} size=2 compositeId={} role-mix=[{},{}]",
@@ -975,6 +1002,8 @@ public class SimulationEngine {
         hooks.clearInfectionOnDeath(id);
         hooks.applyCompost(pos);
         worldGrid.clearEntity(pos.x(), pos.y());
+        // Phase 19 SCALE-06 — STRUCTURAL: composite member cell cleared.
+        if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
     }
 
     /**
@@ -1049,6 +1078,8 @@ public class SimulationEngine {
                     "bp-" + cm.id(), cm.type(), cm.type(), cm.energy(), cm.maxEnergy(),
                     cm.id(), cm.id());
             worldGrid.setEntity(pos.x(), pos.y(), bondedPair);
+            // Phase 19 SCALE-06 — STRUCTURAL: composite reverted to bonded-pair.
+            if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
 
             // Update BotRegistry: remap session from CompositeMember to BondedPair
             botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId ->
@@ -1096,6 +1127,8 @@ public class SimulationEngine {
             if (cell.occupant() instanceof Entity.CompositeMember cm) {
                 var particle = new Particle(cm.id() + "-p", cm.type(), cm.energy(), cm.maxEnergy());
                 worldGrid.setEntity(pos.x(), pos.y(), particle);
+                // Phase 19 SCALE-06 — STRUCTURAL: composite dissolved, particle placed.
+                if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
 
                 // Remap session from CompositeMember to new Particle
                 botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId ->
@@ -1137,6 +1170,8 @@ public class SimulationEngine {
                     buffRegistry.unregisterEntity(memberId);
                     hooks.clearInfectionOnDeath(memberId);
                     worldGrid.clearEntity(pos.x(), pos.y());
+                    // Phase 19 SCALE-06 — STRUCTURAL: panic-zone total-death clear.
+                    if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
                 }
             }
             compositeRegistry.dissolve(composite.getCompositeId());
@@ -1183,6 +1218,8 @@ public class SimulationEngine {
                 if (rng.nextDouble() < effectiveRate) {
                     String id = "nutrient-" + nutrientIdCounter.incrementAndGet();
                     worldGrid.setEntity(x, y, Nutrient.spawn(id));
+                    // Phase 19 SCALE-06 — STRUCTURAL: nutrient spawned, cell now occupied.
+                    if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(x, y);
                     spawned++;
                 }
             }
