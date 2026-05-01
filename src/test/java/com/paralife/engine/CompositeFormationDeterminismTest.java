@@ -117,6 +117,8 @@ class CompositeFormationDeterminismTest {
     @Autowired EmergenceMetrics emergenceMetrics;
     @Autowired ApplicationEventPublisher publisher;
     @Autowired MeterRegistry meterRegistry;
+    /** Phase 19 Plan 04: registry must be cleared between runs and entities registered. */
+    @Autowired LiveEntityRegistry liveEntityRegistry;
 
     // Config autowires for REVIEWS HIGH #4 master-seed fail-fast binding check:
     @Autowired SimulationConfig simulationConfig;
@@ -175,6 +177,7 @@ class CompositeFormationDeterminismTest {
         compositeRegistry.clear();
         buffRegistry.clear();
         botRegistry.clear();
+        liveEntityRegistry.clearForTest(); // Phase 19 Plan 04: must clear between runs
         environmentEngine.resetForTest();
         deathFinalizer.resetCountForTest();
 
@@ -256,19 +259,23 @@ class CompositeFormationDeterminismTest {
         };
         for (int[] c : clusters) {
             // Two Catalyst attackers
+            String catId1 = "c-" + c[0] + "-" + c[1];
+            String catId2 = "c-" + c[2] + "-" + c[3];
+            String spoId1 = "s-" + c[4] + "-" + c[5];
+            String spoId2 = "s-" + c[6] + "-" + c[7];
             worldGrid.setEntity(c[0], c[1],
-                    new Entity.Particle("c-" + c[0] + "-" + c[1],
-                            Entity.ParticleType.CATALYST, 80, 100));
+                    new Entity.Particle(catId1, Entity.ParticleType.CATALYST, 80, 100));
+            liveEntityRegistry.register(catId1, new com.paralife.world.Position(c[0], c[1]), java.util.Optional.empty());
             worldGrid.setEntity(c[2], c[3],
-                    new Entity.Particle("c-" + c[2] + "-" + c[3],
-                            Entity.ParticleType.CATALYST, 80, 100));
+                    new Entity.Particle(catId2, Entity.ParticleType.CATALYST, 80, 100));
+            liveEntityRegistry.register(catId2, new com.paralife.world.Position(c[2], c[3]), java.util.Optional.empty());
             // Two Spore prey (Catalyst beats Spore per ParticleType.prey)
             worldGrid.setEntity(c[4], c[5],
-                    new Entity.Particle("s-" + c[4] + "-" + c[5],
-                            Entity.ParticleType.SPORE, 80, 100));
+                    new Entity.Particle(spoId1, Entity.ParticleType.SPORE, 80, 100));
+            liveEntityRegistry.register(spoId1, new com.paralife.world.Position(c[4], c[5]), java.util.Optional.empty());
             worldGrid.setEntity(c[6], c[7],
-                    new Entity.Particle("s-" + c[6] + "-" + c[7],
-                            Entity.ParticleType.SPORE, 80, 100));
+                    new Entity.Particle(spoId2, Entity.ParticleType.SPORE, 80, 100));
+            liveEntityRegistry.register(spoId2, new com.paralife.world.Position(c[6], c[7]), java.util.Optional.empty());
         }
     }
 
@@ -401,12 +408,15 @@ class CompositeFormationDeterminismTest {
         @Autowired DeathFinalizer deathFinalizer;
         @Autowired EmergenceMetrics emergenceMetrics;
         @Autowired ApplicationEventPublisher publisher;
+        /** Phase 19 Plan 04: registry must be cleared between runs and entities registered. */
+        @Autowired LiveEntityRegistry liveEntityRegistry;
 
         private void resetAllSeedsBetweenRuns() {
             worldGrid.clear();
             compositeRegistry.clear();
             buffRegistry.clear();
             botRegistry.clear();
+            liveEntityRegistry.clearForTest(); // Phase 19 Plan 04: must clear between runs
             environmentEngine.resetForTest();
             deathFinalizer.resetCountForTest();
             simulationEngine.resetSeed();
@@ -427,18 +437,22 @@ class CompositeFormationDeterminismTest {
                     { 22, 20, 23, 20,    22, 21, 23, 21 },
             };
             for (int[] c : clusters) {
+                String catId1 = "c-" + c[0] + "-" + c[1];
+                String catId2 = "c-" + c[2] + "-" + c[3];
+                String spoId1 = "s-" + c[4] + "-" + c[5];
+                String spoId2 = "s-" + c[6] + "-" + c[7];
                 worldGrid.setEntity(c[0], c[1],
-                        new Entity.Particle("c-" + c[0] + "-" + c[1],
-                                Entity.ParticleType.CATALYST, 80, 100));
+                        new Entity.Particle(catId1, Entity.ParticleType.CATALYST, 80, 100));
+                liveEntityRegistry.register(catId1, new com.paralife.world.Position(c[0], c[1]), java.util.Optional.empty());
                 worldGrid.setEntity(c[2], c[3],
-                        new Entity.Particle("c-" + c[2] + "-" + c[3],
-                                Entity.ParticleType.CATALYST, 80, 100));
+                        new Entity.Particle(catId2, Entity.ParticleType.CATALYST, 80, 100));
+                liveEntityRegistry.register(catId2, new com.paralife.world.Position(c[2], c[3]), java.util.Optional.empty());
                 worldGrid.setEntity(c[4], c[5],
-                        new Entity.Particle("s-" + c[4] + "-" + c[5],
-                                Entity.ParticleType.SPORE, 80, 100));
+                        new Entity.Particle(spoId1, Entity.ParticleType.SPORE, 80, 100));
+                liveEntityRegistry.register(spoId1, new com.paralife.world.Position(c[4], c[5]), java.util.Optional.empty());
                 worldGrid.setEntity(c[6], c[7],
-                        new Entity.Particle("s-" + c[6] + "-" + c[7],
-                                Entity.ParticleType.SPORE, 80, 100));
+                        new Entity.Particle(spoId2, Entity.ParticleType.SPORE, 80, 100));
+                liveEntityRegistry.register(spoId2, new com.paralife.world.Position(c[6], c[7]), java.util.Optional.empty());
             }
         }
 

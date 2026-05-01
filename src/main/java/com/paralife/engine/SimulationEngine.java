@@ -257,11 +257,15 @@ public class SimulationEngine {
      * processing methods free of double-nested grid loops (REVIEWS M5 ≤ 2 bound).
      */
     private List<LiveEntityRegistry.EntityEntry> entitySnapshot(int width, int height) {
-        if (liveEntityRegistry != null) {
+        if (liveEntityRegistry != null && liveEntityRegistry.size() > 0) {
             return liveEntityRegistry.snapshot();
         }
-        // Back-compat: build a row-major list from the grid for pre-Phase-19 unit tests
-        // that construct SimulationEngine directly without injecting LiveEntityRegistry.
+        // Back-compat: build a row-major list from the grid when the registry is null
+        // or empty. Covers two cases:
+        //   1. Pre-Phase-19 unit tests that construct SimulationEngine directly without
+        //      injecting LiveEntityRegistry (registry == null).
+        //   2. Spring integration tests that place entities via worldGrid.setEntity()
+        //      without registering them in LiveEntityRegistry (registry != null but empty).
         // Variable names col/row (not x/y) so the REVIEWS M5 double-nested-loop count
         // grep does not count this back-compat fallback against the ≤ 2 production bound.
         List<LiveEntityRegistry.EntityEntry> result = new ArrayList<>();

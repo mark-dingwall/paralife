@@ -670,18 +670,34 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         int w = worldGrid.getWidth();
         int h = worldGrid.getHeight();
 
-        // Phase A — single grid pass building entityId → (Position, Entity) index.
+        // Phase A — build entityId → (Position, Entity) index.
+        // Phase 19 SCALE-07: entity-list iteration replaces O(width*height) grid scan.
+        // Falls back to grid scan when registry is null or empty (back-compat for
+        // Spring integration tests that place entities without registering them).
         Map<String, Position> entityPositions = new HashMap<>();
         Map<String, Entity> entitySnapshot = new HashMap<>();
-        for (int x = 0; x < w; x++) {
-            for (int y = 0; y < h; y++) {
+        if (liveEntityRegistry != null && liveEntityRegistry.size() > 0) {
+            for (LiveEntityRegistry.EntityEntry entry : liveEntityRegistry.snapshot()) {
                 gridReadCountForTest++;
-                Cell cell = worldGrid.getCell(x, y);
+                Cell cell = worldGrid.getCell(entry.position().x(), entry.position().y());
                 Entity occ = cell.occupant();
                 String id = EntityIds.entityIdOf(occ);
                 if (id != null) {
-                    entityPositions.put(id, new Position(x, y));
+                    entityPositions.put(id, entry.position());
                     entitySnapshot.put(id, occ);
+                }
+            }
+        } else {
+            for (int col = 0; col < w; col++) {
+                for (int row = 0; row < h; row++) {
+                    gridReadCountForTest++;
+                    Cell cell = worldGrid.getCell(col, row);
+                    Entity occ = cell.occupant();
+                    String id = EntityIds.entityIdOf(occ);
+                    if (id != null) {
+                        entityPositions.put(id, new Position(col, row));
+                        entitySnapshot.put(id, occ);
+                    }
                 }
             }
         }
@@ -947,17 +963,31 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             entityStatusCache.put(id, merged);
         }
 
-        // Entity BUFFED bits for any entity with active buffs. Build by scanning
-        // a grid pass — BuffRegistry lookups are O(1) per id.
-        for (int x = 0; x < w; x++) {
-            for (int y = 0; y < h; y++) {
-                Cell cell = worldGrid.getCell(x, y);
+        // Entity BUFFED bits for any entity with active buffs.
+        // Phase 19 SCALE-07: entity-list iteration replaces O(width*height) grid scan.
+        // Falls back to grid scan when registry is null or empty (back-compat).
+        // BuffRegistry lookups are O(1) per id.
+        if (liveEntityRegistry != null && liveEntityRegistry.size() > 0) {
+            for (LiveEntityRegistry.EntityEntry entry : liveEntityRegistry.snapshot()) {
+                Cell cell = worldGrid.getCell(entry.position().x(), entry.position().y());
                 String id = EntityIds.entityIdOf(cell.occupant());
                 if (id == null) continue;
                 if (buffRegistry.getBuffs(id).isEmpty()) continue;
                 Byte prior = entityStatusCache.get(id);
                 byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_BUFFED);
                 entityStatusCache.put(id, merged);
+            }
+        } else {
+            for (int col = 0; col < w; col++) {
+                for (int row = 0; row < h; row++) {
+                    Cell cell = worldGrid.getCell(col, row);
+                    String id = EntityIds.entityIdOf(cell.occupant());
+                    if (id == null) continue;
+                    if (buffRegistry.getBuffs(id).isEmpty()) continue;
+                    Byte prior = entityStatusCache.get(id);
+                    byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_BUFFED);
+                    entityStatusCache.put(id, merged);
+                }
             }
         }
 
