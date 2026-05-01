@@ -104,6 +104,18 @@ Plans:
 - The tuned system still passes the existing protocol and regression tests.
 - Operators have concrete configuration guidance for benchmark runs.
 
+### Phase 20.1: Restore Composite Vision (SENSOR-stitched perception)
+**Goal:** Restore the SENSOR-based stitched perception that Phase 12 designed and Phase 15's protocol overhaul dropped, so SENSOR role members produce tangible value to their composite — extended FOV that informs LOCOMOTOR voting and AUTHORITY_LITE tactical decisions, rather than rest-acting passively.
+**Depends on:** Phase 19 (golden-trace equivalence gate must exist before perception semantics change), Phase 20 (avoid colliding with transport tuning churn)
+**Requirements:** None — post-Phase-15 design recovery; no SCALE-* assignment
+**Plans:** 0 plans
+**Success Criteria:**
+- LOCOMOTOR's tick frame carries a stitched neighbourhood derived from the union of SENSOR member 5×5 cells, deduplicated and deterministically ordered.
+- Composite without any SENSOR member retains today's per-member FULL / AUTHORITY_LITE / PASSIVE behaviour (no regression).
+- D-10 byte-for-byte equivalence is intentionally re-baselined for scenarios containing composites with SENSORs; new golden-trace digests are regenerated and pinned.
+- Tests verify that adding a SENSOR strictly widens (never shrinks) LOCOMOTOR's visible cells, and that SENSORs themselves remain PASSIVE on the wire.
+- Must land before M5 (Observability & Operations) so the live world visualiser exposes faithful colony perception, not a stub.
+
 ### Phase 21: Scale Benchmark Gate & Reports
 **Goal:** Close M4 with repeatable benchmark evidence for 100, 500, and 1000+ bot runs, including throughput, stability, and tick-health reporting.
 **Depends on:** Phase 20 (all scale-path implementation and tuning work complete)
