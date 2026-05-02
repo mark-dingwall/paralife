@@ -705,8 +705,12 @@ public class SimulationEngine {
                 String predatorSessionId = botRegistry.getSessionForEntity(bond.predator.id()).orElse(null);
                 String preySessionId = botRegistry.getSessionForEntity(bond.prey.id()).orElse(null);
                 if (preySessionId != null) {
-                    // Prey's bot loses its entity on bond formation — clean unregister to avoid ghost.
-                    botRegistry.unregisterByEntity(bond.prey.id());
+                    // Prey's bot loses its entity on bond formation — clean unregister to avoid
+                    // ghost. Use unregisterBySession (NOT unregisterByEntity) because bonding is
+                    // not death: unregisterByEntity queues a DeathNotice that TickBroadcaster
+                    // would drain into a spurious vD frame for the prey's session, breaking the
+                    // GoldenTrace dual-run digest gate (extra emit on the prey's session).
+                    botRegistry.unregisterBySession(preySessionId);
                 }
                 if (predatorSessionId != null) {
                     botRegistry.remapEntity(predatorSessionId, bondedPair.id());

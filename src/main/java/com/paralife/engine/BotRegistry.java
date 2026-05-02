@@ -226,9 +226,19 @@ public class BotRegistry {
 
     /**
      * Clear all registrations (for testing).
+     *
+     * <p>Phase 19.5: also drains {@link #deathsThisTick}. Prior to this fix, a bond
+     * formation that queued a death notice via {@link #unregisterByEntity} could
+     * leak across {@code resetAll()} boundaries in
+     * {@code GoldenTraceEquivalenceTest} — the next run drained a stale notice on
+     * its first tick, producing an off-by-one emit count vs run 1 (intermittent
+     * because timing of when the broadcaster drained it varied).
      */
     public void clear() {
         bySession.clear();
         entityToSession.clear();
+        synchronized (deathsThisTick) {
+            deathsThisTick.clear();
+        }
     }
 }
