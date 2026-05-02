@@ -249,6 +249,21 @@ public class SimulationEngine {
     }
 
     /**
+     * Phase 19.5 H2: callback fired immediately after bond-formation registry
+     * remap. Implementer (production: {@code WorldWebSocketHandler}) updates the
+     * predator session's {@code ATTR_ENTITY_ID} attribute to {@code bondedPair.id()}
+     * so subsequent {@code cleanupBot} unregistration reaches the right
+     * {@link LiveEntityRegistry} entry. Setter-injected and null-guarded so
+     * pre-Phase-19.5 unit tests compile unchanged.
+     */
+    private BondLifecycleListener bondLifecycleListener;
+
+    @Autowired(required = false)
+    public void setBondLifecycleListener(@Lazy BondLifecycleListener bondLifecycleListener) {
+        this.bondLifecycleListener = bondLifecycleListener;
+    }
+
+    /**
      * Phase 19 SCALE-07: returns a row-major-sorted entity snapshot for per-entity
      * iteration. When {@link #liveEntityRegistry} is injected (Spring production path),
      * delegates to {@link LiveEntityRegistry#snapshot()}. Falls back to a single
@@ -654,6 +669,25 @@ public class SimulationEngine {
                     liveEntityRegistry.unregister(bond.predator.id());
                     liveEntityRegistry.unregister(bond.prey.id());
                     liveEntityRegistry.register(bondedPair.id(), bond.primaryPos, java.util.Optional.empty());
+                }
+                // Phase 19.5 H2: keep BotRegistry + session attribute consistent with the
+                // LiveEntityRegistry remap above. Per CLAUDE.md Phase 18 D-05/D-21
+                // (WS:entity 1:1) the BondedPair is one entity controlled by the predator's
+                // surviving session; prey's session is unregistered. Without this, a
+                // predator-session disconnect before the BondedPair dies leaks the
+                // bondedPair.id() entry in LiveEntityRegistry until BondedPair death
+                // (cleanupBot would call liveEntityRegistry.unregister(predator.id()) — a no-op).
+                String predatorSessionId = botRegistry.getSessionForEntity(bond.predator.id()).orElse(null);
+                String preySessionId = botRegistry.getSessionForEntity(bond.prey.id()).orElse(null);
+                if (preySessionId != null) {
+                    // Prey's bot loses its entity on bond formation — clean unregister to avoid ghost.
+                    botRegistry.unregisterByEntity(bond.prey.id());
+                }
+                if (predatorSessionId != null) {
+                    botRegistry.remapEntity(predatorSessionId, bondedPair.id());
+                    if (bondLifecycleListener != null) {
+                        bondLifecycleListener.onBondFormed(predatorSessionId, bondedPair.id());
+                    }
                 }
                 worldGrid.setEntity(bond.primaryPos.x(), bond.primaryPos.y(), bondedPair);
                 // Phase 19 SCALE-06 — STRUCTURAL: bond formed at primary position.

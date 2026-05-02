@@ -134,6 +134,27 @@ public class BotRegistry {
     }
 
     /**
+     * Phase 19.5 H2: remap a bot's entity ID for the predator's surviving session
+     * at bond formation. Preserves the position from the existing BotState (the
+     * BondedPair occupies the predator's primary cell). No-op if the session has
+     * no prior registration (predator may already have disconnected).
+     *
+     * <p>WS:entity 1:1 (CLAUDE.md Phase 18 D-05/D-21): exactly one session controls
+     * the resulting BondedPair — the predator's. Prey's session, if present, must
+     * have been unregistered separately by the caller.
+     */
+    public void remapEntity(String sessionId, String newEntityId) {
+        var old = bySession.get(sessionId);
+        if (old == null) return;
+        entityToSession.remove(old.entityId());
+        var state = new BotState(sessionId, newEntityId, old.position());
+        bySession.put(sessionId, state);
+        entityToSession.put(newEntityId, sessionId);
+        log.debug("Bot remapped (predator-survives): session={} newEntity={} pos={}",
+                sessionId, newEntityId, old.position());
+    }
+
+    /**
      * Get the bot state for a session, if registered.
      */
     public Optional<BotState> getBySession(String sessionId) {

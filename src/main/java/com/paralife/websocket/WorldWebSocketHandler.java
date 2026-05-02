@@ -14,6 +14,7 @@ import com.paralife.codec.CodecException;
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.ActionResolver;
+import com.paralife.engine.BondLifecycleListener;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.EligibleCellIndex;
 import com.paralife.engine.LiveEntityRegistry;
@@ -75,7 +76,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
  * {@code synchronized(session)} — guaranteed delivery even when the queue is saturated.
  */
 @Component
-public class WorldWebSocketHandler extends TextWebSocketHandler {
+public class WorldWebSocketHandler extends TextWebSocketHandler implements BondLifecycleListener {
 
     private static final Logger log = LoggerFactory.getLogger(WorldWebSocketHandler.class);
 
@@ -777,6 +778,30 @@ public class WorldWebSocketHandler extends TextWebSocketHandler {
      * <p>Idempotent: relies on the {@code ATTR_ENTITY_TYPE} marker for "wasRegistered" detection,
      * so a second invocation on the same session is a no-op.
      */
+    /**
+     * Phase 19.5 H2 — {@link BondLifecycleListener} callback fired by
+     * {@code SimulationEngine} immediately after bond-formation registry remap.
+     * Updates the predator session's {@code ATTR_ENTITY_ID} attribute to the
+     * BondedPair's id so subsequent {@link #cleanupBot(WebSocketSession)}
+     * unregistration reaches the correct {@link LiveEntityRegistry} entry.
+     *
+     * <p>If the predator's session is no longer present (already disconnected
+     * before the bond formed), this is a no-op — the registry remap is still
+     * correct and the next tick will clean up the orphan via the registry-driven
+     * cleanup paths.
+     */
+    @Override
+    public void onBondFormed(String predatorSessionId, String bondedPairId) {
+        WebSocketSession session = sessionRegistry.getSession(predatorSessionId);
+        if (session == null) {
+            log.debug("onBondFormed: predator session {} no longer present — skipping attr update",
+                    predatorSessionId);
+            return;
+        }
+        session.getAttributes().put(ATTR_ENTITY_ID, bondedPairId);
+        log.debug("onBondFormed: session={} ATTR_ENTITY_ID -> {}", predatorSessionId, bondedPairId);
+    }
+
     public void cleanupBot(WebSocketSession s) {
         if (s == null) return;
         String sessionId = s.getId();
