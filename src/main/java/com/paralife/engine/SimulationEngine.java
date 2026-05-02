@@ -289,7 +289,15 @@ public class SimulationEngine {
                 Cell cell = worldGrid.getCell(col, row);
                 if (cell.occupant() instanceof Particle || cell.occupant() instanceof Entity.BondedPair
                         || cell.occupant() instanceof Entity.CompositeMember) {
-                    result.add(new LiveEntityRegistry.EntityEntry("_", new Position(col, row), java.util.Optional.empty()));
+                    // Phase 19.5 M2: use the real entity id rather than the "_" sentinel.
+                    // All current callers read only entry.position(), but a future caller
+                    // reading entry.entityId() would silently get garbage. EntityIds.entityIdOf
+                    // returns the canonical id for the occupant; "_" remains as a defensive
+                    // fallback only when the occupant is null (should never trigger here
+                    // since the instanceof check above guards it).
+                    String id = EntityIds.entityIdOf(cell.occupant());
+                    if (id == null) id = "_";
+                    result.add(new LiveEntityRegistry.EntityEntry(id, new Position(col, row), java.util.Optional.empty()));
                 }
             }
         }
