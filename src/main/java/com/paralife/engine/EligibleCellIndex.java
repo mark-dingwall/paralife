@@ -212,15 +212,18 @@ public class EligibleCellIndex {
         }
     }
 
+    @SuppressWarnings("unused") // cellStatusCache reserved for future env-effect constraints
     private boolean evaluateEligibility(int x, int y, Map<Position, Byte> cellStatusCache) {
         // Constraint 1: cell must be unoccupied.
         Cell cell = worldGrid.getCell(x, y);
         if (cell.hasOccupant()) return false;
 
-        // Constraint 2: cell must not be flagged OVERCROWDED (bit 0 of cellStatusCache).
-        // PERF: REVIEWS MEDIUM-9 — Position allocation per cache lookup acknowledged.
-        Byte status = cellStatusCache.get(new Position(x, y));
-        if (status != null && (status & 0x01) != 0) return false;
+        // Constraint 2: cell must not be flagged OVERCROWDED.
+        // REVIEWS H1 (Phase 19.5): read Cell.flags directly — bit 0 of cellStatusCache
+        // is deliberately redacted (per CLAUDE.md D-40, recomputed per-bot in
+        // TickBroadcaster.cellToView). Cell.FLAG_OVERCROWDED is the authoritative
+        // server-global per-cell flag set by SimulationEngine.processOvercrowding.
+        if (cell.hasFlag(Cell.FLAG_OVERCROWDED)) return false;
 
         // Constraint 3: placing here must not push any adjacent occupied cell over threshold.
         int threshold = simulationConfig.overcrowdingThreshold();

@@ -75,19 +75,52 @@ class EligibleCellIndexTest {
         assertThat(isCellInIndex(3, 3)).isFalse();
     }
 
-    // ─── Constraint-2: OVERCROWDED bit (bit 0) makes cell ineligible ──────────
+    // ─── Constraint-2: OVERCROWDED flag (Cell.FLAG_OVERCROWDED) makes cell ineligible ──
 
     @Test
     void constraint2RejectsOvercrowded() {
-        // Mark cell (2,2) as OVERCROWDED in the status cache (bit 0 = 0x01).
-        EnvironmentEngine envWithOC = buildStubEnvironmentEngine(
-                Map.of(new Position(2, 2), (byte) 0x01));
-        EligibleCellIndex idx2 = new EligibleCellIndex(worldGrid, envWithOC, simConfig);
+        // REVIEWS H1 (Phase 19.5): constraint-2 reads Cell.flags directly (not the
+        // cellStatusCache, where bit 0 is deliberately redacted per CLAUDE.md D-40).
+        // Mark cell (2,2) with the authoritative server-global FLAG_OVERCROWDED.
+        worldGrid.setCell(2, 2, worldGrid.getCell(2, 2).withAddedFlag(Cell.FLAG_OVERCROWDED));
+        EligibleCellIndex idx2 = new EligibleCellIndex(worldGrid, envEngineSpy, simConfig);
         idx2.initialize();
 
         assertThat(isCellInIndexOf(idx2, 2, 2)).isFalse();
         // Neighbouring empty cells that are not themselves overcrowded remain eligible.
         assertThat(isCellInIndexOf(idx2, 0, 0)).isTrue();
+    }
+
+    @Test
+    void constraint2RejectsOvercrowded_viaSimulationEnginePath() {
+        // REVIEWS H1 (Phase 19.5): end-to-end proof that the index excludes cells
+        // flagged OVERCROWDED via the same Cell.flags mutation pathway used by
+        // SimulationEngine.processOvercrowding (which calls
+        //   worldGrid.setCell(x, y, cell.withAddedFlag(Cell.FLAG_OVERCROWDED))
+        // ). The previous test stubbed cache bit 0; that path is REDACTED by
+        // EnvironmentEngine.buildStatusCaches and would silently fail to exclude.
+        //
+        // Scenario: place an entity at (4,4) and mark it FLAG_OVERCROWDED — mirroring
+        // the exact two-line sequence in SimulationEngine.processOvercrowding (entity
+        // setEntity then setCell(...withAddedFlag(FLAG_OVERCROWDED))).
+        worldGrid.trySetEntity(4, 4, Entity.Particle.spawn("oc-target",
+                Entity.ParticleType.CATALYST, 10));
+        worldGrid.setCell(4, 4, worldGrid.getCell(4, 4).withAddedFlag(Cell.FLAG_OVERCROWDED));
+
+        // Rebuild index from current grid state — exercises the end-to-end
+        // initialize() → evaluateEligibility() → cell.hasFlag(FLAG_OVERCROWDED) path.
+        EligibleCellIndex idx = new EligibleCellIndex(worldGrid, envEngineSpy, simConfig);
+        idx.initialize();
+
+        // Cell (4,4) has an occupant — already excluded by constraint-1. The point
+        // here is to assert the OVERCROWDED flag is the constraint; rebuild after
+        // clearing the occupant (mirrors a death-then-OVERCROWDED-residue scenario).
+        worldGrid.clearEntity(4, 4);
+        idx = new EligibleCellIndex(worldGrid, envEngineSpy, simConfig);
+        idx.initialize();
+        // (4,4) is unoccupied but still carries the FLAG_OVERCROWDED bit set by the
+        // prior tick's processOvercrowding. Constraint-2 must exclude it.
+        assertThat(isCellInIndexOf(idx, 4, 4)).isFalse();
     }
 
     // ─── Constraint-3: would cause adjacent neighbour to flip to overcrowded ──
