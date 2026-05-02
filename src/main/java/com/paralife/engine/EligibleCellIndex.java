@@ -119,7 +119,19 @@ public class EligibleCellIndex {
     }
 
     @PostConstruct
-    public void initialize() {
+    public synchronized void initialize() {
+        // Phase 19.5 M4: clear posInDense + size at the top so re-init starts
+        // clean rather than double-counting cells. rebuildForTest() does this
+        // already; making initialize() self-contained removes the latent ordering
+        // requirement and lets any caller (Spring @PostConstruct or test) invoke
+        // it safely. dense[] does not need explicit clearing — addInternal
+        // overwrites entries [0..size-1] starting from size=0.
+        // Synchronized: M4 hardens against test-misuse footguns where any future
+        // call path invokes initialize() outside the index monitor concurrent
+        // with reads. @PostConstruct + synchronized is honoured by Spring;
+        // rebuildForTest already holds the monitor (re-entrant — free).
+        Arrays.fill(posInDense, -1);
+        size = 0;
         Map<Position, Byte> snap = environmentEngine != null
                 ? environmentEngine.cellStatusCacheView() : Map.of();
         for (int x = 0; x < width; x++) {
@@ -252,8 +264,8 @@ public class EligibleCellIndex {
      * Mirrors the @PostConstruct init; call after {@code worldGrid.clear()} in tests.
      */
     public synchronized void rebuildForTest() {
-        Arrays.fill(posInDense, -1);
-        size = 0;
+        // Phase 19.5 M4: initialize() now self-clears posInDense + size at the top,
+        // so this is a thin alias. Kept as a public test seam for clarity at call sites.
         initialize();
     }
 }
