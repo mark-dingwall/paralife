@@ -1082,7 +1082,16 @@ public class SimulationEngine {
         }
 
         // Phase 3c: Panic zone check for all composites (D-31)
-        // Snapshot current pool energies for decrease detection
+        // Snapshot current pool energies for decrease detection.
+        //
+        // L1 (Phase 19 review, deferred to Phase 21):
+        // compositeRegistry.getAll() iteration order is non-deterministic
+        // (ConcurrentHashMap.values()). Inert today: GoldenTrace 200-tick scenario
+        // never reaches panic-zone shatter (energy never < 12% critical threshold;
+        // simRng.nextDouble() not consumed for shatter). If panic-zone shatter is
+        // ever exercised in the digest gate, switch to LinkedHashMap-backed
+        // registry or sort by insertion-tick before iterating to restore
+        // determinism.
         Map<String, Integer> currentPoolEnergies = new HashMap<>();
         for (var composite : compositeRegistry.getAll()) {
             if (processedComposites.contains(composite.getCompositeId())) continue;
