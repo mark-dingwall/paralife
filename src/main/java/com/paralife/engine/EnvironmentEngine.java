@@ -184,7 +184,17 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
      */
     private volatile Map<Position, Byte> cellStatusCache = Map.of();
     private Map<Position, Byte> cellStatusStaging = new HashMap<>();
-    private final Map<String, Byte> entityStatusCache = new HashMap<>();
+    /**
+     * Phase 19.5 M1: mirror the {@link #cellStatusCache} volatile-snapshot pattern.
+     * Today's only reader (TickBroadcaster.getEntityStatus at @Order(50)) runs on
+     * the same tick thread as the @Order(14) writer — safe via happens-before.
+     * Phase 20.1 parallel PerceptionBroadcaster (CONTEXT D-12) is the activation
+     * path for concurrent WS-thread reads. Pre-emptively closing the footgun:
+     * staging map for in-tick writes; volatile snapshot published at the end of
+     * {@link #buildStatusCaches()} via single Map.copyOf swap.
+     */
+    private volatile Map<String, Byte> entityStatusCache = Map.of();
+    private final HashMap<String, Byte> entityStatusStaging = new HashMap<>();
 
     /**
      * Plan 15-08 Task 2 (SCHEMA §8.3 D-50 #9): active FLEEING effect per entity.
@@ -344,10 +354,10 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         try {
             // Always rebuild caches and expire buffs, even when config.enabled() is false,
             // so PerceptionBroadcaster reads a consistent empty surface (Pitfall 7).
-            // REVIEWS CONSENSUS-H4: staging map is reset here; volatile snapshot published
-            // at end of buildStatusCaches().
+            // REVIEWS CONSENSUS-H4 / Phase 19.5 M1: staging maps reset here; volatile
+            // snapshots published at end of buildStatusCaches().
             cellStatusStaging.clear();
-            entityStatusCache.clear();
+            entityStatusStaging.clear();
             buffRegistry.expireBuffs(event.tickNumber());
             // Plan 15-08 Task 2: sweep expired FLEEING records each tick so
             // TickBroadcaster's f-block projection never emits stale entries.
@@ -936,9 +946,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                     Cell cell = worldGrid.getCell(x, y);
                     String id = EntityIds.entityIdOf(cell.occupant());
                     if (id != null) {
-                        Byte prior = entityStatusCache.get(id);
+                        Byte prior = entityStatusStaging.get(id);
                         byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_TOXIC);
-                        entityStatusCache.put(id, merged);
+                        entityStatusStaging.put(id, merged);
                     }
                 }
             }
@@ -958,9 +968,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
 
         // Entity MUTATING bits for infected entities.
         for (String id : envCleanupHooksBean.getInfections().keySet()) {
-            Byte prior = entityStatusCache.get(id);
+            Byte prior = entityStatusStaging.get(id);
             byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_MUTATING);
-            entityStatusCache.put(id, merged);
+            entityStatusStaging.put(id, merged);
         }
 
         // Entity BUFFED bits for any entity with active buffs.
@@ -973,9 +983,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 String id = EntityIds.entityIdOf(cell.occupant());
                 if (id == null) continue;
                 if (buffRegistry.getBuffs(id).isEmpty()) continue;
-                Byte prior = entityStatusCache.get(id);
+                Byte prior = entityStatusStaging.get(id);
                 byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_BUFFED);
-                entityStatusCache.put(id, merged);
+                entityStatusStaging.put(id, merged);
             }
         } else {
             for (int col = 0; col < w; col++) {
@@ -984,9 +994,9 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                     String id = EntityIds.entityIdOf(cell.occupant());
                     if (id == null) continue;
                     if (buffRegistry.getBuffs(id).isEmpty()) continue;
-                    Byte prior = entityStatusCache.get(id);
+                    Byte prior = entityStatusStaging.get(id);
                     byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_BUFFED);
-                    entityStatusCache.put(id, merged);
+                    entityStatusStaging.put(id, merged);
                 }
             }
         }
@@ -1000,6 +1010,13 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         // immutable because the writer only ever mutates the *new* staging map.
         this.cellStatusCache = Collections.unmodifiableMap(cellStatusStaging);
         this.cellStatusStaging = new HashMap<>();
+
+        // Phase 19.5 M1: mirror cellStatusCache swap. Map.copyOf is O(N) per tick
+        // but N is small (only entities with active env effects, typically ≪ grid
+        // count); justified to keep the staging map mutable for next-tick reuse
+        // without aliasing the published view.
+        this.entityStatusCache = Map.copyOf(entityStatusStaging);
+        entityStatusStaging.clear();
     }
 
     public int toxinIntensityAt(Position pos) {
@@ -1294,10 +1311,11 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         synchronized (envCleanupHooksBean.getPendingGrants()) {
             envCleanupHooksBean.getPendingGrants().clear();
         }
-        // REVIEWS CONSENSUS-H4: reset staging + publish empty volatile snapshot.
+        // REVIEWS CONSENSUS-H4 / Phase 19.5 M1: reset staging + publish empty volatile snapshots.
         this.cellStatusCache = Map.of();
         cellStatusStaging.clear();
-        entityStatusCache.clear();
+        this.entityStatusCache = Map.of();
+        entityStatusStaging.clear();
         fleeing.clear();
         envDamageAppliedThisTick = false;
         lightningStrikeCount = 0L;
@@ -1361,9 +1379,10 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
      */
     public void onTickEnvOnlyForTest(long tickNumber) {
         try {
-            // REVIEWS CONSENSUS-H4: reset staging; volatile snapshot published at end of buildStatusCaches().
+            // REVIEWS CONSENSUS-H4 / Phase 19.5 M1: reset staging; volatile snapshots
+            // published at end of buildStatusCaches().
             cellStatusStaging.clear();
-            entityStatusCache.clear();
+            entityStatusStaging.clear();
             buffRegistry.expireBuffs(tickNumber);
             expireFleeing(tickNumber);
 
@@ -1471,7 +1490,8 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     }
 
     Map<String, Byte> entityStatusCacheView() {
-        return Collections.unmodifiableMap(entityStatusCache);
+        // Phase 19.5 M1: volatile field is already immutable (Map.copyOf snapshot).
+        return entityStatusCache;
     }
 
     boolean envDamageAppliedThisTickForTest() {
@@ -1617,10 +1637,11 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         activeMutagen = null;
         nonZeroToxinCellCount = 0;
         envDamageAppliedThisTick = false;
-        // REVIEWS CONSENSUS-H4: reset staging + publish empty volatile snapshot.
+        // REVIEWS CONSENSUS-H4 / Phase 19.5 M1: reset staging + publish empty volatile snapshots.
         this.cellStatusCache = Map.of();
         cellStatusStaging.clear();
-        entityStatusCache.clear();
+        this.entityStatusCache = Map.of();
+        entityStatusStaging.clear();
     }
 
     /** Test helper — wipe just mutagen state (use between tests within same context). */
