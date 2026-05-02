@@ -48,7 +48,7 @@ class EntityListIterationTest {
      */
     @Test
     void simulationEngine_processTick_callsSnapshotForEntityIteration() {
-        registry.register("cat1", new Position(3, 3), Optional.empty());
+        registry.register("cat1", new Position(3, 3));
         grid.setEntity(3, 3, new Particle("cat1", ParticleType.CATALYST, 50));
 
         SimulationConfig cfg = new SimulationConfig(1, 0, 0.0, 0, true, 8, 0);
@@ -74,7 +74,7 @@ class EntityListIterationTest {
     @Test
     void environmentEngine_onTick_callsSnapshotForPerEntitySegments() {
         // Place + register a particle so the BUFFED scan has something to iterate.
-        registry.register("env1", new Position(2, 2), Optional.empty());
+        registry.register("env1", new Position(2, 2));
         grid.setEntity(2, 2, new Particle("env1", ParticleType.CATALYST, 50));
 
         EnvCleanupHooksBean hooksBean = new EnvCleanupHooksBean();

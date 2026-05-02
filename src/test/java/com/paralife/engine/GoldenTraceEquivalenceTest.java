@@ -298,7 +298,7 @@ class GoldenTraceEquivalenceTest {
             sessionRegistry.register(mockSession);
             outboundSender.attachSession(mockSession, OUTBOUND_QUEUE_SIZE);
             botRegistry.register(sessionId, entityId, pos.get());
-            liveEntityRegistry.register(entityId, pos.get(), Optional.of(sessionId));
+            liveEntityRegistry.register(entityId, pos.get());
 
             registeredSessionIds.add(sessionId);
         }
@@ -326,8 +326,8 @@ class GoldenTraceEquivalenceTest {
         assertThat(worldGrid.trySetEntity(qx, qy, prey))
                 .as("prey placement at (" + qx + "," + qy + ") must succeed")
                 .isTrue();
-        liveEntityRegistry.register(predId, new Position(px, py), Optional.empty());
-        liveEntityRegistry.register(preyId, new Position(qx, qy), Optional.empty());
+        liveEntityRegistry.register(predId, new Position(px, py));
+        liveEntityRegistry.register(preyId, new Position(qx, qy));
         eligibleCellIndex.notifyChanged(px, py);
         eligibleCellIndex.notifyChanged(qx, qy);
     }

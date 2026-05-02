@@ -51,7 +51,7 @@ Replace the 50-retry random-scan placement of bot register/respawn with a constr
 
 ### Determinism (SCALE-06)
 
-- **D-06:** **Bit-exact placement contract under `paralife.simulation.spawn.seed`.** Same seed + same registration arrival order → identical (x,y) for every bot. Promoted to a tested contract (regression test asserts byte-equality of placements for a known seed across two runs). Registration arrival order is already serialised through `WorldWebSocketHandler` on a single inbound thread per session — no further ordering work needed. Useful for Phase 21 benchmark replay and for narrowing regression bisects. Production default `seed=null` keeps unseeded behaviour. Mirrors the Phase 15 D-35 contract for `RockGenerator`.
+- **D-06:** **Bit-exact placement contract under `paralife.simulation.spawn.seed`** — *single-threaded registration scope only* (Phase 19.5 L2 tightening). Under serial registration with a fixed seed, placements are byte-exact repeatable for every bot. Multi-threaded registration is NOT in scope of this contract — two concurrent registrations whose `spawnRng.nextInt` invocations interleave will produce different sequences across runs by construction. Promoted to a tested contract (regression test in `PlacementDeterminismTest` asserts byte-equality for a known seed across two single-threaded runs). Registration arrival order is already serialised through `WorldWebSocketHandler` on a single inbound thread per session — no further ordering work needed. Useful for Phase 21 benchmark replay and for narrowing regression bisects. Production default `seed=null` keeps unseeded behaviour. Mirrors the Phase 15 D-35 contract for `RockGenerator`.
 
 ### World Execution (SCALE-07)
 

@@ -128,10 +128,10 @@ class LiveEntityRegistryInvariantTest {
         worldGrid.setEntity(7, 1, p4);
 
         // Register them (simulating what WorldWebSocketHandler.handleRegister does).
-        liveEntityRegistry.register("p1", new Position(0, 0), Optional.empty());
-        liveEntityRegistry.register("p2", new Position(2, 3), Optional.empty());
-        liveEntityRegistry.register("p3", new Position(5, 5), Optional.empty());
-        liveEntityRegistry.register("p4", new Position(7, 1), Optional.empty());
+        liveEntityRegistry.register("p1", new Position(0, 0));
+        liveEntityRegistry.register("p2", new Position(2, 3));
+        liveEntityRegistry.register("p3", new Position(5, 5));
+        liveEntityRegistry.register("p4", new Position(7, 1));
 
         assertRegistryMatchesGrid("AT-REST with 4 particles");
     }
@@ -157,7 +157,7 @@ class LiveEntityRegistryInvariantTest {
         // at the START of tick processing before decay.
         var dying = new Particle("dying-1", ParticleType.CATALYST, 0);
         worldGrid.setEntity(3, 3, dying);
-        liveEntityRegistry.register("dying-1", new Position(3, 3), Optional.empty());
+        liveEntityRegistry.register("dying-1", new Position(3, 3));
 
         assertThat(liveEntityRegistry.size()).isEqualTo(1);
 
@@ -201,8 +201,8 @@ class LiveEntityRegistryInvariantTest {
         worldGrid.setEntity(preyPos.x(), preyPos.y(), prey);
 
         // Register both particles before the tick fires.
-        liveEntityRegistry.register("pred-1", predPos, Optional.empty());
-        liveEntityRegistry.register("prey-1", preyPos, Optional.empty());
+        liveEntityRegistry.register("pred-1", predPos);
+        liveEntityRegistry.register("prey-1", preyPos);
 
         assertThat(liveEntityRegistry.size()).isEqualTo(2);
 
@@ -254,8 +254,8 @@ class LiveEntityRegistryInvariantTest {
         worldGrid.setEntity(pos2.x(), pos2.y(), bp2);
 
         // Register both BondedPairs before the tick fires.
-        liveEntityRegistry.register("bp1", pos1, Optional.empty());
-        liveEntityRegistry.register("bp2", pos2, Optional.empty());
+        liveEntityRegistry.register("bp1", pos1);
+        liveEntityRegistry.register("bp2", pos2);
 
         assertThat(liveEntityRegistry.size()).isEqualTo(2);
 
@@ -278,11 +278,8 @@ class LiveEntityRegistryInvariantTest {
         // Registry positions match the members' grid positions.
         assertRegistryMatchesGrid("POST-COMPOSITE-FORMATION");
 
-        // sessionId fields: all server-internal creations use Optional.empty() (CONSENSUS-H1 OPTION B).
-        liveEntityRegistry.snapshot().forEach(entry ->
-                assertThat(entry.sessionId())
-                        .as("CompositeMember entries must have Optional.empty() sessionId per OPTION B")
-                        .isEmpty());
+        // Phase 19.5 M6: EntityEntry.sessionId field deleted; per-session attribution
+        // lives in BotRegistry exclusively. No registry-level assertion remains.
     }
 
     // ── Invariant helper ─────────────────────────────────────────────────────

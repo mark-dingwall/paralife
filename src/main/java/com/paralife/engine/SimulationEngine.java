@@ -314,7 +314,7 @@ public class SimulationEngine {
                     // since the instanceof check above guards it).
                     String id = EntityIds.entityIdOf(cell.occupant());
                     if (id == null) id = "_";
-                    result.add(new LiveEntityRegistry.EntityEntry(id, new Position(col, row), java.util.Optional.empty()));
+                    result.add(new LiveEntityRegistry.EntityEntry(id, new Position(col, row)));
                 }
             }
         }
@@ -693,7 +693,7 @@ public class SimulationEngine {
                 if (liveEntityRegistry != null) {
                     liveEntityRegistry.unregister(bond.predator.id());
                     liveEntityRegistry.unregister(bond.prey.id());
-                    liveEntityRegistry.register(bondedPair.id(), bond.primaryPos, java.util.Optional.empty());
+                    liveEntityRegistry.register(bondedPair.id(), bond.primaryPos);
                 }
                 // Phase 19.5 H2: keep BotRegistry + session attribute consistent with the
                 // LiveEntityRegistry remap above. Per CLAUDE.md Phase 18 D-05/D-21
@@ -784,8 +784,8 @@ public class SimulationEngine {
                 if (liveEntityRegistry != null) {
                     liveEntityRegistry.unregister(cf.bp1().id());
                     liveEntityRegistry.unregister(cf.bp2().id());
-                    liveEntityRegistry.register(memberId1, cf.pos1(), java.util.Optional.empty());
-                    liveEntityRegistry.register(memberId2, cf.pos2(), java.util.Optional.empty());
+                    liveEntityRegistry.register(memberId1, cf.pos1());
+                    liveEntityRegistry.register(memberId2, cf.pos2());
                 }
                 // Place on grid
                 worldGrid.setEntity(cf.pos1().x(), cf.pos1().y(), member1);
@@ -1207,7 +1207,7 @@ public class SimulationEngine {
                 for (String survivingId : composite.getMemberIds()) {
                     liveEntityRegistry.unregister(survivingId);
                 }
-                liveEntityRegistry.register(bondedPair.id(), pos, java.util.Optional.empty());
+                liveEntityRegistry.register(bondedPair.id(), pos);
             }
             worldGrid.setEntity(pos.x(), pos.y(), bondedPair);
             // Phase 19 SCALE-06 — STRUCTURAL: composite reverted to bonded-pair.
@@ -1261,7 +1261,7 @@ public class SimulationEngine {
                 // Phase 19 SCALE-07 (REVIEWS H3): dissolve — unregister member, register resulting particle.
                 if (liveEntityRegistry != null) {
                     liveEntityRegistry.unregister(cm.id());
-                    liveEntityRegistry.register(particle.id(), pos, java.util.Optional.empty());
+                    liveEntityRegistry.register(particle.id(), pos);
                 }
                 worldGrid.setEntity(pos.x(), pos.y(), particle);
                 // Phase 19 SCALE-06 — STRUCTURAL: composite dissolved, particle placed.

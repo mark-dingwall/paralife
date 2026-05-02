@@ -634,7 +634,7 @@ public class ActionResolver {
         // Phase 19 SCALE-06 — STRUCTURAL: child spawned at target.
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
         // Phase 19 SCALE-07 (REVIEWS H3): register reproduce child (CONSENSUS-H1 OPTION B: Optional.empty()).
-        if (liveEntityRegistry != null) liveEntityRegistry.register(child.id(), target, java.util.Optional.empty());
+        if (liveEntityRegistry != null) liveEntityRegistry.register(child.id(), target);
 
         Particle updatedParent = ra.particle.withEnergy(ra.particle.energy() - reproduceCost);
         // Energy-only update — EXCLUDED from notifyChanged (REVIEWS MEDIUM-1).
@@ -652,7 +652,7 @@ public class ActionResolver {
                 // Phase 19 SCALE-06 — STRUCTURAL: bonus child spawned.
                 if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(bonusTarget.x(), bonusTarget.y());
                 // Phase 19 SCALE-07 (REVIEWS H3): register bonus child.
-                if (liveEntityRegistry != null) liveEntityRegistry.register(bonusChild.id(), bonusTarget, java.util.Optional.empty());
+                if (liveEntityRegistry != null) liveEntityRegistry.register(bonusChild.id(), bonusTarget);
                 claimedCells.add(bonusTarget);
             }
         }
@@ -831,7 +831,7 @@ public class ActionResolver {
         // Phase 19 SCALE-06 — STRUCTURAL: composite-reproducer child spawned.
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
         // Phase 19 SCALE-07 (REVIEWS H3): register composite-reproducer bud child.
-        if (liveEntityRegistry != null) liveEntityRegistry.register(child.id(), target, java.util.Optional.empty());
+        if (liveEntityRegistry != null) liveEntityRegistry.register(child.id(), target);
 
         int reproduceCostDrained = composite.drainEnergy(reproduceCost);
         if (reproduceCostDrained < reproduceCost) {

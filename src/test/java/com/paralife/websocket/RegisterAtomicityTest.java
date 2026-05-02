@@ -81,7 +81,7 @@ class RegisterAtomicityTest {
     void tickToleratesRegistryEntryWithEmptyGridCell() {
         // Arrange: insert an orphan registry entry at (4,4) with the cell empty.
         Position orphanPos = new Position(4, 4);
-        liveEntityRegistry.register("orphan-entity", orphanPos, Optional.empty());
+        liveEntityRegistry.register("orphan-entity", orphanPos);
         assertThat(worldGrid.getCell(orphanPos.x(), orphanPos.y()).hasOccupant())
                 .as("orphan registry entry must point at an empty cell to reproduce the transient")
                 .isFalse();
@@ -106,7 +106,7 @@ class RegisterAtomicityTest {
     @Test
     void registerThenRollbackRestoresCleanState() {
         Position pos = new Position(2, 2);
-        liveEntityRegistry.register("retry-entity", pos, Optional.empty());
+        liveEntityRegistry.register("retry-entity", pos);
         assertThat(liveEntityRegistry.size()).isEqualTo(1);
 
         // Mimic the H3 rollback path on trySetEntity failure.
@@ -114,7 +114,7 @@ class RegisterAtomicityTest {
         assertThat(liveEntityRegistry.size()).isZero();
 
         // Re-register at a different position must not throw on conflicting prior id.
-        liveEntityRegistry.register("retry-entity", new Position(3, 3), Optional.empty());
+        liveEntityRegistry.register("retry-entity", new Position(3, 3));
         assertThat(liveEntityRegistry.size()).isEqualTo(1);
         assertThat(liveEntityRegistry.snapshot().get(0).position()).isEqualTo(new Position(3, 3));
     }

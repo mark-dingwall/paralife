@@ -118,9 +118,9 @@ class EmergenceMetricsWiringTest {
         Particle cat = new Particle("wiring-cat", ParticleType.CATALYST, 80, 100);
         Particle spo = new Particle("wiring-spo", ParticleType.SPORE, 80, 100);
         worldGrid.setEntity(3, 3, cat);
-        liveEntityRegistry.register("wiring-cat", new Position(3, 3), java.util.Optional.empty());
+        liveEntityRegistry.register("wiring-cat", new Position(3, 3));
         worldGrid.setEntity(3, 4, spo);
-        liveEntityRegistry.register("wiring-spo", new Position(3, 4), java.util.Optional.empty());
+        liveEntityRegistry.register("wiring-spo", new Position(3, 4));
 
         publisher.publishEvent(new TickEvent(1L));
 
@@ -142,9 +142,9 @@ class EmergenceMetricsWiringTest {
         BondedPair bp2 = new BondedPair("wiring-bp2",
                 ParticleType.CATALYST, ParticleType.SPORE, 80, 200, "c2", "s2");
         worldGrid.setEntity(5, 5, bp1);
-        liveEntityRegistry.register("wiring-bp1", new Position(5, 5), java.util.Optional.empty());
+        liveEntityRegistry.register("wiring-bp1", new Position(5, 5));
         worldGrid.setEntity(5, 6, bp2);
-        liveEntityRegistry.register("wiring-bp2", new Position(5, 6), java.util.Optional.empty());
+        liveEntityRegistry.register("wiring-bp2", new Position(5, 6));
 
         publisher.publishEvent(new TickEvent(2L));
 
@@ -168,7 +168,7 @@ class EmergenceMetricsWiringTest {
         // expire the infection (duration=3) and trigger grantSurvivorBuffs.
         Particle p = new Particle("wiring-entity-1", ParticleType.CATALYST, 80, 100);
         worldGrid.setEntity(7, 7, p);
-        liveEntityRegistry.register("wiring-entity-1", new Position(7, 7), java.util.Optional.empty());
+        liveEntityRegistry.register("wiring-entity-1", new Position(7, 7));
         environmentEngine.stampMutagenAtForTestPublic(new Position(7, 7), 100);
 
         double beforeInfection = counter.count();
@@ -218,7 +218,7 @@ class EmergenceMetricsWiringTest {
         // @EventListener also calls this).
         Particle p = new Particle("wiring-infectee", ParticleType.CATALYST, 80, 100);
         worldGrid.setEntity(9, 9, p);
-        liveEntityRegistry.register("wiring-infectee", new Position(9, 9), java.util.Optional.empty());
+        liveEntityRegistry.register("wiring-infectee", new Position(9, 9));
         environmentEngine.stampMutagenAtForTestPublic(new Position(9, 9), 100);
 
         environmentEngine.resolveMutagenCollisionsForTestPublic(0L);

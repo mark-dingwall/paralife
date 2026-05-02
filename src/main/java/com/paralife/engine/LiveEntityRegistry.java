@@ -12,7 +12,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 
 /**
  * Phase 19 SCALE-07 (D-07..D-11): authoritative list of live entities for
@@ -38,25 +37,23 @@ import java.util.Optional;
  * Phase 19 compatibility shim; cost is negligible at N≤256 (~µs) and ~10µs at
  * N=1000. Phase 21 may revisit if a different ordering improves cache behaviour.
  *
- * <p><b>Composite/bonded identity — REVIEWS CONSENSUS-H1 OPTION B (USER-LOCKED):</b>
- * {@link EntityEntry#sessionId()} is {@code Optional.of(sessionId)} when an
- * entity is registered via {@code WorldWebSocketHandler.handleRegister} (one
- * bot ↔ one session ↔ one entity at admission). All server-internal creations
- * (bonding, composite formation, reproduce-children, collapse, dissolve,
- * revert) use {@code Optional.empty()}. Composite and bonded child entityIds
- * are NOT separately registered — only the grid-occupant entity (BondedPair,
- * CompositeMember) is.
- *
- * <p><b>TickBroadcaster does NOT consume sessionId in Phase 19.</b> The field
- * is reserved for Phase 20.1+ broadcaster migration. Phase 19 broadcaster
- * iteration continues via {@code botRegistry.getAllBots()}.
+ * <p><b>Session attribution (Phase 19.5 M6, post review-remediation):</b> this
+ * registry intentionally holds NO session attribution. {@link BotRegistry}
+ * remains the authoritative source for session→entity routing. The prior
+ * {@code Optional<String> sessionId} field on {@link EntityEntry} was deleted
+ * — it was populated only at {@code WorldWebSocketHandler.handleRegister} and
+ * was {@code Optional.empty()} at all server-internal creation sites (bonding,
+ * composite formation, reproduce-children, collapse, dissolve, revert). Rebind
+ * never refreshed it. Phase 20.1 will introduce a session-mapping side channel
+ * for the broadcaster migration — design TBD as the FIRST task of that phase,
+ * before the broadcaster migration itself.
  *
  * <p><b>Re-register policy (REVIEWS MEDIUM-3):</b> {@link #register} is
- * idempotent on identical re-register but throws {@link IllegalStateException}
- * on conflicting re-register (different position or different sessionId for an
- * already-registered entityId). Defence in depth against silently-dropped
- * lifecycle hooks. Callers must {@link #unregister} first if they intend to
- * change identity.
+ * idempotent on identical re-register (same position) but throws
+ * {@link IllegalStateException} on conflicting re-register (different
+ * position for an already-registered entityId). Defence in depth against
+ * silently-dropped lifecycle hooks. Callers must {@link #unregister} first
+ * if they intend to change identity.
  *
  * <p>Single-threaded mutation invariant (D-08, D-11) is unaffected: this
  * registry is read by tick handlers, written from registration (WS thread),
@@ -69,12 +66,11 @@ public class LiveEntityRegistry {
     private static final Logger log = LoggerFactory.getLogger(LiveEntityRegistry.class);
 
     /**
-     * REVIEWS L2 — Optional in record is intentional (server-internal record;
-     * not serialised over the wire; no equals concerns from Optional).
+     * Phase 19.5 M6: two-arg shape — sessionId field deleted (see class Javadoc).
      */
-    public record EntityEntry(String entityId, Position position, Optional<String> sessionId) {
+    public record EntityEntry(String entityId, Position position) {
         public EntityEntry withPosition(Position newPosition) {
-            return new EntityEntry(entityId, newPosition, sessionId);
+            return new EntityEntry(entityId, newPosition);
         }
     }
 
@@ -91,22 +87,26 @@ public class LiveEntityRegistry {
     /**
      * Register an entity. Idempotent on identical inputs; throws
      * {@link IllegalStateException} on conflict. REVIEWS MEDIUM-3.
+     *
+     * <p>Phase 19.5 M6: sessionId param deleted. Callers that previously passed
+     * {@code Optional.of(sessionId)} should rely on {@link BotRegistry} for the
+     * session→entity mapping; callers that passed {@code Optional.empty()}
+     * (server-internal creations) drop the third arg entirely.
      */
-    public synchronized void register(String entityId, Position position, Optional<String> sessionId) {
+    public synchronized void register(String entityId, Position position) {
         Integer existing = indexById.get(entityId);
         if (existing != null) {
             EntityEntry prior = dense.get(existing);
-            if (Objects.equals(prior.position(), position)
-                    && Objects.equals(prior.sessionId(), sessionId)) {
+            if (Objects.equals(prior.position(), position)) {
                 return; // idempotent
             }
             throw new IllegalStateException(
                 "Conflicting re-register for entityId=" + entityId
-                    + ": prior=" + prior + " new=(pos=" + position + ", sid=" + sessionId
+                    + ": prior=" + prior + " new=(pos=" + position
                     + ") — caller must unregister first");
         }
         indexById.put(entityId, dense.size());
-        dense.add(new EntityEntry(entityId, position, sessionId));
+        dense.add(new EntityEntry(entityId, position));
     }
 
     /** Row-major linear index: position().x() * height + position().y(). REVIEWS HIGH-1. */

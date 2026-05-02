@@ -29,6 +29,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 50-retry random scan was NOT seeded consistently across runs (different iteration
  * orders due to concurrent occupation changes), so byte-exact reproducibility was
  * impossible before this plan.
+ *
+ * <p><b>Determinism scope (Phase 19.5 L2):</b> single-threaded registration
+ * determinism. Under serial registration with a fixed seed, placements are
+ * byte-exact repeatable. Multi-threaded registration is NOT in scope of this
+ * contract — the index monitor serialises {@code sample} calls, but two
+ * concurrent registrations whose {@code spawnRng.nextInt} interleaves will
+ * produce different sequences across runs by construction.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @TestPropertySource(properties = {

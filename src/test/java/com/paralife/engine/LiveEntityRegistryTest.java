@@ -6,7 +6,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -17,6 +16,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Unit tests for {@link LiveEntityRegistry} — SCALE-07 sparse-set registry.
  * Constructed directly: {@code new LiveEntityRegistry(new GridConfig(8, 8))}.
+ *
+ * <p>Phase 19.5 M6: {@code EntityEntry.sessionId} field deleted; {@link
+ * LiveEntityRegistry#register} is now two-arg. Per-session attribution lives
+ * exclusively in {@link BotRegistry}.
  */
 class LiveEntityRegistryTest {
 
@@ -31,53 +34,45 @@ class LiveEntityRegistryTest {
 
     @Test
     void registerAddsEntry() {
-        registry.register("e-1", new Position(3, 4), Optional.empty());
+        registry.register("e-1", new Position(3, 4));
         assertThat(registry.size()).isEqualTo(1);
-    }
-
-    @Test
-    void registerWithSessionStoresSession() {
-        registry.register("e-1", new Position(3, 4), Optional.of("sess-A"));
-        List<LiveEntityRegistry.EntityEntry> snap = registry.snapshot();
-        assertThat(snap).hasSize(1);
-        assertThat(snap.get(0).sessionId()).contains("sess-A");
     }
 
     @Test
     void registerIsIdempotentOnSameInputs() {
-        registry.register("e-1", new Position(3, 4), Optional.empty());
-        registry.register("e-1", new Position(3, 4), Optional.empty()); // second identical call
+        registry.register("e-1", new Position(3, 4));
+        registry.register("e-1", new Position(3, 4)); // second identical call
         assertThat(registry.size()).isEqualTo(1);
     }
 
     /**
-     * REVIEWS MEDIUM-3: conflicting re-register must throw IllegalStateException.
-     * Size stays 1 and original entry preserved.
+     * REVIEWS MEDIUM-3: conflicting re-register (different position for same
+     * entityId) must throw IllegalStateException. Size stays 1 and the
+     * original entry is preserved.
      */
     @Test
-    void registerThrowsOnConflictingSessionId() {
-        registry.register("e-1", new Position(3, 4), Optional.of("sess-A"));
+    void registerThrowsOnConflictingPosition() {
+        registry.register("e-1", new Position(3, 4));
         assertThatThrownBy(() ->
-            registry.register("e-1", new Position(3, 4), Optional.of("sess-B"))
+            registry.register("e-1", new Position(5, 5))
         ).isInstanceOf(IllegalStateException.class)
          .hasMessageContaining("Conflicting re-register");
-        // size stays 1 and original entry preserved
         assertThat(registry.size()).isEqualTo(1);
-        assertThat(registry.snapshot().get(0).sessionId()).contains("sess-A");
+        assertThat(registry.snapshot().get(0).position()).isEqualTo(new Position(3, 4));
     }
 
     // ── unregister ────────────────────────────────────────────────────────────
 
     @Test
     void unregisterRemovesEntry() {
-        registry.register("e-1", new Position(3, 4), Optional.empty());
+        registry.register("e-1", new Position(3, 4));
         registry.unregister("e-1");
         assertThat(registry.size()).isEqualTo(0);
     }
 
     @Test
     void unregisterIsIdempotent() {
-        registry.register("e-1", new Position(3, 4), Optional.empty());
+        registry.register("e-1", new Position(3, 4));
         registry.unregister("e-1");
         registry.unregister("e-1"); // second call — no throw
         assertThat(registry.size()).isEqualTo(0);
@@ -87,7 +82,7 @@ class LiveEntityRegistryTest {
     void unregisterIsO1AndDoesNotShift() {
         // Register 5 entities, remove the middle one, confirm remaining 4 are intact.
         for (int i = 0; i < 5; i++) {
-            registry.register("e-" + i, new Position(i, 0), Optional.empty());
+            registry.register("e-" + i, new Position(i, 0));
         }
         registry.unregister("e-2");
         assertThat(registry.size()).isEqualTo(4);
@@ -100,9 +95,9 @@ class LiveEntityRegistryTest {
 
     @Test
     void snapshotIsShallowCopy() {
-        registry.register("e-1", new Position(1, 2), Optional.empty());
+        registry.register("e-1", new Position(1, 2));
         List<LiveEntityRegistry.EntityEntry> snap1 = registry.snapshot();
-        registry.register("e-2", new Position(2, 3), Optional.empty());
+        registry.register("e-2", new Position(2, 3));
         List<LiveEntityRegistry.EntityEntry> snap2 = registry.snapshot();
         assertThat(snap1).hasSize(1);
         assertThat(snap2).hasSize(2);
@@ -117,10 +112,10 @@ class LiveEntityRegistryTest {
      */
     @Test
     void snapshotIsSortedByRowMajor() {
-        registry.register("a", new Position(2, 1), Optional.empty()); // index 17
-        registry.register("b", new Position(1, 5), Optional.empty()); // index 13
-        registry.register("c", new Position(1, 2), Optional.empty()); // index 10
-        registry.register("d", new Position(0, 7), Optional.empty()); // index 7
+        registry.register("a", new Position(2, 1)); // index 17
+        registry.register("b", new Position(1, 5)); // index 13
+        registry.register("c", new Position(1, 2)); // index 10
+        registry.register("d", new Position(0, 7)); // index 7
         List<LiveEntityRegistry.EntityEntry> snap = registry.snapshot();
         assertThat(snap).extracting(e -> e.position())
                 .containsExactly(
@@ -137,14 +132,14 @@ class LiveEntityRegistryTest {
     @Test
     void snapshotIsSortedByRowMajorAfterRemovals() {
         // Register 4, remove middle 2, register 2 new.
-        registry.register("a", new Position(3, 3), Optional.empty()); // index 27
-        registry.register("b", new Position(1, 1), Optional.empty()); // index 9
-        registry.register("c", new Position(2, 5), Optional.empty()); // index 21
-        registry.register("d", new Position(0, 6), Optional.empty()); // index 6
+        registry.register("a", new Position(3, 3)); // index 27
+        registry.register("b", new Position(1, 1)); // index 9
+        registry.register("c", new Position(2, 5)); // index 21
+        registry.register("d", new Position(0, 6)); // index 6
         registry.unregister("b"); // index 9
         registry.unregister("c"); // index 21
-        registry.register("e", new Position(0, 2), Optional.empty()); // index 2
-        registry.register("f", new Position(4, 0), Optional.empty()); // index 32
+        registry.register("e", new Position(0, 2)); // index 2
+        registry.register("f", new Position(4, 0)); // index 32
 
         List<LiveEntityRegistry.EntityEntry> snap = registry.snapshot();
         assertThat(snap).extracting(e -> e.position())
@@ -160,16 +155,9 @@ class LiveEntityRegistryTest {
 
     @Test
     void updatePositionMutatesEntry() {
-        registry.register("e-1", new Position(1, 1), Optional.empty());
+        registry.register("e-1", new Position(1, 1));
         registry.updatePosition("e-1", new Position(5, 5));
         assertThat(registry.snapshot().get(0).position()).isEqualTo(new Position(5, 5));
-    }
-
-    @Test
-    void updatePositionPreservesSessionId() {
-        registry.register("e-1", new Position(1, 1), Optional.of("sess-X"));
-        registry.updatePosition("e-1", new Position(5, 5));
-        assertThat(registry.snapshot().get(0).sessionId()).contains("sess-X");
     }
 
     @Test
@@ -198,8 +186,7 @@ class LiveEntityRegistryTest {
                 try {
                     for (int i = 0; i < idsPerThread; i++) {
                         registry.register("e-" + (base + i),
-                                new Position((base + i) % 8, (base + i) % 8),
-                                Optional.empty());
+                                new Position((base + i) % 8, (base + i) % 8));
                     }
                 } finally {
                     done.countDown();

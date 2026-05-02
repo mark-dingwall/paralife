@@ -543,7 +543,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements BondL
                 if (pos == null) break; // eligible set empty → GRID_FULL
                 // H3: register-first, then grid-mutate.
                 if (liveEntityRegistry != null) {
-                    liveEntityRegistry.register(entityId, pos, Optional.of(session.getId()));
+                    liveEntityRegistry.register(entityId, pos);
                 }
                 if (worldGrid.trySetEntity(pos.x(), pos.y(), particle)) {
                     placed = true;

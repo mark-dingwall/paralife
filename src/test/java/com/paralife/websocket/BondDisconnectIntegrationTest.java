@@ -105,8 +105,8 @@ class BondDisconnectIntegrationTest {
         // Mirror handleRegister's three-line bookkeeping for both bots.
         botRegistry.register(predSessionId, predEntityId, predPos);
         botRegistry.register(preySessionId, preyEntityId, preyPos);
-        liveEntityRegistry.register(predEntityId, predPos, java.util.Optional.of(predSessionId));
-        liveEntityRegistry.register(preyEntityId, preyPos, java.util.Optional.of(preySessionId));
+        liveEntityRegistry.register(predEntityId, predPos);
+        liveEntityRegistry.register(preyEntityId, preyPos);
         predSession.getAttributes().put("entityId", predEntityId);
         predSession.getAttributes().put("entityType", "C");
         preySession.getAttributes().put("entityId", preyEntityId);

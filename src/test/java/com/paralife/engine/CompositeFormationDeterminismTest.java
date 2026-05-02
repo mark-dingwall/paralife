@@ -265,17 +265,17 @@ class CompositeFormationDeterminismTest {
             String spoId2 = "s-" + c[6] + "-" + c[7];
             worldGrid.setEntity(c[0], c[1],
                     new Entity.Particle(catId1, Entity.ParticleType.CATALYST, 80, 100));
-            liveEntityRegistry.register(catId1, new com.paralife.world.Position(c[0], c[1]), java.util.Optional.empty());
+            liveEntityRegistry.register(catId1, new com.paralife.world.Position(c[0], c[1]));
             worldGrid.setEntity(c[2], c[3],
                     new Entity.Particle(catId2, Entity.ParticleType.CATALYST, 80, 100));
-            liveEntityRegistry.register(catId2, new com.paralife.world.Position(c[2], c[3]), java.util.Optional.empty());
+            liveEntityRegistry.register(catId2, new com.paralife.world.Position(c[2], c[3]));
             // Two Spore prey (Catalyst beats Spore per ParticleType.prey)
             worldGrid.setEntity(c[4], c[5],
                     new Entity.Particle(spoId1, Entity.ParticleType.SPORE, 80, 100));
-            liveEntityRegistry.register(spoId1, new com.paralife.world.Position(c[4], c[5]), java.util.Optional.empty());
+            liveEntityRegistry.register(spoId1, new com.paralife.world.Position(c[4], c[5]));
             worldGrid.setEntity(c[6], c[7],
                     new Entity.Particle(spoId2, Entity.ParticleType.SPORE, 80, 100));
-            liveEntityRegistry.register(spoId2, new com.paralife.world.Position(c[6], c[7]), java.util.Optional.empty());
+            liveEntityRegistry.register(spoId2, new com.paralife.world.Position(c[6], c[7]));
         }
     }
 
@@ -443,16 +443,16 @@ class CompositeFormationDeterminismTest {
                 String spoId2 = "s-" + c[6] + "-" + c[7];
                 worldGrid.setEntity(c[0], c[1],
                         new Entity.Particle(catId1, Entity.ParticleType.CATALYST, 80, 100));
-                liveEntityRegistry.register(catId1, new com.paralife.world.Position(c[0], c[1]), java.util.Optional.empty());
+                liveEntityRegistry.register(catId1, new com.paralife.world.Position(c[0], c[1]));
                 worldGrid.setEntity(c[2], c[3],
                         new Entity.Particle(catId2, Entity.ParticleType.CATALYST, 80, 100));
-                liveEntityRegistry.register(catId2, new com.paralife.world.Position(c[2], c[3]), java.util.Optional.empty());
+                liveEntityRegistry.register(catId2, new com.paralife.world.Position(c[2], c[3]));
                 worldGrid.setEntity(c[4], c[5],
                         new Entity.Particle(spoId1, Entity.ParticleType.SPORE, 80, 100));
-                liveEntityRegistry.register(spoId1, new com.paralife.world.Position(c[4], c[5]), java.util.Optional.empty());
+                liveEntityRegistry.register(spoId1, new com.paralife.world.Position(c[4], c[5]));
                 worldGrid.setEntity(c[6], c[7],
                         new Entity.Particle(spoId2, Entity.ParticleType.SPORE, 80, 100));
-                liveEntityRegistry.register(spoId2, new com.paralife.world.Position(c[6], c[7]), java.util.Optional.empty());
+                liveEntityRegistry.register(spoId2, new com.paralife.world.Position(c[6], c[7]));
             }
         }
 
