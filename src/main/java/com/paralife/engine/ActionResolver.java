@@ -207,6 +207,11 @@ public class ActionResolver {
         lastReproducedTick.clear();
         pendingActions.getAndSet(new ConcurrentHashMap<>());
         pendingVoteBallots.getAndSet(new ConcurrentHashMap<>());
+        // Phase 19.5 M3: childIdCounter survives across resetAll(), embedding
+        // run-1 increments into run-2 ids ("child-N+k" instead of "child-1").
+        // Latent today only because composite-ids use UUID.randomUUID(); the
+        // instant ids become deterministic, dual-run digest divergence appears.
+        childIdCounter.set(0);
     }
 
     /**

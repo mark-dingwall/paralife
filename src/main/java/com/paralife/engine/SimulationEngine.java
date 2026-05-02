@@ -226,6 +226,23 @@ public class SimulationEngine {
     }
 
     /**
+     * Phase 19.5 M3: clear stateful counters/maps that survive across
+     * {@code GoldenTraceEquivalenceTest.resetAll()} and would cause dual-run
+     * digest divergence the moment composite ids stop using
+     * {@code UUID.randomUUID()}. Latent today (HIGH potential impact for
+     * {@link #previousPoolEnergy} — drives panic-zone roll baseline; MEDIUM
+     * for {@link #nutrientIdCounter} — embedded in entity ids; LOW for
+     * {@link #lastTickBondCount} — only test-asserted post-run).
+     *
+     * <p>Test-only — production code does NOT invoke this.
+     */
+    public void clearStateForTest() {
+        previousPoolEnergy.clear();
+        nutrientIdCounter.set(0);
+        lastTickBondCount.set(0);
+    }
+
+    /**
      * Phase 19 SCALE-06: setter-inject {@link EligibleCellIndex} (REVIEWS MEDIUM-1).
      * Spring auto-wires this; pre-Phase-19 unit tests that don't set it see null-guarded no-op hooks.
      */

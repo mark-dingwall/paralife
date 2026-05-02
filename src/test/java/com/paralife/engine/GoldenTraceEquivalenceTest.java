@@ -226,6 +226,12 @@ class GoldenTraceEquivalenceTest {
         // lastReproducedTick entries keyed by entityId suppress reproduction in run 2 when
         // the test reuses identical entityIds (trace-bot-0…25), producing digest divergence.
         actionResolver.clearStateForTest();
+        // Phase 19.5 M3: clear SimulationEngine state that survives resetSeed but
+        // NOT resetSeed alone — previousPoolEnergy, nutrientIdCounter,
+        // lastTickBondCount. Latent today (composite ids use UUID.randomUUID());
+        // pre-emptively wired so any future deterministic-id refactor doesn't
+        // silently break the dual-run digest gate.
+        simulationEngine.clearStateForTest();
         compositeEnergyDistributor.resetSeed();
         fertilityInitializer.resetSeed();
 
