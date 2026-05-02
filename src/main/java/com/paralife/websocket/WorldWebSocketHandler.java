@@ -525,15 +525,34 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements BondL
         // Phase 19 SCALE-06 (D-01): O(1) placement from eligible-cell index.
         // REVIEWS L4 / LOW-12: bounded 3-retry on lost-race (concurrent registration
         // both sampled the same cell; only one can win trySetEntity).
+        //
+        // Phase 19.5 H3: register in LiveEntityRegistry BEFORE the WorldGrid mutation
+        // (with rollback on trySetEntity failure). Tick read at @Order(10)
+        // (SimulationEngine.entitySnapshot via liveEntityRegistry.snapshot()) can fire
+        // mid-sequence; consumers re-derive the entity from
+        // worldGrid.getCell(entry.position()).occupant(), so a "registry has it,
+        // grid doesn't" transient resolves to a benign skip on the consumer side.
+        // The opposite transient (grid has it, registry doesn't) caused entity-list
+        // iteration to skip the entity for one tick — pre-Phase-19 grid-walk would
+        // have caught it.
         Position pos = null;
         boolean placed = false;
         if (eligibleCellIndex != null) {
             for (int attempt = 0; attempt < LOST_RACE_MAX_RETRIES; attempt++) {
                 pos = eligibleCellIndex.sample(spawnRng);
                 if (pos == null) break; // eligible set empty → GRID_FULL
+                // H3: register-first, then grid-mutate.
+                if (liveEntityRegistry != null) {
+                    liveEntityRegistry.register(entityId, pos, Optional.of(session.getId()));
+                }
                 if (worldGrid.trySetEntity(pos.x(), pos.y(), particle)) {
                     placed = true;
                     break;
+                }
+                // H3: lost race — roll back the LiveEntityRegistry insert so the next
+                // attempt registers cleanly under a fresh sample.
+                if (liveEntityRegistry != null) {
+                    liveEntityRegistry.unregister(entityId);
                 }
                 // Lost race: another registration won trySetEntity. Increment counter,
                 // re-evaluate eligibility for the contested cell, then retry.
@@ -542,6 +561,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements BondL
             }
         } else {
             // Back-compat path: no index available (back-compat ctors, tests). Use legacy scan.
+            // No LiveEntityRegistry to coordinate with on this path (back-compat ctors pass null).
             for (int attempt = 0; attempt < 50; attempt++) {
                 int x = spawnRng.nextInt(worldGrid.getWidth());
                 int y = spawnRng.nextInt(worldGrid.getHeight());
@@ -565,8 +585,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements BondL
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
 
         botRegistry.register(session.getId(), entityId, pos);
-        // Phase 19 SCALE-07 (REVIEWS H3 / MEDIUM-6): register entityId+sessionId in LiveEntityRegistry.
-        if (liveEntityRegistry != null) liveEntityRegistry.register(entityId, pos, Optional.of(session.getId()));
+        // Phase 19.5 H3: LiveEntityRegistry.register has already been called above
+        // (register-first ordering); no additional call needed here.
 
         // Issue ACTIVE resume token (D-13: first sync carries S|<entityId>|<resumeToken>).
         String resumeToken = (resumeTokenRegistry != null)
