@@ -351,8 +351,11 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         String sourceField = sourceAttr instanceof String s ? s : "unknown";
 
         // ALWAYS detach sender VT and unregister the WebSocket session.
+        // Phase 22 (TD-19.5-A): pass the session so the transport is closed first —
+        // unblocks any in-flight sendMessage so the drain VT exits cleanly without a
+        // 100ms join timeout warning under shutdown-hook fanout.
         if (outboundSender != null) {
-            outboundSender.detachSession(sessionId);
+            outboundSender.detachSession(session);
         }
         sessionRegistry.unregister(sessionId);
 
@@ -387,8 +390,9 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         log.warn("Transport error for session {}: {}", session.getId(), exception.getMessage());
+        // Phase 22 (TD-19.5-A): close-then-interrupt to avoid spurious VT-did-not-exit warnings.
         if (outboundSender != null) {
-            outboundSender.detachSession(session.getId());
+            outboundSender.detachSession(session);
         }
         cleanupBot(session);
         sessionRegistry.unregister(session.getId());

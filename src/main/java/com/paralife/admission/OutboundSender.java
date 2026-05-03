@@ -5,6 +5,7 @@ import com.paralife.codec.PerceptionCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
@@ -131,6 +132,16 @@ public class OutboundSender {
      * Interrupts the sender VT and joins it for up to {@value #DETACH_JOIN_TIMEOUT_MS}ms.
      * Mutual exclusion of writers is guaranteed by the synchronized-session-monitor contract;
      * the join keeps detach bounded so callers don't block indefinitely on a misbehaving VT.
+     *
+     * <p><b>Phase 22 (TD-19.5-A):</b> when the drain VT is mid-{@code sendMessage}, plain
+     * {@code Thread.interrupt()} cannot break Jetty's blocking socket write — the 100ms join
+     * times out and produces a WARN. Callers that own a {@link WebSocketSession} reference
+     * for a session being torn down should use {@link #detachSession(WebSocketSession)}
+     * instead, which closes the transport first so Jetty unblocks sendMessage immediately
+     * and the interrupt then succeeds. This {@code String}-keyed overload retains the old
+     * behaviour for paths that need the drain VT stopped without closing the session
+     * (notably {@code WorldWebSocketHandler.markStalled}, which sends an out-of-band 408
+     * after detach and closes the WS itself afterwards).
      */
     public void detachSession(String sessionId) {
         queues.remove(sessionId);
@@ -147,6 +158,43 @@ public class OutboundSender {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /**
+     * Phase 22 (TD-19.5-A): session-aware detach for graceful-disconnect and transport-error
+     * paths ({@code afterConnectionClosed}, {@code handleTransportError}, server shutdown).
+     *
+     * <p>Closes the WebSocket transport (if still open) so Jetty unblocks any in-flight
+     * {@code sendMessage} with an IOException, then interrupts the drain VT and returns
+     * <b>without</b> joining. The drain VT terminates asynchronously: its loop guard
+     * ({@code !session.isOpen() → continue}, then the interrupt flag exits the {@code while})
+     * means it cannot perform another write after this returns. No subsequent caller in these
+     * paths needs the VT to have actually exited, so the 100ms join — which under shutdown-
+     * hook fanout times out and produces "did not exit" warnings — is omitted here.
+     *
+     * <p>Do <b>not</b> use this overload from {@code markStalled}: that path needs the
+     * session open long enough to deliver the out-of-band 408 frame, AND it relies on the
+     * join contract to ensure the drain VT has released {@code synchronized(session)}
+     * before {@code sendOutOfBand} acquires it. {@code markStalled} stays on
+     * {@link #detachSession(String)}.
+     *
+     * <p>If {@code session} is {@code null} this is a no-op.
+     */
+    public void detachSession(WebSocketSession session) {
+        if (session == null) return;
+        String sessionId = session.getId();
+        if (session.isOpen()) {
+            try {
+                session.close(CloseStatus.GOING_AWAY);
+            } catch (Exception ignored) {
+                // close-on-close races are benign — drain VT termination is driven by the
+                // interrupt below regardless of close outcome.
+            }
+        }
+        queues.remove(sessionId);
+        overflowFiredFlags.remove(sessionId);
+        Thread t = senderThreads.remove(sessionId);
+        if (t != null) t.interrupt();
     }
 
     /**

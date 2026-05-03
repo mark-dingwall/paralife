@@ -143,6 +143,49 @@ class OutboundSenderTest {
         assertThat(sender.queueDepth("session-d")).isEqualTo(-1);
     }
 
+    /**
+     * Phase 22 (TD-19.5-A) regression: when detaching a session whose drain VT is mid-flight
+     * inside {@code sendMessage} (the realistic shutdown / graceful-disconnect race), the
+     * session-aware {@link OutboundSender#detachSession(WebSocketSession)} closes the transport
+     * first so Jetty unblocks the write — drain VT then honours the interrupt and exits well
+     * within the 100ms join, no "did not exit" WARN.
+     *
+     * <p>Modelled with a {@link CloseAwareSession} whose blocking {@code sendMessage} returns
+     * only when {@code close} flips its open-state flag.
+     */
+    @Test
+    void detachSessionWithSessionRefUnblocksInFlightSend() throws Exception {
+        CloseAwareSession s = new CloseAwareSession("session-sr");
+        sender.attachSession(s, 1);
+        sender.offer("session-sr", new Frame.RegisterFrame('C'));   // VT enters sendMessage, blocks
+        awaitUntil(() -> s.sendInFlight, 2000);
+
+        long start = System.nanoTime();
+        sender.detachSession(s);   // closes transport → unblocks send → VT exits via interrupt
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        assertThat(s.closed).isTrue();
+        assertThat(elapsedMs).isLessThan(200);
+        assertThat(sender.queueDepth("session-sr")).isEqualTo(-1);
+    }
+
+    @Test
+    void detachSessionWithNullIsNoOp() {
+        sender.detachSession((WebSocketSession) null);   // must not throw
+    }
+
+    @Test
+    void detachSessionWithAlreadyClosedSessionStillCleansUp() throws Exception {
+        CloseAwareSession s = new CloseAwareSession("session-pre");
+        s.close();   // already closed before attach-detach
+        sender.attachSession(s, 4);
+        long start = System.nanoTime();
+        sender.detachSession(s);   // skips the close, falls through to the id-keyed path
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        assertThat(elapsedMs).isLessThan(200);
+        assertThat(sender.queueDepth("session-pre")).isEqualTo(-1);
+    }
+
     @Test
     void drainLoopSurvivesIOException() throws Exception {
         FakeSession s = new FakeSession("session-err");
@@ -288,5 +331,51 @@ class OutboundSenderTest {
         @Override public List<WebSocketExtension> getExtensions() { return List.of(); }
         @Override public void close() {}
         @Override public void close(CloseStatus status) {}
+    }
+
+    /**
+     * Phase 22 (TD-19.5-A) test fixture: simulates a Jetty session whose blocking
+     * {@code sendMessage} returns only after {@code close} flips the open flag, mirroring
+     * how Jetty unblocks an in-flight socket write when the transport is torn down.
+     */
+    static class CloseAwareSession implements WebSocketSession {
+        final String id;
+        final List<String> captured = Collections.synchronizedList(new ArrayList<>());
+        volatile boolean open = true;
+        volatile boolean closed = false;
+        volatile boolean sendInFlight = false;
+
+        CloseAwareSession(String id) { this.id = id; }
+
+        @Override public String getId() { return id; }
+        @Override public boolean isOpen() { return open; }
+        @Override public void sendMessage(WebSocketMessage<?> message) throws java.io.IOException {
+            sendInFlight = true;
+            try {
+                while (open) {
+                    try { Thread.sleep(5); } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new java.io.IOException("interrupted");
+                    }
+                }
+                throw new java.io.IOException("session closed mid-send");
+            } finally {
+                sendInFlight = false;
+            }
+        }
+        @Override public void close() { open = false; closed = true; }
+        @Override public void close(CloseStatus status) { close(); }
+        @Override public URI getUri() { return null; }
+        @Override public HttpHeaders getHandshakeHeaders() { return new HttpHeaders(); }
+        @Override public Map<String, Object> getAttributes() { return new ConcurrentHashMap<>(); }
+        @Override public Principal getPrincipal() { return null; }
+        @Override public InetSocketAddress getLocalAddress() { return null; }
+        @Override public InetSocketAddress getRemoteAddress() { return null; }
+        @Override public String getAcceptedProtocol() { return null; }
+        @Override public void setTextMessageSizeLimit(int messageSizeLimit) {}
+        @Override public int getTextMessageSizeLimit() { return 0; }
+        @Override public void setBinaryMessageSizeLimit(int messageSizeLimit) {}
+        @Override public int getBinaryMessageSizeLimit() { return 0; }
+        @Override public List<WebSocketExtension> getExtensions() { return List.of(); }
     }
 }
