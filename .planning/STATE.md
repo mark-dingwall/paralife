@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering (M4)
-status: closing_phase
+status: executing
 stopped_at: Phase 22 closing
-last_updated: "2026-05-04T00:00:00.000Z"
-last_activity: 2026-05-04 - Phase 22 close-out: 3 perf tests deferred to P21, P22.1 stub added, sequence repaired
+last_updated: "2026-05-03T18:52:37.431Z"
+last_activity: 2026-05-03 -- Phase 19.1 planning complete
 progress:
-  total_phases: 7
-  completed_phases: 4
-  total_plans: 21
-  completed_plans: 21
-  percent: 57
+  total_phases: 11
+  completed_phases: 3
+  total_plans: 27
+  completed_plans: 22
+  percent: 81
 ---
 
 # Project State
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md
 ## Current Position
 
 Milestone: v3.0 (Scale Engineering / M4) — active
-Phase: 22 (closing) — sequence: P19.5 rework → P20 → P21 → P22.1
+Phase: 19.1 (planning)
 Plan: n/a (P22 was incident response, no formal plan)
-Status: closing
-Last activity: 2026-05-04
+Status: Ready to execute
+Last activity: 2026-05-03 -- Phase 19.1 planning complete
 
 Progress: [██████████] 100%
 
@@ -77,3 +77,4 @@ Next command: P19.5 rework (separate agent — see `19-MULTI-REVIEW-pass3-VALIDA
 
 - Phase 22 added: Integration test resource leak audit (2026-05-03; trigger — `WorldGridTest.concurrentReadsDontBlock` 2h hang from carrier starvation, 497 leaked threads in shared test JVM. Quick fixes shipped: bounded join, global JUnit timeout, unconditional forkEvery=1. SEED.md in phase dir.)
 - Phase 22 closing 2026-05-04: ran out-of-order as incident response. A1 (OutboundSender close-then-interrupt detach) shipped `42e9251`. 3 perf tests (Metabolism / EncodeDeflate / PopulationDynamics) `@Disabled` with TD pointers; HundredBot connect-race deferred to P22.1. Restored sequence: P19.5 rework → P20 → P21 → P22.1 (revalidation). Phase 22.1 stub + Phase 999.x backlog added.
+- Phase 19.1 inserted after Phase 19: Address P19 multi-review pass-4 findings (F1/F2/F3 unshipped, F4 RNG determinism, MS markStalled deadlock) plus residual phase items per 19-MULTI-REVIEW-pass4-TRIAGE.md (URGENT)

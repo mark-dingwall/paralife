@@ -98,7 +98,7 @@ Plans:
 **Goal:** Land the three F1/F2/F3 unshipped P19 fixes that the pass-2 VALIDATED projection wrongly marked shipped, harden RNG determinism (F4/CE/TX), close the markStalled deadlock (MS), and clear residual lifecycle leaks (AM/BL/FL) and test gaps (GT/LM/EL/codec gate) — all before Phase 20 starts compounding them.
 **Requirements**: None — bug-fix hardening of P19/P19.5 work; reliability for SCALE-06/SCALE-07
 **Depends on:** Phase 19
-**Plans:** 0 plans
+**Plans:** 6 plans
 **Success Criteria:**
 - F1 fixed: composite formation uses `remapEntity`; `BotRegistry.drainDeaths()` empty after formation under deterministic scenario
 - F2 fixed: `PerceptionCodec.validateEventCode` accepts `'B'`; round-trip test exists for every code declared in `Event.java`
@@ -111,7 +111,15 @@ Plans:
 - Existing 166-test suite stays green
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 19.1 to break down)
+- [ ] 19.1-01-PLAN.md — Unshipped fix verification & landing — F2 codec 'B', F1 composite remap, F3 markDead clearActive
+- [ ] 19.1-02-PLAN.md — Determinism hardening — F4 sort pendingGrants, CE sort registry snapshot, TX seeded ToxinPathGenerator + EnvironmentDeterminismTest extensions
+- [ ] 19.1-03-PLAN.md — Backpressure correctness — MS close-aware markStalled + tick-bound integration test, EL VT-exit assertion, L1 detach-timeout metric
+- [ ] 19.1-04-PLAN.md — Lifecycle leaks — AM remapBucketTags, BL cleanupBot env-state cleanup, FL composite-boundary FLEEING transfer
+- [ ] 19.1-05-PLAN.md — Test coverage — GT GoldenTraceWithActionsTest, LM movement/reproduction invariants, codec convention gate
+- [ ] 19.1-06-PLAN.md — Doc + nits — OD CLAUDE.md @Order accuracy, FE/FD OutboundSender Javadoc, ES processInteractions snapshot hoist
+
+**Cross-cutting constraints:**
+- Existing 166-test suite stays green
 
 ### Phase 20: Connection Multiplexing & Runtime Tuning
 **Goal:** Reduce socket/process overhead and tune the runtime for sustained high bot counts without regressing the compact protocol semantics.
