@@ -182,6 +182,34 @@ public class ResumeTokenRegistry {
     }
 
     /**
+     * Phase 19.5 H-C — rewrite every entry whose {@code entityId} equals
+     * {@code oldEntityId} to use {@code newEntityId} instead. Fired by
+     * {@link com.paralife.engine.EntityLifecycleListener#onEntityRemapped}
+     * on bond formation, composite formation, revert, and dissolve.
+     *
+     * <p>Without this, a STALLED grace-token issued before bond formation would
+     * still resolve to the pre-bond particle id at reconnect, leaking the
+     * BondedPair until the grace window expired.
+     *
+     * <p>Both ACTIVE and STALLED entries are rewritten in place — token map
+     * key (the resume token) is unchanged; only the {@code entityId} field of
+     * the {@link ResumeEntry} value is updated. Idempotent: a no-op when no
+     * entries match, and safe to call when {@code oldEntityId == newEntityId}.
+     */
+    public void remapEntity(String oldEntityId, String newEntityId) {
+        if (oldEntityId == null || newEntityId == null) return;
+        if (oldEntityId.equals(newEntityId)) return;
+        for (Map.Entry<String, ResumeEntry> e : tokenMap.entrySet()) {
+            ResumeEntry old = e.getValue();
+            if (old.entityId.equals(oldEntityId)) {
+                ResumeEntry updated = new ResumeEntry(
+                        newEntityId, old.originalSessionId, old.expiresAtTick, old.state);
+                tokenMap.replace(e.getKey(), old, updated);
+            }
+        }
+    }
+
+    /**
      * Tick-driven expiry sweep. Reaps entries where {@code state == STALLED AND expiresAtTick <= currentTick}
      * (boundary inclusive: a token set to expire at tick 105 is reaped exactly at tick 105).
      * ACTIVE entries are never touched by this method.

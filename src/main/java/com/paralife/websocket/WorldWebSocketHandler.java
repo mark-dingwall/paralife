@@ -14,7 +14,7 @@ import com.paralife.codec.CodecException;
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.ActionResolver;
-import com.paralife.engine.BondLifecycleListener;
+import com.paralife.engine.EntityLifecycleListener;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.EligibleCellIndex;
 import com.paralife.engine.LiveEntityRegistry;
@@ -76,7 +76,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
  * {@code synchronized(session)} — guaranteed delivery even when the queue is saturated.
  */
 @Component
-public class WorldWebSocketHandler extends TextWebSocketHandler implements BondLifecycleListener {
+public class WorldWebSocketHandler extends TextWebSocketHandler implements EntityLifecycleListener {
 
     private static final Logger log = LoggerFactory.getLogger(WorldWebSocketHandler.class);
 
@@ -799,27 +799,31 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements BondL
      * so a second invocation on the same session is a no-op.
      */
     /**
-     * Phase 19.5 H2 — {@link BondLifecycleListener} callback fired by
-     * {@code SimulationEngine} immediately after bond-formation registry remap.
-     * Updates the predator session's {@code ATTR_ENTITY_ID} attribute to the
-     * BondedPair's id so subsequent {@link #cleanupBot(WebSocketSession)}
-     * unregistration reaches the correct {@link LiveEntityRegistry} entry.
+     * Phase 19.5 H-A — {@link EntityLifecycleListener} callback fired by
+     * {@code SimulationEngine} immediately after a {@link BotRegistry} remap
+     * (bond formation, composite formation, composite revert, dissolve).
+     * Updates {@code ATTR_ENTITY_ID} so subsequent {@link #cleanupBot} reaches
+     * the right {@link LiveEntityRegistry} entry, and rewrites any STALLED
+     * resume-token entry keyed by {@code oldEntityId} so reconnect resolves to
+     * the post-remap entity (Phase 19.5 H-C).
      *
-     * <p>If the predator's session is no longer present (already disconnected
-     * before the bond formed), this is a no-op — the registry remap is still
-     * correct and the next tick will clean up the orphan via the registry-driven
-     * cleanup paths.
+     * <p>If the session is no longer present (already disconnected before the
+     * remap fired), this is a no-op — the registry remap is still correct and
+     * the next tick cleans up the orphan via registry-driven paths.
      */
     @Override
-    public void onBondFormed(String predatorSessionId, String bondedPairId) {
-        WebSocketSession session = sessionRegistry.getSession(predatorSessionId);
+    public void onEntityRemapped(String sessionId, String oldEntityId, String newEntityId) {
+        if (resumeTokenRegistry != null) {
+            resumeTokenRegistry.remapEntity(oldEntityId, newEntityId);
+        }
+        WebSocketSession session = sessionRegistry.getSession(sessionId);
         if (session == null) {
-            log.debug("onBondFormed: predator session {} no longer present — skipping attr update",
-                    predatorSessionId);
+            log.debug("onEntityRemapped: session {} no longer present — skipping attr update",
+                    sessionId);
             return;
         }
-        session.getAttributes().put(ATTR_ENTITY_ID, bondedPairId);
-        log.debug("onBondFormed: session={} ATTR_ENTITY_ID -> {}", predatorSessionId, bondedPairId);
+        session.getAttributes().put(ATTR_ENTITY_ID, newEntityId);
+        log.debug("onEntityRemapped: session={} {} -> {}", sessionId, oldEntityId, newEntityId);
     }
 
     public void cleanupBot(WebSocketSession s) {

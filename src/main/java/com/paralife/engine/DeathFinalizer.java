@@ -148,6 +148,12 @@ public class DeathFinalizer {
         worldGrid.clearEntity(x, y);
         // REVIEWS MEDIUM-1 / Phase 19 SCALE-06: STRUCTURAL clear — notify eligible-cell index.
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(x, y);
+        // Phase 19.5 H-B: BotRegistry was remapped to bp.id() at bond formation
+        // (H2 / d509cff), so the controlling session is keyed by bp.id() — NOT
+        // primaryId/secondaryId (already idempotent no-ops post-H2). Unregister
+        // BEFORE the LiveEntityRegistry clear so DeathNotice queues the predator
+        // session for the v|D broadcast in TickBroadcaster.
+        botRegistry.unregisterByEntity(bp.id());
         // Phase 19 SCALE-07 (REVIEWS H3): unregister BondedPair's own grid-occupant id on death.
         if (liveEntityRegistry != null) liveEntityRegistry.unregister(bp.id());
         log.debug("BondedPair death finalised: bp={} primary={} secondary={} pos=({},{})",

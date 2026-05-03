@@ -209,22 +209,21 @@ class CompositeFormationTest {
         grid.setEntity(3, 3, bp1);
         grid.setEntity(3, 4, bp2);
 
-        // Register bot sessions for the BondedPair member entity IDs
-        botRegistry.register("session-1", "bp1-primary", new Position(3, 3));
-        botRegistry.register("session-2", "bp1-secondary", new Position(3, 3));
-        botRegistry.register("session-3", "bp2-primary", new Position(3, 4));
-        botRegistry.register("session-4", "bp2-secondary", new Position(3, 4));
+        // Phase 19.5 H-A: production BotRegistry holds session→bp.id() after the
+        // H2 (d509cff) bond-formation remap; composite formation looks up by
+        // bp.id() and remaps to cm.id(). Prey sessions are unregistered at bond
+        // formation so they never reach the composite-formation site.
+        botRegistry.register("session-1", "bp1", new Position(3, 3));
+        botRegistry.register("session-2", "bp2", new Position(3, 4));
 
         engine().processTick(1);
 
         CompositeMember cm1 = (CompositeMember) grid.getCell(3, 3).occupant();
         CompositeMember cm2 = (CompositeMember) grid.getCell(3, 4).occupant();
 
-        // Original entity IDs should be unregistered
-        assertThat(botRegistry.getSessionForEntity("bp1-primary")).isEmpty();
-        assertThat(botRegistry.getSessionForEntity("bp1-secondary")).isEmpty();
-        assertThat(botRegistry.getSessionForEntity("bp2-primary")).isEmpty();
-        assertThat(botRegistry.getSessionForEntity("bp2-secondary")).isEmpty();
+        // BondedPair-id entries cleared by the composite-formation remap.
+        assertThat(botRegistry.getSessionForEntity("bp1")).isEmpty();
+        assertThat(botRegistry.getSessionForEntity("bp2")).isEmpty();
 
         // New CompositeMember IDs should be registered
         assertThat(botRegistry.getSessionForEntity(cm1.id())).isPresent();

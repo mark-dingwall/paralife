@@ -273,11 +273,11 @@ public class SimulationEngine {
      * {@link LiveEntityRegistry} entry. Setter-injected and null-guarded so
      * pre-Phase-19.5 unit tests compile unchanged.
      */
-    private BondLifecycleListener bondLifecycleListener;
+    private EntityLifecycleListener entityLifecycleListener;
 
     @Autowired(required = false)
-    public void setBondLifecycleListener(@Lazy BondLifecycleListener bondLifecycleListener) {
-        this.bondLifecycleListener = bondLifecycleListener;
+    public void setEntityLifecycleListener(@Lazy EntityLifecycleListener entityLifecycleListener) {
+        this.entityLifecycleListener = entityLifecycleListener;
     }
 
     /**
@@ -714,8 +714,9 @@ public class SimulationEngine {
                 }
                 if (predatorSessionId != null) {
                     botRegistry.remapEntity(predatorSessionId, bondedPair.id());
-                    if (bondLifecycleListener != null) {
-                        bondLifecycleListener.onBondFormed(predatorSessionId, bondedPair.id());
+                    if (entityLifecycleListener != null) {
+                        entityLifecycleListener.onEntityRemapped(
+                                predatorSessionId, bond.predator.id(), bondedPair.id());
                     }
                 }
                 worldGrid.setEntity(bond.primaryPos.x(), bond.primaryPos.y(), bondedPair);
@@ -862,15 +863,17 @@ public class SimulationEngine {
     }
 
     private void updateBotRegistryForFormation(Entity.BondedPair bp, String newMemberId, Position pos) {
-        // Map primary entity's session to new member (primary wins control)
-        botRegistry.getSessionForEntity(bp.primaryEntityId()).ifPresent(sessionId -> {
-            botRegistry.unregisterByEntity(bp.primaryEntityId());
+        // Phase 19.5 H-A: BotRegistry was remapped to bp.id() at bond formation
+        // (H2 / d509cff), so the surviving session is keyed by bp.id() — NOT
+        // primaryEntityId(). The pre-fix lookup of primaryEntityId/secondaryEntityId
+        // both returned empty post-H2, leaking the session→bp.id() entry into the
+        // composite era and orphaning the predator session.
+        botRegistry.getSessionForEntity(bp.id()).ifPresent(sessionId -> {
+            botRegistry.unregisterByEntity(bp.id());
             botRegistry.register(sessionId, newMemberId, pos);
-        });
-        // Secondary entity's bot loses its entity on composite formation — unregister cleanly
-        // to avoid ghost state (WR-04). Only one bot can control a CompositeMember.
-        botRegistry.getSessionForEntity(bp.secondaryEntityId()).ifPresent(sessionId -> {
-            botRegistry.unregisterByEntity(bp.secondaryEntityId());
+            if (entityLifecycleListener != null) {
+                entityLifecycleListener.onEntityRemapped(sessionId, bp.id(), newMemberId);
+            }
         });
     }
 
@@ -1226,9 +1229,16 @@ public class SimulationEngine {
             // Phase 19 SCALE-06 — STRUCTURAL: composite reverted to bonded-pair.
             if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
 
-            // Update BotRegistry: remap session from CompositeMember to BondedPair
-            botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId ->
-                    botRegistry.remapEntity(sessionId, bondedPair.id(), pos));
+            // Update BotRegistry: remap session from CompositeMember to BondedPair.
+            // Phase 19.5 H-A: fire EntityLifecycleListener so the WS layer keeps
+            // ATTR_ENTITY_ID synchronised and any stalled resume-token entry is
+            // rewritten to the new BondedPair id.
+            botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId -> {
+                botRegistry.remapEntity(sessionId, bondedPair.id(), pos);
+                if (entityLifecycleListener != null) {
+                    entityLifecycleListener.onEntityRemapped(sessionId, cm.id(), bondedPair.id());
+                }
+            });
 
             // Plan 14-03 cycle-6 HIGH #2: merge surviving member state into bp.id()
             // via MAX semantics. Paired helpers: hooks.transferMutagenState
@@ -1280,9 +1290,15 @@ public class SimulationEngine {
                 // Phase 19 SCALE-06 — STRUCTURAL: composite dissolved, particle placed.
                 if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
 
-                // Remap session from CompositeMember to new Particle
-                botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId ->
-                        botRegistry.remapEntity(sessionId, particle.id(), pos));
+                // Remap session from CompositeMember to new Particle.
+                // Phase 19.5 H-A: fire EntityLifecycleListener for ATTR_ENTITY_ID
+                // and resume-token rewrite (mirrors revertToBondedPair).
+                botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId -> {
+                    botRegistry.remapEntity(sessionId, particle.id(), pos);
+                    if (entityLifecycleListener != null) {
+                        entityLifecycleListener.onEntityRemapped(sessionId, cm.id(), particle.id());
+                    }
+                });
             }
         }
         compositeRegistry.dissolve(composite.getCompositeId());
