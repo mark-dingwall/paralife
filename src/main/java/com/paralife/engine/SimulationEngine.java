@@ -718,12 +718,15 @@ public class SimulationEngine {
                 String predatorSessionId = botRegistry.getSessionForEntity(bond.predator.id()).orElse(null);
                 String preySessionId = botRegistry.getSessionForEntity(bond.prey.id()).orElse(null);
                 if (preySessionId != null) {
-                    // Prey's bot loses its entity on bond formation — clean unregister to avoid
-                    // ghost. Use unregisterBySession (NOT unregisterByEntity) because bonding is
-                    // not death: unregisterByEntity queues a DeathNotice that TickBroadcaster
-                    // would drain into a spurious vD frame for the prey's session, breaking the
-                    // GoldenTrace dual-run digest gate (extra emit on the prey's session).
-                    botRegistry.unregisterBySession(preySessionId);
+                    // Phase 19.5 E1: prey's bot loses its entity on bond formation —
+                    // queue an AbsorbedNotice so TickBroadcaster emits a terminal v|B
+                    // frame to the prey session before unbinding. The bot client's
+                    // respawn FSM dispatches v|B and v|D through the same
+                    // handleEntityTerminated path. unregisterByEntity is wrong here
+                    // (would queue v|D — bonding is not death); plain
+                    // unregisterBySession was wrong too (silently dropped the
+                    // entity with no client signal).
+                    botRegistry.absorbBySession(preySessionId, bond.prey.id(), bond.secondaryPos);
                 }
                 if (predatorSessionId != null) {
                     botRegistry.remapEntity(predatorSessionId, bondedPair.id());

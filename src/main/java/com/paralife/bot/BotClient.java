@@ -386,11 +386,13 @@ public class BotClient {
         // Apply state-change code FIRST — HeuristicBrain needs an up-to-date BotState.
         t.change().ifPresent(c -> state.updateAndGet(prev -> prev.withChangeCode(c.code())));
 
-        // Death check: any v-block D event (SCHEMA §8.4 "Died") triggers respawn flow.
-        boolean died = t.events().stream().anyMatch(ev -> ev.code() == 'D');
-        if (died) {
-            handleDeath();
-            return;
+        // Phase 19.5 E3: terminal-frame check. v|D ("Died") and v|B
+        // ("absorBed" — prey consumed at bond formation) both mean the
+        // entity is gone; the respawn FSM is identical, only the log
+        // reason differs.
+        for (var ev : t.events()) {
+            if (ev.code() == 'D') { handleEntityTerminated("died"); return; }
+            if (ev.code() == 'B') { handleEntityTerminated("absorbed"); return; }
         }
 
         // Minimal-form frames (passive composite members) carry no vision/effects/pool,
@@ -476,7 +478,7 @@ public class BotClient {
      * a fresh {@code r|<species>}. Server answers with {@code S|<newEntityId>}
      * or {@code E|429}.
      */
-    private void handleDeath() {
+    private void handleEntityTerminated(String reason) {
         alive.set(false);
         entityId = null;
         long jitter = respawnJitterMs > 0
@@ -487,7 +489,7 @@ public class BotClient {
             Session s = this.session;
             if (s != null && s.isOpen()) {
                 sendFrame(new Frame.RegisterFrame(species));
-                log.debug("Bot sent respawn r|{} after {}ms", species, waitMs);
+                log.debug("Bot sent respawn r|{} after {}ms (reason={})", species, waitMs, reason);
             }
         });
     }

@@ -52,9 +52,21 @@ public class BotRegistry {
      */
     public record DeathNotice(String sessionId, String entityId, Position position) {}
 
+    /**
+     * Phase 19.5 E1: terminal-frame notice for bond-formation prey sessions.
+     * The prey particle is consumed (not killed) when fused into a BondedPair —
+     * the WS:entity 1:1 invariant means the prey's session loses its entity and
+     * must respawn. Drained by {@code TickBroadcaster.drainAndBroadcastAbsorbed}
+     * so the prey session receives a terminal {@code v|B} frame before the
+     * bind is gone. Same shape as {@link DeathNotice}; kept distinct so the
+     * client (and operator logs) can distinguish absorbed-into-bond from death.
+     */
+    public record AbsorbedNotice(String sessionId, String entityId, Position position) {}
+
     private final ConcurrentHashMap<String, BotState> bySession = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> entityToSession = new ConcurrentHashMap<>();
     private final List<DeathNotice> deathsThisTick = Collections.synchronizedList(new ArrayList<>());
+    private final List<AbsorbedNotice> absorptionsThisTick = Collections.synchronizedList(new ArrayList<>());
 
     /**
      * Register a bot — associate a session with an entity at a position.
@@ -114,6 +126,38 @@ public class BotRegistry {
             if (deathsThisTick.isEmpty()) return List.of();
             var copy = new ArrayList<>(deathsThisTick);
             deathsThisTick.clear();
+            return copy;
+        }
+    }
+
+    /**
+     * Phase 19.5 E1: unregister a bot whose entity was absorbed into a
+     * BondedPair at bond formation, AND queue an {@link AbsorbedNotice} so
+     * {@code TickBroadcaster} emits the terminal {@code v|B} frame to the
+     * prey session. Replaces the bare {@link #unregisterBySession} call at
+     * the bond-formation site so the prey session's bot client receives a
+     * respawn signal instead of silently losing its entity.
+     */
+    public void absorbBySession(String sessionId, String entityId, Position position) {
+        var removed = bySession.remove(sessionId);
+        if (removed != null) {
+            entityToSession.remove(removed.entityId);
+            absorptionsThisTick.add(new AbsorbedNotice(sessionId, entityId, position));
+            log.debug("Bot absorbed (bond): session={} entity={}", sessionId, removed.entityId);
+        }
+    }
+
+    /**
+     * Phase 19.5 E1: drain absorbed-into-bond notices captured since the last
+     * call. Mirrors {@link #drainDeaths} — invoked by
+     * {@code TickBroadcaster.onTick} alongside death drain so the prey session
+     * receives its terminal frame on the same tick the bond formed.
+     */
+    public List<AbsorbedNotice> drainAbsorptions() {
+        synchronized (absorptionsThisTick) {
+            if (absorptionsThisTick.isEmpty()) return List.of();
+            var copy = new ArrayList<>(absorptionsThisTick);
+            absorptionsThisTick.clear();
             return copy;
         }
     }
@@ -239,6 +283,9 @@ public class BotRegistry {
         entityToSession.clear();
         synchronized (deathsThisTick) {
             deathsThisTick.clear();
+        }
+        synchronized (absorptionsThisTick) {
+            absorptionsThisTick.clear();
         }
     }
 }

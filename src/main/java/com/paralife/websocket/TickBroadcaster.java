@@ -193,6 +193,10 @@ public class TickBroadcaster {
         // still open. Each gets a terminal vD frame (SCHEMA §8.4 Died) so the
         // client's respawn FSM kicks off.
         drainAndBroadcastDeaths(event.tickNumber());
+        // Phase 19.5 E1: same pattern for bond-formation prey sessions —
+        // entity is gone but session is still open, terminal v|B frame
+        // triggers the same client-side respawn FSM.
+        drainAndBroadcastAbsorptions(event.tickNumber());
 
         var bots = botRegistry.getAllBots();
         if (bots.isEmpty()) return;
@@ -282,6 +286,49 @@ public class TickBroadcaster {
      */
     Frame.TickFrame buildDeathFrame(long tickId, Position lastPos) {
         List<Event> events = List.of(new Event('D', Optional.empty(), OptionalInt.empty()));
+        return new Frame.TickFrame(tickId, lastPos.x(), lastPos.y(),
+                /*energy=*/ 0, /*maxEnergy=*/ 0,
+                /*sensorRadius=*/ 0,
+                List.of(), Optional.empty(), List.of(), events,
+                Optional.empty(), List.of());
+    }
+
+    /**
+     * Phase 19.5 E1: drain absorbed-into-bond notices and broadcast a terminal
+     * {@code v|B} frame to each prey session. Mirror of
+     * {@link #drainAndBroadcastDeaths} — same skip rules (closed/STALLED
+     * sessions ignored), same {@link WorldWebSocketHandler#markDead}
+     * post-frame attr cleanup so a follow-up {@code r|} from the prey session
+     * is accepted as a respawn.
+     */
+    private void drainAndBroadcastAbsorptions(long tickId) {
+        var absorbed = botRegistry.drainAbsorptions();
+        if (absorbed.isEmpty()) return;
+        for (BotRegistry.AbsorbedNotice an : absorbed) {
+            WebSocketSession session = sessionRegistry.getSession(an.sessionId());
+            if (session == null || !session.isOpen()) continue;
+            if (worldWebSocketHandler != null && worldWebSocketHandler.isStalled(session)) continue;
+            if (worldWebSocketHandler != null) {
+                worldWebSocketHandler.markDead(session);
+            }
+            try {
+                Frame.TickFrame frame = buildAbsorbedFrame(tickId, an.position());
+                if (outboundSender != null) {
+                    outboundSender.offer(an.sessionId(), frame);
+                }
+            } catch (RuntimeException e) {
+                log.warn("Absorbed frame build failed for session {}: {}", an.sessionId(), e.getMessage(), e);
+            }
+        }
+    }
+
+    /**
+     * Phase 19.5 E1: minimal-form terminal tick frame carrying a single
+     * {@code v|B} event (SCHEMA §8.4 Bonded/absorBed). Same shape as
+     * {@link #buildDeathFrame} — last known position, zero energy, radius 0.
+     */
+    Frame.TickFrame buildAbsorbedFrame(long tickId, Position lastPos) {
+        List<Event> events = List.of(new Event('B', Optional.empty(), OptionalInt.empty()));
         return new Frame.TickFrame(tickId, lastPos.x(), lastPos.y(),
                 /*energy=*/ 0, /*maxEnergy=*/ 0,
                 /*sensorRadius=*/ 0,

@@ -18,7 +18,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.TestPropertySource;
 
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -297,37 +299,54 @@ class LiveEntityRegistryInvariantTest {
      * </ol>
      */
     private void assertRegistryMatchesGrid(String scenario) {
-        // Build the ground-truth set from the grid.
-        Set<Position> gridOccupants = new HashSet<>();
+        // Phase 19.5 C1: compare position → entityId maps. The prior Set<Position>
+        // comparison only caught extra/missing positions; identity drift (registry
+        // entry exists at the right position but with the wrong entityId — the
+        // exact failure mode of H-A pre-fix) was invisible. Now any mismatch
+        // between grid occupant id and registry entityId at the same position
+        // surfaces as a map inequality.
+        Map<Position, String> gridOccupantIds = new HashMap<>();
         for (int x = 0; x < gridConfig.width(); x++) {
             for (int y = 0; y < gridConfig.height(); y++) {
                 Cell cell = worldGrid.getCell(x, y);
                 Entity occ = cell.occupant();
                 if (occ != null && !(occ instanceof Rock) && !(occ instanceof Nutrient)) {
-                    gridOccupants.add(new Position(x, y));
+                    gridOccupantIds.put(new Position(x, y), occ.id());
                 }
             }
         }
 
-        // Build the registry position set.
-        Set<Position> registryPositions = new HashSet<>();
+        Map<Position, String> registryByPosition = new HashMap<>();
         for (LiveEntityRegistry.EntityEntry entry : liveEntityRegistry.snapshot()) {
-            registryPositions.add(entry.position());
+            registryByPosition.put(entry.position(), entry.entityId());
         }
 
-        assertThat(registryPositions)
-                .as("[%s] Registry positions must match non-Rock/non-Nutrient grid occupant positions. "
-                        + "Extra in registry (stale): %s. Missing from registry: %s",
+        assertThat(registryByPosition)
+                .as("[%s] Registry position→entityId must match grid occupant id at the same position. "
+                        + "Extra in registry (stale): %s. Missing from registry: %s. "
+                        + "Identity drift (same position, different id): %s",
                         scenario,
-                        difference(registryPositions, gridOccupants),
-                        difference(gridOccupants, registryPositions))
-                .isEqualTo(gridOccupants);
+                        differenceKeys(registryByPosition, gridOccupantIds),
+                        differenceKeys(gridOccupantIds, registryByPosition),
+                        idDrift(registryByPosition, gridOccupantIds))
+                .isEqualTo(gridOccupantIds);
     }
 
-    /** Returns elements in {@code a} that are not in {@code b}. */
-    private static Set<Position> difference(Set<Position> a, Set<Position> b) {
-        Set<Position> diff = new HashSet<>(a);
-        diff.removeAll(b);
+    private static Set<Position> differenceKeys(Map<Position, String> a, Map<Position, String> b) {
+        Set<Position> diff = new HashSet<>(a.keySet());
+        diff.removeAll(b.keySet());
         return diff;
+    }
+
+    private static Map<Position, String> idDrift(Map<Position, String> registry,
+                                                  Map<Position, String> grid) {
+        Map<Position, String> drift = new HashMap<>();
+        for (Map.Entry<Position, String> e : registry.entrySet()) {
+            String gridId = grid.get(e.getKey());
+            if (gridId != null && !gridId.equals(e.getValue())) {
+                drift.put(e.getKey(), "registry=" + e.getValue() + " grid=" + gridId);
+            }
+        }
+        return drift;
     }
 }

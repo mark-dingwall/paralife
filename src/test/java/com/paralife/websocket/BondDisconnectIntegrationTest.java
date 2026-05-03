@@ -1,7 +1,9 @@
 package com.paralife.websocket;
 
 import com.paralife.admission.OutboundSender;
+import com.paralife.admission.ResumeTokenRegistry;
 import com.paralife.engine.BotRegistry;
+import com.paralife.engine.DeathFinalizer;
 import com.paralife.engine.LiveEntityRegistry;
 import com.paralife.engine.TickEvent;
 import com.paralife.world.Entity.BondedPair;
@@ -70,6 +72,8 @@ class BondDisconnectIntegrationTest {
     @Autowired WorldWebSocketHandler handler;
     @Autowired OutboundSender outboundSender;
     @Autowired SessionRegistry sessionRegistry;
+    @Autowired DeathFinalizer deathFinalizer;
+    @Autowired ResumeTokenRegistry resumeTokenRegistry;
 
     @BeforeEach
     void resetAll() {
@@ -153,6 +157,158 @@ class BondDisconnectIntegrationTest {
         assertThat(botRegistry.getBySession(predSessionId))
                 .as("Predator's BotRegistry entry must be gone after cleanupBot")
                 .isEmpty();
+    }
+
+    /**
+     * Phase 19.5 H-B (C2 regression): when a BondedPair dies, BotRegistry must
+     * be cleared via bp.id() and a DeathNotice queued for the predator session
+     * so TickBroadcaster emits the v|D respawn signal.
+     */
+    @Test
+    void bondedPairDeath_clearsBotRegistryAndQueuesDeathNotice() {
+        // Reuse the same arrange/bond-formation flow as the H2 test above.
+        String predSessionId = "pred-session";
+        String preySessionId = "prey-session";
+        WebSocketSession predSession = mockSession(predSessionId);
+        WebSocketSession preySession = mockSession(preySessionId);
+        sessionRegistry.register(predSession);
+        sessionRegistry.register(preySession);
+
+        Position predPos = new Position(3, 3);
+        Position preyPos = new Position(3, 4);
+        worldGrid.setEntity(predPos.x(), predPos.y(),
+                new Particle("pred-1", ParticleType.CATALYST, 80));
+        worldGrid.setEntity(preyPos.x(), preyPos.y(),
+                new Particle("prey-1", ParticleType.SPORE, 80));
+        botRegistry.register(predSessionId, "pred-1", predPos);
+        botRegistry.register(preySessionId, "prey-1", preyPos);
+        liveEntityRegistry.register("pred-1", predPos);
+        liveEntityRegistry.register("prey-1", preyPos);
+        predSession.getAttributes().put("entityId", "pred-1");
+        preySession.getAttributes().put("entityId", "prey-1");
+
+        publisher.publishEvent(new TickEvent(1L));
+
+        // Drain the bond-formation absorbed/death notices so we only see
+        // the BondedPair-death notice produced by the finalize call below.
+        botRegistry.drainDeaths();
+
+        var bpEntry = liveEntityRegistry.snapshot().get(0);
+        String bpId = bpEntry.entityId();
+        Position bpPos = bpEntry.position();
+        BondedPair bp = (BondedPair) worldGrid.getCell(bpPos.x(), bpPos.y()).occupant();
+
+        // ── Act: kill the BondedPair via DeathFinalizer (the production path).
+        deathFinalizer.finalizeBondedPairDeath(bpPos.x(), bpPos.y(), bp);
+
+        // ── Assert H-B invariants:
+        // (1) BotRegistry no longer holds the predator's session.
+        assertThat(botRegistry.getBySession(predSessionId))
+                .as("Predator session must be unregistered when BondedPair dies (H-B)")
+                .isEmpty();
+        // (2) Death notice was queued for the predator session keyed by bp.id().
+        var deaths = botRegistry.drainDeaths();
+        assertThat(deaths)
+                .as("DeathNotice must include the predator session keyed by bp.id() (H-B)")
+                .anyMatch(dn -> dn.sessionId().equals(predSessionId)
+                        && dn.entityId().equals(bpId));
+        // (3) LiveEntityRegistry empty (cell cleared + bp.id() unregistered).
+        assertThat(liveEntityRegistry.size()).isZero();
+    }
+
+    /**
+     * Phase 19.5 H-C (C2 regression): a STALLED resume token issued before
+     * bond formation must resolve to the BondedPair id (not the pre-bond
+     * particle id) when the predator reconnects. ResumeTokenRegistry.remapEntity
+     * is fired by EntityLifecycleListener.onEntityRemapped at bond formation.
+     */
+    @Test
+    void stalledPredator_thenBond_thenReconnect_rebindsToBondedPair() {
+        String predSessionId = "pred-session";
+        String preySessionId = "prey-session";
+        WebSocketSession predSession = mockSession(predSessionId);
+        WebSocketSession preySession = mockSession(preySessionId);
+        sessionRegistry.register(predSession);
+        sessionRegistry.register(preySession);
+
+        Position predPos = new Position(3, 3);
+        Position preyPos = new Position(3, 4);
+        worldGrid.setEntity(predPos.x(), predPos.y(),
+                new Particle("pred-1", ParticleType.CATALYST, 80));
+        worldGrid.setEntity(preyPos.x(), preyPos.y(),
+                new Particle("prey-1", ParticleType.SPORE, 80));
+        botRegistry.register(predSessionId, "pred-1", predPos);
+        botRegistry.register(preySessionId, "prey-1", preyPos);
+        liveEntityRegistry.register("pred-1", predPos);
+        liveEntityRegistry.register("prey-1", preyPos);
+        predSession.getAttributes().put("entityId", "pred-1");
+        preySession.getAttributes().put("entityId", "prey-1");
+
+        // Issue an ACTIVE resume token for the predator entity BEFORE bond
+        // formation — this is the token the H-C remap must rewrite.
+        String token = resumeTokenRegistry.issueActive("pred-1", predSessionId);
+        predSession.getAttributes().put("resumeToken", token);
+
+        // Bond formation tick — H-C fires onEntityRemapped(predSessionId, "pred-1", bp.id()).
+        publisher.publishEvent(new TickEvent(1L));
+
+        String bpId = liveEntityRegistry.snapshot().get(0).entityId();
+
+        // STALLED-then-rebind round-trip is the H-C contract: the resume token
+        // must resolve to the post-bond BondedPair id, not the pre-bond
+        // particle id. Pre-fix this returned "pred-1".
+        resumeTokenRegistry.convertToStalled(token, 1L);
+        var rebind = resumeTokenRegistry.tryRebind(token, "new-pred-session", 2L).orElse(null);
+        assertThat(rebind)
+                .as("Reconnect must resolve to the post-bond BondedPair (H-C)")
+                .isNotNull();
+        assertThat(rebind.entityId()).isEqualTo(bpId);
+    }
+
+    /**
+     * Phase 19.5 E5: bond formation must enqueue a vB absorbed-notice for the
+     * prey session so {@code TickBroadcaster.drainAndBroadcastAbsorptions}
+     * delivers a terminal {@code v|B} frame (E1 schema) instead of silently
+     * dropping the prey's binding.
+     */
+    @Test
+    void bondFormation_emitsAbsorbedNoticeForPreySession() {
+        String predSessionId = "pred-session";
+        String preySessionId = "prey-session";
+        WebSocketSession predSession = mockSession(predSessionId);
+        WebSocketSession preySession = mockSession(preySessionId);
+        sessionRegistry.register(predSession);
+        sessionRegistry.register(preySession);
+
+        Position predPos = new Position(3, 3);
+        Position preyPos = new Position(3, 4);
+        worldGrid.setEntity(predPos.x(), predPos.y(),
+                new Particle("pred-1", ParticleType.CATALYST, 80));
+        worldGrid.setEntity(preyPos.x(), preyPos.y(),
+                new Particle("prey-1", ParticleType.SPORE, 80));
+        botRegistry.register(predSessionId, "pred-1", predPos);
+        botRegistry.register(preySessionId, "prey-1", preyPos);
+        liveEntityRegistry.register("pred-1", predPos);
+        liveEntityRegistry.register("prey-1", preyPos);
+        predSession.getAttributes().put("entityId", "pred-1");
+        preySession.getAttributes().put("entityId", "prey-1");
+
+        publisher.publishEvent(new TickEvent(1L));
+
+        // After the tick, TickBroadcaster.drainAndBroadcastAbsorptions has
+        // delivered the v|B frame and called handler.markDead on the prey
+        // session — which clears ATTR_ENTITY_ID. Pre-fix: prey session was
+        // unregisterBySession'd silently and ATTR_ENTITY_ID stayed pinned
+        // to "prey-1", so a follow-up r| from the prey session was rejected
+        // as already-registered.
+        assertThat(preySession.getAttributes().get("entityId"))
+                .as("prey ATTR_ENTITY_ID must be cleared by absorbed-frame markDead (E1)")
+                .isNull();
+        // The notice list is drained by TickBroadcaster — empty here is correct.
+        assertThat(botRegistry.drainAbsorptions()).isEmpty();
+        // BotRegistry binding is gone (matches pre-E1 behavior — only the
+        // signal mechanism changed).
+        assertThat(botRegistry.getBySession(preySessionId)).isEmpty();
     }
 
     private WebSocketSession mockSession(String id) {

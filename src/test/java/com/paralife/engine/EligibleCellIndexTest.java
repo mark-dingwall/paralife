@@ -92,17 +92,20 @@ class EligibleCellIndexTest {
     }
 
     @Test
-    void constraint2RejectsOvercrowded_viaSimulationEnginePath() {
-        // REVIEWS H1 (Phase 19.5): end-to-end proof that the index excludes cells
-        // flagged OVERCROWDED via the same Cell.flags mutation pathway used by
-        // SimulationEngine.processOvercrowding (which calls
-        //   worldGrid.setCell(x, y, cell.withAddedFlag(Cell.FLAG_OVERCROWDED))
-        // ). The previous test stubbed cache bit 0; that path is REDACTED by
-        // EnvironmentEngine.buildStatusCaches and would silently fail to exclude.
+    void constraint2RejectsCellFlaggedOvercrowdedAfterDeath() {
+        // REVIEWS H1 (Phase 19.5): proves the index excludes cells flagged
+        // OVERCROWDED via the same Cell.flags mutation pathway that
+        // SimulationEngine.processOvercrowding writes — i.e. a flag set via
+        // worldGrid.setCell(x, y, cell.withAddedFlag(Cell.FLAG_OVERCROWDED)).
+        // This is the wire-format-truth path; an earlier variant of this test
+        // stubbed the EnvironmentEngine cellStatusCache bit 0, which is
+        // REDACTED by EnvironmentEngine.buildStatusCaches and would silently
+        // fail to exclude.
         //
-        // Scenario: place an entity at (4,4) and mark it FLAG_OVERCROWDED — mirroring
-        // the exact two-line sequence in SimulationEngine.processOvercrowding (entity
-        // setEntity then setCell(...withAddedFlag(FLAG_OVERCROWDED))).
+        // Note: this is a UNIT test against EligibleCellIndex.evaluateEligibility's
+        // FLAG_OVERCROWDED branch — not an end-to-end run of processOvercrowding.
+        // The corresponding end-to-end coverage lives in SimulationEngine
+        // overcrowding tests; M-D adds the notifyChanged hook there.
         worldGrid.trySetEntity(4, 4, Entity.Particle.spawn("oc-target",
                 Entity.ParticleType.CATALYST, 10));
         worldGrid.setCell(4, 4, worldGrid.getCell(4, 4).withAddedFlag(Cell.FLAG_OVERCROWDED));
