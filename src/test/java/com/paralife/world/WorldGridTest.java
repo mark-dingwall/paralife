@@ -7,6 +7,7 @@ import com.paralife.world.Entity.Nutrient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -180,11 +181,14 @@ class WorldGridTest {
                 results[idx] = grid.getCell(5, 5);
             });
         }
-        for (Thread t : threads) {
-            t.join();
+        for (int i = 0; i < threads.length; i++) {
+            if (!threads[i].join(Duration.ofSeconds(10))) {
+                throw new AssertionError(
+                        "Reader VT #" + i + " did not complete within 10s — likely VT carrier "
+                        + "starvation from leaked threads in earlier tests in the shared JVM.");
+            }
         }
 
-        // All reads should succeed
         for (Cell r : results) {
             assertThat(r.hasOccupant()).isTrue();
             assertThat(r.occupant().id()).isEqualTo("concurrent");

@@ -126,6 +126,7 @@ Plans:
 - Reports cover tick drift, session stability, throughput, rejection counts, and major failure modes.
 - The milestone establishes a new validated scale envelope beyond the original 100-bot baseline.
 - M4 closes with clear evidence for what still belongs to M5/M6 versus what is solved here.
+- Re-enable + pass `MetabolismIntegrationTest` and `EncodeDeflatePerformanceGateTest` under benchmark conditions (TD inherited from Phase 22).
 
 ## Backlog
 
@@ -136,3 +137,25 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with `$gsd-review-backlog` when ready)
+
+### Phase 22: Integration test resource leak audit
+
+**Goal:** Stabilise the shared-JVM test suite after the 2026-05-03 carrier-starvation incident; ship test-infra invariants and defer load-bearing simulation/perf bugs to their natural homes.
+**Requirements:** TBD (none mapped — incident-driven)
+**Depends on:** none (ran out-of-order as incident response 2026-05-03; restored sequence has P19.5/P20/P21 ahead)
+**Status:** closing 2026-05-04 — see `phases/22-integration-test-resource-leak-audit/22-SUMMARY.md`. Revalidation handed to Phase 22.1.
+**Plans:** 0 plans (incident response — no formal plan breakdown)
+
+### Phase 22.1: Revalidation of P22 test-infra fixes + deferred items
+
+**Goal:** Confirm P22's load-bearing invariants still hold after P19.5/P20/P21 changes, and address items deferred from P22.
+**Depends on:** Phase 21
+**Scope:**
+- Diff current code vs `.planning/phases/22-integration-test-resource-leak-audit/22-INVARIANTS.md`. Any drift → either re-validate fix or reimplement.
+- Re-enable + pass `MetabolismIntegrationTest`, `EncodeDeflatePerformanceGateTest` under benchmark conditions (handed off from P21 SC).
+- Fix `HundredBotIntegrationTest` connect-latch race (60 s OR shared `WebSocketClient`).
+- Final exit gate: `./gradlew test` with `forkEvery=0` → <100 live threads at end, zero "did not exit" warnings, zero "Could not write XML" errors.
+
+### Phase 999.x: PopulationDynamicsTest determinism (BACKLOG)
+
+Pin RNG seed or widen variation tolerance for `PopulationDynamicsTest.allThreeTypesSurvive500Ticks` (probabilistic flat-line on extinction). Not scale-related; separate from P21/P22.1.

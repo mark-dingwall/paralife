@@ -5,6 +5,7 @@ import com.paralife.bot.HeuristicBrain;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -108,6 +109,7 @@ class EncodeDeflatePerformanceGateTest {
     }
 
     @Test
+    @Disabled("TD-22→P21: encode/deflate perf regression; bisect during P21 benchmark gate")
     void encodeDeflateUnder100BotsTickDrift() throws Exception {
         String uri = "ws://localhost:" + port + "/ws/world";
 

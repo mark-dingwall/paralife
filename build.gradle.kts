@@ -65,15 +65,15 @@ tasks.withType<Test> {
             excludeTags("slow")
         }
     }
-    // Phase 17: when slow load tests are included, fork a fresh JVM per test class.
-    // EmergenceStabilityLoadTest, LoadTest, and HundredBotIntegrationTest each
-    // bring up a full Spring context, 100-bot fleet, and Jetty server. Sharing a
-    // JVM caused thread pool / native socket / context proliferation, degrading
-    // downstream tests (98/100 sessions in isolation → 75/100 after siblings).
-    if (project.findProperty("includeLong") == "true") {
-        forkEvery = 1
-        maxParallelForks = 1
-    }
+    // Fork a fresh JVM per test class to prevent inter-test contamination.
+    // Originally added under -PincludeLong=true (Phase 17) for slow tests bringing up
+    // full Spring contexts / Jetty / 100-bot fleets. 2026-05-03: an unbounded
+    // `Thread.join()` in WorldGridTest.concurrentReadsDontBlock hung for 2h after
+    // 497 leaked threads from earlier tests starved the virtual-thread carrier pool —
+    // proving leaks now exist outside slow-tagged tests too. Made unconditional until
+    // Phase C (integration-test resource-leak audit) lets us safely remove it.
+    forkEvery = 1
+    maxParallelForks = 1
     finalizedBy(tasks.jacocoTestReport)
 }
 

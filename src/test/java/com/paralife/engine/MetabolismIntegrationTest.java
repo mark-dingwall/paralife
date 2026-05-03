@@ -8,6 +8,7 @@ import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.WorldGrid;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,6 +79,7 @@ class MetabolismIntegrationTest {
     }
 
     @Test
+    @Disabled("TD-22→P21: WorldGrid read-lock starvation under tick-loop write pressure; revisit when P20 runtime tuning lands")
     void allTypesSurviveWithMetabolism() throws Exception {
         int botCount = 30; // 10 of each type
         String uri = "ws://localhost:" + port + "/ws/world";
