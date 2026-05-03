@@ -489,7 +489,18 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
             if (snapshot != null) {
                 attrs.put(ATTR_RESPAWN_COUNT, snapshot);
             }
-            botRegistry.rebindSession(session.getId(), rebind.entityId());
+            // Phase 19.5 M-F: rebindSession returns false when the entity is no
+            // longer in BotRegistry (already reaped between tryRebind and here —
+            // e.g. grace expiry sweep ran on the same tick). Treat as a stale
+            // resume token: tell the client to re-register fresh + close.
+            if (!botRegistry.rebindSession(session.getId(), rebind.entityId())) {
+                sendFrame(session, new Frame.ErrorFrame(400, Optional.of("stale-resume-token")));
+                try { session.close(); } catch (Exception ignored) {}
+                log.warn("BACKPRESSURE rebind-stale tick={} session={} entity={} {}",
+                        currentTick, session.getId(), rebind.entityId(),
+                        AttributionTagger.formatLogFields(session));
+                return;
+            }
             sendFrame(session, new Frame.SyncFrame(rebind.entityId(),
                     Optional.of(rebind.freshResumeToken()), List.of()));
             log.info("BACKPRESSURE resumed tick={} session={} entity={} respawnCountRestored={} {}",

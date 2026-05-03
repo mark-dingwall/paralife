@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -97,6 +96,15 @@ public class SimulationEngine {
      */
     private final EmergenceMetrics emergenceMetrics;
     private final AtomicLong nutrientIdCounter = new AtomicLong(0);
+    /**
+     * Phase 19.5 M-C: deterministic counters replace UUID.randomUUID() for
+     * composite + composite-member ids. Reset alongside childIdCounter in
+     * clearStateForTest so dual-run digest equivalence holds across composite
+     * formations. Latent today (no replay test consumes composite ids), but
+     * required before GoldenTrace exercises composites with stable assertions.
+     */
+    private final AtomicLong compositeIdCounter = new AtomicLong(0);
+    private final AtomicLong memberIdCounter = new AtomicLong(0);
     private final AtomicInteger lastTickBondCount = new AtomicInteger(0);
     /** Tracks previous tick's pool energy per composite for panic zone decrease detection (D-31). */
     private final ConcurrentHashMap<String, Integer> previousPoolEnergy = new ConcurrentHashMap<>();
@@ -240,6 +248,11 @@ public class SimulationEngine {
         previousPoolEnergy.clear();
         nutrientIdCounter.set(0);
         lastTickBondCount.set(0);
+        // Phase 19.5 M-C: reset deterministic id counters so re-runs reuse
+        // composite-1/cm-1 etc., matching ActionResolver.clearStateForTest's
+        // childIdCounter reset.
+        compositeIdCounter.set(0);
+        memberIdCounter.set(0);
     }
 
     /**
@@ -764,7 +777,7 @@ public class SimulationEngine {
                 Cell c2 = worldGrid.getCell(cf.pos2().x(), cf.pos2().y());
                 if (!(c1.occupant() instanceof Entity.BondedPair) || !(c2.occupant() instanceof Entity.BondedPair)) continue;
 
-                String compositeId = "composite-" + UUID.randomUUID().toString().substring(0, 8);
+                String compositeId = "composite-" + compositeIdCounter.incrementAndGet();
                 // Determine surface member (more empty neighbors = surface = FEEDER per D-09)
                 // NOTE: Phase 12 MVP — only FEEDER and LOCOMOTOR roles assigned on formation.
                 // Composites start blind (no SENSOR), unarmed (no ATTACKER/DEFENDER), and
@@ -775,8 +788,8 @@ public class SimulationEngine {
                 Entity.Role role2 = role1 == Entity.Role.FEEDER ? Entity.Role.LOCOMOTOR : Entity.Role.FEEDER;
 
                 // Create CompositeMember entities — individual energy = half of source BondedPair energy
-                String memberId1 = "cm-" + UUID.randomUUID().toString().substring(0, 8);
-                String memberId2 = "cm-" + UUID.randomUUID().toString().substring(0, 8);
+                String memberId1 = "cm-" + memberIdCounter.incrementAndGet();
+                String memberId2 = "cm-" + memberIdCounter.incrementAndGet();
                 int individualEnergy1 = cf.bp1().energy() / 2;
                 int individualEnergy2 = cf.bp2().energy() / 2;
                 var member1 = new Entity.CompositeMember(memberId1, compositeId, cf.bp1().primaryType(), role1,
@@ -1045,10 +1058,16 @@ public class SimulationEngine {
                 }
                 if (!cell.hasFlag(Cell.FLAG_OVERCROWDED)) {
                     worldGrid.setCell(x, y, worldGrid.getCell(x, y).withAddedFlag(Cell.FLAG_OVERCROWDED));
+                    // Phase 19.5 M-D: FLAG_OVERCROWDED added → cell-eligibility flipped
+                    // (constraint #2). Notify the EligibleCellIndex so the next placement
+                    // sample doesn't pick a cell that just became ineligible.
+                    if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(x, y);
                 }
                 overcrowded++;
             } else if (cell.hasFlag(Cell.FLAG_OVERCROWDED)) {
                 worldGrid.setCell(x, y, cell.withRemovedFlag(Cell.FLAG_OVERCROWDED));
+                // Phase 19.5 M-D: FLAG_OVERCROWDED cleared → cell may become eligible again.
+                if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(x, y);
             }
         }
         return overcrowded;

@@ -143,20 +143,29 @@ public class ActionResolver {
 
     /**
      * Pending action: sessionId → {@link Frame.ActionFrame}. Only the last
-     * frame per session per tick is kept. Uses {@link AtomicReference} swap
-     * for atomic drain — see {@link #onTick}.
+     * frame per session per tick is kept.
+     *
+     * <p>Phase 19.5 M-A: a stable {@link ConcurrentHashMap} drained via
+     * iterator + {@code remove(key, value)} on tick. The previous
+     * {@code AtomicReference}-swap pattern had a TOCTOU window where a
+     * {@link #queueAction} call holding a stale map reference could
+     * {@code put} into the just-replaced map and lose the action — a single
+     * lost frame in a sub-µs window self-recovered next tick, but the
+     * stable-map approach removes the race entirely. Stale-ref puts no
+     * longer exist (single map ref); inflight puts during drain land in
+     * the same map and are picked up next tick.
      */
-    private final AtomicReference<ConcurrentHashMap<String, Frame.ActionFrame>> pendingActions =
-            new AtomicReference<>(new ConcurrentHashMap<>());
+    private final ConcurrentHashMap<String, Frame.ActionFrame> pendingActions =
+            new ConcurrentHashMap<>();
 
     /**
      * Pending ranked preferences from LOCOMOTOR composite members (verb V).
      * Keyed by sessionId, drained alongside {@link #pendingActions} on tick.
      * Each entry is the raw 3-char numpad string carried in
-     * {@code ActionFrame.arg()}.
+     * {@code ActionFrame.arg()}. Same drain semantics as {@link #pendingActions}.
      */
-    private final AtomicReference<ConcurrentHashMap<String, String>> pendingVoteBallots =
-            new AtomicReference<>(new ConcurrentHashMap<>());
+    private final ConcurrentHashMap<String, String> pendingVoteBallots =
+            new ConcurrentHashMap<>();
 
     @Autowired
     public ActionResolver(WorldGrid worldGrid, BotRegistry botRegistry,
@@ -205,8 +214,8 @@ public class ActionResolver {
     public void clearStateForTest() {
         compositeTicksSinceMove.clear();
         lastReproducedTick.clear();
-        pendingActions.getAndSet(new ConcurrentHashMap<>());
-        pendingVoteBallots.getAndSet(new ConcurrentHashMap<>());
+        pendingActions.clear();
+        pendingVoteBallots.clear();
         // Phase 19.5 M3: childIdCounter survives across resetAll(), embedding
         // run-1 increments into run-2 ids ("child-N+k" instead of "child-1").
         // Latent today only because composite-ids use UUID.randomUUID(); the
@@ -341,7 +350,7 @@ public class ActionResolver {
      */
     public void queueAction(String sessionId, Frame.ActionFrame action) {
         if (action == null) return;
-        Frame.ActionFrame previous = pendingActions.get().put(sessionId, action);
+        Frame.ActionFrame previous = pendingActions.put(sessionId, action);
         if (previous != null && admissionMetrics != null) {
             // D-09: last-write-wins collapse — increment the two-tag ingress-overwrite
             // counter (paralife.admission.ingress.overwrites). Observational only; the
@@ -353,7 +362,7 @@ public class ActionResolver {
             admissionMetrics.incIngressOverwrite(session);   // session may be null → tagger handles it
         }
         if (action.verb() == 'V' && action.arg().isPresent()) {
-            pendingVoteBallots.get().put(sessionId, action.arg().get());
+            pendingVoteBallots.put(sessionId, action.arg().get());
         }
         if (action.verb() == 'L') {
             // Verb L dispatches immediately — alarms are point-in-time and must be
@@ -385,13 +394,39 @@ public class ActionResolver {
     @Order(20) // After SimulationEngine(10), before PerceptionBroadcaster(50)
     public void onTick(TickEvent event) {
         this.currentTick = event.tickNumber();
-        // Atomically swap in fresh maps — no window for lost actions
-        var actions = pendingActions.getAndSet(new ConcurrentHashMap<>());
-        var voteBallots = pendingVoteBallots.getAndSet(new ConcurrentHashMap<>());
+        // Phase 19.5 M-A: drain via iterator + remove(key, value). Concurrent
+        // queueAction puts during drain land in the same stable map and roll
+        // into next tick — no TOCTOU lost-action window.
+        Map<String, Frame.ActionFrame> actions = drainActions();
+        Map<String, String> voteBallots = drainVoteBallots();
 
         if (actions.isEmpty()) return;
 
         resolveActions(event.tickNumber(), actions, voteBallots);
+    }
+
+    private Map<String, Frame.ActionFrame> drainActions() {
+        Map<String, Frame.ActionFrame> drained = new HashMap<>();
+        var it = pendingActions.entrySet().iterator();
+        while (it.hasNext()) {
+            var e = it.next();
+            if (pendingActions.remove(e.getKey(), e.getValue())) {
+                drained.put(e.getKey(), e.getValue());
+            }
+        }
+        return drained;
+    }
+
+    private Map<String, String> drainVoteBallots() {
+        Map<String, String> drained = new HashMap<>();
+        var it = pendingVoteBallots.entrySet().iterator();
+        while (it.hasNext()) {
+            var e = it.next();
+            if (pendingVoteBallots.remove(e.getKey(), e.getValue())) {
+                drained.put(e.getKey(), e.getValue());
+            }
+        }
+        return drained;
     }
 
     /**
@@ -414,7 +449,15 @@ public class ActionResolver {
         List<ResolvedAction> resolvedList = new ArrayList<>();
         List<ResolvedCompositeAction> resolvedCompositeList = new ArrayList<>();
 
-        for (var entry : actions.entrySet()) {
+        // Phase 19.5 M-B: sort by sessionId before building resolution lists.
+        // Action map is a HashMap (drained from a CHM) — iteration order is
+        // not deterministic. Pre-shuffle ordering must be stable for the
+        // GoldenTrace dual-run digest gate to pass under composite/concurrent
+        // workloads (latent today: scenarios mostly single-threaded).
+        List<Map.Entry<String, Frame.ActionFrame>> sortedActions =
+                new ArrayList<>(actions.entrySet());
+        sortedActions.sort(Map.Entry.comparingByKey());
+        for (var entry : sortedActions) {
             String sessionId = entry.getKey();
             Frame.ActionFrame action = entry.getValue();
             var botOpt = botRegistry.getBySession(sessionId);
@@ -859,7 +902,9 @@ public class ActionResolver {
         // Group ballots by compositeId. Each LOCOMOTOR member contributes one
         // ballot (captured on queueAction). Fall back to derived single-choice
         // ballot from verb-M's numpad for LOCOMOTOR members whose action was not V.
-        Map<String, List<String>> compositeBallots = new HashMap<>();
+        // Phase 19.5 M-B: TreeMap keeps composite-id iteration deterministic for
+        // the GoldenTrace dual-run digest gate (HashMap order varies under load).
+        Map<String, List<String>> compositeBallots = new TreeMap<>();
         for (ResolvedCompositeAction rca : compositeActions) {
             if (rca.member.role() == Entity.Role.LOCOMOTOR) {
                 String compositeId = rca.member.compositeId();
