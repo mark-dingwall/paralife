@@ -93,6 +93,26 @@ Plans:
 - [x] 19-03-golden-trace-equivalence-PLAN.md — OutboundSender FrameEmitListener seam + GoldenTraceEquivalenceTest (D-10 semantic-equivalence gate, must be green BEFORE Plan 04 lands) (SCALE-07)
 - [x] 19-04-entity-list-iteration-PLAN.md — SimulationEngine + EnvironmentEngine per-entity segments via LiveEntityRegistry.snapshot() (TickBroadcaster migration deferred to Phase 20.1+ per H1 Option B) (SCALE-07)
 
+### Phase 19.1: Address P19 multi-review pass-4 findings (F1/F2/F3 unshipped, F4 RNG determinism, MS markStalled deadlock) plus residual phase items per 19-MULTI-REVIEW-pass4-TRIAGE.md (INSERTED)
+
+**Goal:** Land the three F1/F2/F3 unshipped P19 fixes that the pass-2 VALIDATED projection wrongly marked shipped, harden RNG determinism (F4/CE/TX), close the markStalled deadlock (MS), and clear residual lifecycle leaks (AM/BL/FL) and test gaps (GT/LM/EL/codec gate) — all before Phase 20 starts compounding them.
+**Requirements**: None — bug-fix hardening of P19/P19.5 work; reliability for SCALE-06/SCALE-07
+**Depends on:** Phase 19
+**Plans:** 0 plans
+**Success Criteria:**
+- F1 fixed: composite formation uses `remapEntity`; `BotRegistry.drainDeaths()` empty after formation under deterministic scenario
+- F2 fixed: `PerceptionCodec.validateEventCode` accepts `'B'`; round-trip test exists for every code declared in `Event.java`
+- F3 fixed: `WorldWebSocketHandler.markDead` calls `ResumeTokenRegistry.clearActive` and removes `ATTR_RESUME_TOKEN`; tokenMap empty after solo-death-without-reconnect
+- F4/CE/TX: same-seed run produces byte-exact buff, composite-energy, and toxin-path outcomes across 2 single-threaded runs
+- MS: `markStalled` integration test asserts tick-thread service-time stays within a small bound under stuck-VT scenario
+- BotClient disconnect leaves zero residual entries in `BuffRegistry`, infection map, FLEEING map, and `AdmissionMetrics` bucket-tags map
+- `GoldenTraceWithActionsTest` ships with pinned M/E/R/V baseline; `LiveEntityRegistryInvariantTest` covers movement + reproduction
+- `CLAUDE.md` `@Order` table matches `grep -r '@Order' src/main`
+- Existing 166-test suite stays green
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 19.1 to break down)
+
 ### Phase 20: Connection Multiplexing & Runtime Tuning
 **Goal:** Reduce socket/process overhead and tune the runtime for sustained high bot counts without regressing the compact protocol semantics.
 **Depends on:** Phase 19 (world execution path must be in place before tuning transport overhead)
