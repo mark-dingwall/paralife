@@ -224,7 +224,14 @@ public class EligibleCellIndex {
         }
     }
 
-    @SuppressWarnings("unused") // cellStatusCache reserved for future env-effect constraints
+    // Phase 19.5 multi-review L-1: cellStatusCache parameter is intentionally unused
+    // in the current predicate body (constraints 1-3 read Cell.flags directly per
+    // REVIEWS H1; bit 0 of cellStatusCache is per-bot redacted, see CLAUDE.md D-40).
+    // The parameter is retained — not deleted — because callers already construct it
+    // and a future env-effect constraint (e.g. "no placement in active mutagen zone")
+    // will need it. Removing then re-adding the param is the kind of churn this
+    // comment exists to prevent. Reviewed and dismissed in P19.5 multi-review pass 2.
+    @SuppressWarnings("unused")
     private boolean evaluateEligibility(int x, int y, Map<Position, Byte> cellStatusCache) {
         // Constraint 1: cell must be unoccupied.
         Cell cell = worldGrid.getCell(x, y);

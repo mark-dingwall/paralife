@@ -713,6 +713,12 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         }
 
         // Apply DoT + decrement ticksLeft.
+        // Defensive copy of CHM entrySet — required for safe iteration under concurrent
+        // modification (toRemove drives a removeAll at end of method). CHM iteration
+        // order is non-deterministic but env DoT is commutative (per-entity damage,
+        // independent applications), so iteration order does not affect outcomes.
+        // P19.5 multi-review pass 2 raised this as a determinism concern — dismissed:
+        // commutativity holds and GoldenTrace digest stays stable across runs.
         List<String> toRemove = new ArrayList<>();
         for (Map.Entry<String, Infection> e : new ArrayList<>(infections.entrySet())) {
             String id = e.getKey();
@@ -1011,10 +1017,14 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         this.cellStatusCache = Collections.unmodifiableMap(cellStatusStaging);
         this.cellStatusStaging = new HashMap<>();
 
-        // Phase 19.5 M1: mirror cellStatusCache swap. Map.copyOf is O(N) per tick
-        // but N is small (only entities with active env effects, typically ≪ grid
-        // count); justified to keep the staging map mutable for next-tick reuse
-        // without aliasing the published view.
+        // Phase 19.5 M1: asymmetric on purpose — do NOT unify with the cellStatusCache
+        // unmodifiableMap-swap pattern above. cellStatusCache is grid-sized
+        // (width*height ≤ 65 536 entries) so per-tick Map.copyOf is the hot path that
+        // forced the swap. entityStatusCache is bounded by N entities-with-active-effect
+        // (typically <100), so the O(N) Map.copyOf is negligible and the simpler
+        // copy-and-clear pattern keeps the staging map reusable without aliasing the
+        // published view. Reviewed and dismissed in P19.5 multi-review pass 2 (claude
+        // raised, opencode dismissed) — leave as-is.
         this.entityStatusCache = Map.copyOf(entityStatusStaging);
         entityStatusStaging.clear();
     }

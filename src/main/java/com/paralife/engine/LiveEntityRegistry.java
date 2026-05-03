@@ -94,6 +94,15 @@ public class LiveEntityRegistry {
      * (server-internal creations) drop the third arg entirely.
      */
     public synchronized void register(String entityId, Position position) {
+        // Phase 19.5 multi-review M-G note: this method keys only on entityId, so
+        // two callers racing to register DIFFERENT entityIds at the SAME position
+        // would both succeed, leaving the registry briefly inconsistent with the
+        // grid (which permits only one occupant per cell). The race window is
+        // narrow — in practice register() callers hold the WS thread (handleRegister)
+        // or the tick thread (bond/composite formation) and the grid's own occupied
+        // check serialises real placement. Atomic check-and-place against the grid
+        // is deferred to Phase 20 connection-multiplexing design (where N concurrent
+        // registrations per JVM materially increases the race surface).
         Integer existing = indexById.get(entityId);
         if (existing != null) {
             EntityEntry prior = dense.get(existing);
@@ -145,6 +154,15 @@ public class LiveEntityRegistry {
      * REVIEWS HIGH-1 / R2-14 — pre-Plan-04 grid-scan order compatibility shim;
      * cost ~10µs at N=1000. Phase 21 may revisit if a different ordering improves
      * cache behaviour.
+     *
+     * <p><b>Per-tick call frequency (P19.5 multi-review pass 2 / IN-03):</b> this
+     * is invoked ~8×/tick across SimulationEngine + EnvironmentEngine + ActionResolver.
+     * A pre-compute-once-per-tick cached snapshot would eliminate the redundant
+     * sort cost. Deferred to Phase 21 perf pass — the snapshot would need a
+     * lifecycle-listener-driven invalidation and the current cost (~80µs/tick at
+     * N=1000) is well below the per-tick budget. Do NOT cache here without the
+     * invalidation hook; stale snapshots would silently violate the live-registry
+     * invariant.
      */
     public synchronized List<EntityEntry> snapshot() {
         List<EntityEntry> copy = new ArrayList<>(dense);
