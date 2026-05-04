@@ -51,17 +51,20 @@ Paralife is a distributed living simulation — a toroidal 2D world populated by
 | Layer | Package | Key Files |
 |-------|---------|-----------|
 | World | `com.paralife.world` | `WorldGrid`, `Cell`, `Entity` (sealed), `Position` |
-| Engine | `com.paralife.engine` | `SimulationEngine`, `ActionResolver`, `PerceptionBroadcaster`, `TickEngine`, `BotRegistry` |
+| Engine | `com.paralife.engine` | `SimulationEngine`, `ActionResolver`, `TickEngine`, `BotRegistry` |
 | WebSocket | `com.paralife.websocket` | `WorldWebSocketHandler`, `TickBroadcaster`, `Messages` (sealed), `SessionRegistry` |
 | Bot | `com.paralife.bot` | `BotClient`, `HeuristicBrain`, `BotLauncher`, `BotRunner` (autonomous client processes; `BotRunner` is the operator CLI invoked via `./gradlew runBot`, 100-bot cap) |
 
 **Tick pipeline** (Spring `@EventListener` on `TickEvent`):
-1. `SimulationEngine` `@Order(10)` — Combat, energy decay, death removal, nutrient spawning
-2. `EnvironmentEngine` `@Order(14)` — Toxin/mutagen/lightning/compost; rebuilds status caches
-3. `ActionResolver` `@Order(20)` — Drain pending bot actions, resolve moves/consume/reproduce/rest
-4. `EnvPostActionReconciler` `@Order(25)` — Apply post-action buff grants, clear cure-immunity
-5. `PerceptionBroadcaster` `@Order(50)` — Send 5x5 neighbourhood perception to each bot
-6. `TickBroadcaster` `@Order(100)` — Broadcast tick snapshot to all connected clients
+1. `ResumeTokenRegistry` `@Order(1)` — Grace-expiry sweep; dead-entity cleanup before SimulationEngine
+2. `SimulationEngine` `@Order(10)` — Combat, energy decay, death removal, nutrient spawning
+3. `EnvironmentEngine` `@Order(TICK_ORDER)` — Toxin/mutagen/lightning/compost; rebuilds status caches (TICK_ORDER=14)
+4. `CompositeEnergyDistributor` `@Order(15)` — Composite passive energy drain
+5. `ActionResolver` `@Order(20)` — Drain pending bot actions, resolve moves/consume/reproduce/rest
+6. `EnvPostActionReconciler` `@Order(TICK_ORDER)` — Apply post-action buff grants, clear cure-immunity (TICK_ORDER=25)
+7. `TickBroadcaster` `@Order(50)` — Per-bot tick frame (5x5 vision, wire bitmask, perception)
+8. `WebSocketKeepaliveService` `@Order(200)` — Keepalive PINGs
+9. `TickHealthMonitor` `@Order(Integer.MAX_VALUE)` — Sample tick wall-time into ring buffer
 
 **Env state projection — three layers** (Phase 14, decisions D-38/D-39/D-40/D-41):
 
@@ -69,7 +72,7 @@ Paralife is a distributed living simulation — a toroidal 2D world populated by
 |-------|---------|-------|---------|
 | 1. Shadow grids | `byte[][] toxinGrid`, `mutagenGrid` (intensity 0–255) | `EnvironmentEngine` | Authoritative effect state; CA diffusion, spline paths, gossip |
 | 2. Status caches | `Map<Position,Byte> cellStatusCache`, `Map<String,Byte> entityStatusCache` | `EnvironmentEngine.buildStatusCaches()` | Per-tick read-only bitmask projection (D-41). Derived from layer 1 + registries (BuffRegistry, Infection map). Rebuilt every tick, not a second source of truth |
-| 3. Wire bitmask | `Messages.CellView.cellStatus`, `entityStatus` bytes | `PerceptionBroadcaster.cellToView` (per-bot) | Zero-trust vision-scoped bitmask. OVERCROWDED is **redacted per bot**: `cellStatus = (layer2 & ~BIT_OVERCROWDED) \| perBotOvercrowdedBit` — bit 0 recomputed from bot's 5x5 Moore count so outer vision cells correctly under-report global overcrowding (D-40 incomplete-information design) |
+| 3. Wire bitmask | `Messages.CellView.cellStatus`, `entityStatus` bytes | `TickBroadcaster` `@Order(50)` (per-bot) | Zero-trust vision-scoped bitmask. OVERCROWDED is **redacted per bot**: `cellStatus = (layer2 & ~BIT_OVERCROWDED) \| perBotOvercrowdedBit` — bit 0 recomputed from bot's 5x5 Moore count so outer vision cells correctly under-report global overcrowding (D-40 incomplete-information design) |
 
 Bit layout (D-38 `cellStatus` / D-39 `entityStatus`): OVERCROWDED=bit 0, TOXIN_PRESENT=bit 1 (`0x02`), MUTAGEN_ZONE=bit 2 (`0x04`). STARVING lives on `Cell.flags` (not `entityStatus`) as server-global entity-intrinsic state. `Cell.flags` retains `FLAG_OVERCROWDED`/`FLAG_STARVING` unchanged; env effects do NOT extend `Cell.flags` — intensity values don't fit single bits and cache locality favours per-effect shadow grids.
 
@@ -198,7 +201,6 @@ Used for M002 (Living Simulation) after migration on 2026-04-11.
 | Phase | Item | Severity |
 |-------|------|----------|
 | 06 | `Cell.nutrientLevel` field is inert — defined and serialised but never written | Low |
-| 08 | `PerceptionBroadcaster` sends UNKNOWN type for dead entities (workaround) | Low |
 | 09 | `HeuristicBrain.predatorType` ternary has dead branch (both branches return same value) | Low |
 | 09 | `BotClient` uses raw `JsonNode`/`LinkedHashMap` instead of `Messages` sealed types | Low |
 | 10 | `LoadTest` omits explicit `nutrient-consume-energy` property (falls back to default) | Low |
