@@ -4,6 +4,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -27,6 +30,70 @@ class PerceptionCodecRoundTripTest {
         String reEncoded = PerceptionCodec.encode(decoded);
         assertEquals(wireFrame, reEncoded,
                 "Round-trip byte mismatch for: " + wireFrame);
+    }
+
+    /**
+     * Phase 19.1 D-15 — every code declared in {@link Event#ALL_CODES} must
+     * round-trip through {@link PerceptionCodec} byte-for-byte.
+     *
+     * <p>Structural defence: driven from {@code Event.ALL_CODES} (not a @ValueSource
+     * copy) — adding a new code to {@code ALL_CODES} automatically adds a test case.
+     * If the codec switch ({@code validateEventCode}) is not updated in lockstep,
+     * this test fails. The dual-list maintenance trap that caused F2 is physically
+     * impossible.
+     *
+     * <p>Pinned reference vectors used by {@link #buildMinimalEventFrame(char)}:
+     * <ul>
+     *   <li>Magnitude path (E,A,H,T,M,R,L): {@code V8 = "T|004|0D2F|18/50|v6H3"}
+     *       — coord=6 (numpad), code=H, magnitude=3. Substitute code char.</li>
+     *   <li>No-magnitude path (N,S,D,B): {@code "T|004|0D2F|18/50|vS"} — no coord,
+     *       no magnitude. Substitute code char. (B mirrors D — no coord, no magnitude
+     *       per Phase 19.5 E1 and Phase 19.1 D-01 confirmation.)</li>
+     * </ul>
+     */
+    @ParameterizedTest(name = "[CODE {0}] event code round-trips")
+    @MethodSource("allEventCodes")
+    @DisplayName("Phase 19.1 D-15 — every Event.ALL_CODES code round-trips through PerceptionCodec")
+    void everyEventCodeRoundTrips(char code) {
+        String wireFrame = buildMinimalEventFrame(code);
+        Frame decoded = PerceptionCodec.decode(wireFrame);
+        String reEncoded = PerceptionCodec.encode(decoded);
+        assertEquals(wireFrame, reEncoded,
+                "Phase 19.1 D-15 — codec must round-trip every code declared in Event.ALL_CODES");
+    }
+
+    /**
+     * Provider for {@link #everyEventCodeRoundTrips} — iterates {@code Event.ALL_CODES}.
+     * Adding a code to {@code ALL_CODES} automatically adds a test case.
+     */
+    static Stream<Character> allEventCodes() {
+        List<Character> list = new ArrayList<>();
+        for (char c : Event.ALL_CODES.toCharArray()) list.add(c);
+        return list.stream();
+    }
+
+    /**
+     * C1.1 — minimal viable wire frame containing exactly one event of the given code.
+     *
+     * <p>Two-branch helper verified against {@code PerceptionCodec.eventHasMagnitude}:
+     * <ul>
+     *   <li>Magnitude codes (E,A,H,T,M,R,L): use V8-shape {@code "T|004|0D2F|18/50|v6Xn"}
+     *       where X is the code, n=3 is the magnitude digit.</li>
+     *   <li>No-magnitude codes (N,S,D,B): use {@code "T|004|0D2F|18/50|vX"}
+     *       where X is the code.</li>
+     * </ul>
+     */
+    private static String buildMinimalEventFrame(char code) {
+        // D3-M4: B is no-magnitude (confirmed by Phase 19.1 D-01 fix to eventHasMagnitude).
+        boolean needsMagnitude = Set.of('E', 'A', 'H', 'T', 'M', 'R', 'L').contains(code);
+        if (needsMagnitude) {
+            // Magnitude path: pinned from V8 = "T|004|0D2F|18/50|v6H3"
+            // Substitute code char at position of 'H'; coord=6, magnitude=3 constant.
+            return "T|004|0D2F|18/50|v6" + code + "3";
+        } else {
+            // No-magnitude path: no coord, no magnitude — simplest valid event form.
+            return "T|004|0D2F|18/50|v" + code;
+        }
     }
 
     static Stream<String> vectors() {

@@ -1,7 +1,10 @@
 package com.paralife.codec;
 
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 
 /**
  * One entry in the `v` block per 15-SCHEMA.md §8.4.
@@ -12,13 +15,34 @@ import java.util.OptionalInt;
  * client treats both as a respawn trigger (entity gone, fresh session needed).
  * Code letter 'A' was already taken by Attacked; 'B' chosen for "Bonded /
  * absorBed" which is unambiguous against the existing event vocabulary.
+ *
+ * <p>Phase 19.1 D-15 (B1.2 amendment) — {@link #ALL_CODES} is the single source
+ * of truth for event codes. Adding a code here is the contract;
+ * {@code PerceptionCodec.validateEventCode} MUST be extended in lockstep (the
+ * round-trip test in {@code PerceptionCodecRoundTripTest} enforces this).
+ *
+ * <p>Shape note: {@code String} (immutable) chosen over {@code char[]} so callers
+ * cannot mutate the canonical list. Iterate via {@code ALL_CODES.toCharArray()} or
+ * {@code ALL_CODES.chars()}; membership via {@code ALL_CODES.indexOf(code) >= 0}.
  */
 public record Event(char code, Optional<Coord> coord, OptionalInt magnitude) {
 
+    /**
+     * Phase 19.1 D-15 — single source of truth for all valid event codes.
+     * Order matches SCHEMA §8.4 table: magnitude codes first, no-magnitude codes last.
+     */
+    public static final String ALL_CODES = "EAHTMRLNSDB";
+
+    private static final Set<Character> CODE_SET;
+
+    static {
+        Set<Character> s = new HashSet<>();
+        for (char c : ALL_CODES.toCharArray()) s.add(c);
+        CODE_SET = Collections.unmodifiableSet(s);
+    }
+
     public Event {
-        if (code != 'E' && code != 'A' && code != 'H' && code != 'T'
-                && code != 'M' && code != 'R' && code != 'L' && code != 'N'
-                && code != 'S' && code != 'D' && code != 'B') {
+        if (!CODE_SET.contains(code)) {
             throw new IllegalArgumentException("Unknown event code: " + code);
         }
         if (magnitude.isPresent() && (magnitude.getAsInt() < 0 || magnitude.getAsInt() > 63)) {
