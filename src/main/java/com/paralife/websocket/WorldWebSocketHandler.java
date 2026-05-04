@@ -836,6 +836,10 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         if (resumeTokenRegistry != null) {
             resumeTokenRegistry.remapEntity(oldEntityId, newEntityId);
         }
+        // Phase 19.1 D-08 — keep AdmissionMetrics bucket-tags map aligned with remap.
+        if (admissionMetrics != null) {
+            admissionMetrics.remapBucketTags(oldEntityId, newEntityId);
+        }
         WebSocketSession session = sessionRegistry.getSession(sessionId);
         if (session == null) {
             log.debug("onEntityRemapped: session {} no longer present — skipping attr update",

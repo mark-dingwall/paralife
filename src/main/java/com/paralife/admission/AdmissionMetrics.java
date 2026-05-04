@@ -341,6 +341,21 @@ public class AdmissionMetrics {
     }
 
     /**
+     * Phase 19.1 D-08 — rewrite the {@link #bucketTagsByEntityId} entry under
+     * {@code newEntityId} using the Tags previously captured for {@code oldEntityId}.
+     * Mirrors {@link ResumeTokenRegistry#remapEntity}. Idempotent; no-op when no
+     * snapshot exists for {@code oldEntityId} or when ids match.
+     */
+    public void remapBucketTags(String oldEntityId, String newEntityId) {
+        if (oldEntityId == null || newEntityId == null) return;
+        if (oldEntityId.equals(newEntityId)) return;
+        Tags tags = bucketTagsByEntityId.remove(oldEntityId);
+        if (tags != null) {
+            bucketTagsByEntityId.put(newEntityId, tags);
+        }
+    }
+
+    /**
      * Test-only accessor: number of entityId snapshots currently held.
      * Used by lifecycle invariant tests across multiple packages.
      */
