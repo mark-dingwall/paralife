@@ -943,6 +943,11 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
      */
     public void markDead(WebSocketSession session) {
         if (session == null) return;
-        session.getAttributes().remove(ATTR_ENTITY_ID);
+        Object eid = session.getAttributes().remove(ATTR_ENTITY_ID);
+        session.getAttributes().remove(ATTR_RESUME_TOKEN);
+        String entityId = eid instanceof String e ? e : null;
+        if (entityId != null && resumeTokenRegistry != null) {
+            resumeTokenRegistry.clearActive(entityId);
+        }
     }
 }
