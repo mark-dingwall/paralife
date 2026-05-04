@@ -94,7 +94,13 @@ public class CompositeEnergyDistributor {
     @EventListener
     @Order(15) // After SimulationEngine(10), before ActionResolver(20)
     public void onTick(TickEvent event) {
-        for (var composite : compositeRegistry.getAll()) {
+        // Phase 19.1 D-05 — stable iteration order before RNG consumption.
+        // compositeRegistry.getAll() is backed by ConcurrentHashMap; iterating
+        // its entrySet directly into Collections.shuffle(memberIds, compositeRng)
+        // produces non-deterministic shuffle inputs across same-seed runs.
+        var composites = new java.util.ArrayList<>(compositeRegistry.getAll());
+        composites.sort(java.util.Comparator.comparing(CompositeRegistry.CompositeState::getCompositeId));
+        for (var composite : composites) {
             processCompositeEnergy(composite);
         }
     }
