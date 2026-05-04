@@ -409,10 +409,14 @@ public class SimulationEngine {
      * @return int[3]: [combatEvents, bondEvents, compositeEvents]
      */
     private int[] processInteractions(int width, int height, long tickNumber) {
+        // Phase 19.1 D-19 — hoist snapshot once; downstream consumers reuse it.
+        // Snapshot is read-only by contract; semantics unchanged.
+        List<LiveEntityRegistry.EntityEntry> snapshot = entitySnapshot(width, height);
+
         // Build list of all particle positions (attackers are always Particles)
         // Phase 19 SCALE-07: entity-list iteration replaces O(width*height) grid scan.
         List<Position> particlePositions = new ArrayList<>();
-        for (LiveEntityRegistry.EntityEntry entry : entitySnapshot(width, height)) {
+        for (LiveEntityRegistry.EntityEntry entry : snapshot) {
             Cell cell = worldGrid.getCell(entry.position().x(), entry.position().y());
             if (cell.occupant() instanceof Particle) {
                 particlePositions.add(entry.position());
@@ -537,7 +541,7 @@ public class SimulationEngine {
         // Scan for CompositeMember attackers (D-10, D-11, D-13)
         // Phase 19 SCALE-07: entity-list iteration replaces O(width*height) grid scan.
         List<Position> compositeMemberPositions = new ArrayList<>();
-        for (LiveEntityRegistry.EntityEntry entry : entitySnapshot(width, height)) {
+        for (LiveEntityRegistry.EntityEntry entry : snapshot) {
             Cell cell = worldGrid.getCell(entry.position().x(), entry.position().y());
             if (cell.occupant() instanceof Entity.CompositeMember) {
                 compositeMemberPositions.add(entry.position());
@@ -620,7 +624,7 @@ public class SimulationEngine {
         // Phase 19 SCALE-07: entity-list iteration replaces O(width*height) grid scan.
         if (compositeConfig.canFormComposites()) {
             List<Position> bondedPairPositions = new ArrayList<>();
-            for (LiveEntityRegistry.EntityEntry entry : entitySnapshot(width, height)) {
+            for (LiveEntityRegistry.EntityEntry entry : snapshot) {
                 Cell cell = worldGrid.getCell(entry.position().x(), entry.position().y());
                 if (cell.occupant() instanceof Entity.BondedPair) {
                     bondedPairPositions.add(entry.position());
