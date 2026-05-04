@@ -66,6 +66,9 @@ public class EnvCleanupHooksBean implements DeathCleanupHooks,
      *                       (useful for composite-member role lookup)
      * @param position       cell position captured at enqueue time
      */
+    // Tie-totality is invariant-guaranteed (see EnvironmentEngine.reduceInfection early-return).
+    // If a third enqueue site lands, add a long sourceEventId field and append
+    // .thenComparingLong to the comparator (pass-5 triage 2026-05-04).
     public record PendingGrant(String entityId, int initialTicks,
                                 Entity capturedOccupant, Position position) {}
 

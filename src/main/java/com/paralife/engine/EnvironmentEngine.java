@@ -113,7 +113,13 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     // Plan 14-06 Task 1: rng is a MUTABLE field (NOT final) so resetForTest can
     // reassign it from config.seed to produce deterministic cross-run replay.
     private Random rng;
-    private final ToxinPathGenerator toxinPathGenerator;
+
+    /**
+     * Phase 19.1 B2.3 — non-zero, distinctive seed for test-path placement in
+     * {@link #forceSpawnToxinForTest}. {@code new Random(0L)} collapses several
+     * derived sequences; this value is visibly distinct from any production seed.
+     */
+    private static final long TEST_TOXIN_SEED = 0xDEADBEEFL;
 
     /**
      * Plan 14-06 Task 3b: monotonic rising-edge count of toxin events spawned.
@@ -264,46 +270,35 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                       FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
                       EnvCleanupHooksBean envCleanupHooksBean, Random rng) {
         this(worldGrid, seasonTracker, config, buffRegistry, fertilityConfig, deathFinalizer,
-                envCleanupHooksBean, new ToxinPathGenerator(), rng,
+                envCleanupHooksBean, rng,
                 new EmergenceMetrics(FALLBACK_REGISTRY));
     }
 
     /**
      * Package-private test constructor for deterministic Random + explicit
-     * {@link ToxinPathGenerator} injection. Exposes the pinned no-arg
-     * {@code new ToxinPathGenerator()} construction surface to tests
-     * (cycle-6 MEDIUM — 14-02 Task 1 is authoritative).
+     * {@link ToxinPathGenerator} injection (back-compat shim — Phase 19.1 C2.1:
+     * {@link ToxinPathGenerator} is now fully-static; the parameter is ignored).
      */
     EnvironmentEngine(WorldGrid worldGrid, SeasonTracker seasonTracker,
                       EnvironmentConfig config, BuffRegistry buffRegistry,
                       FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
                       EnvCleanupHooksBean envCleanupHooksBean,
-                      ToxinPathGenerator toxinPathGenerator, Random rng) {
+                      ToxinPathGenerator ignored, Random rng) {
         this(worldGrid, seasonTracker, config, buffRegistry, fertilityConfig, deathFinalizer,
-                envCleanupHooksBean, toxinPathGenerator, rng,
+                envCleanupHooksBean, rng,
                 new EmergenceMetrics(FALLBACK_REGISTRY));
     }
 
     /**
      * Phase 16 Plan 02 back-compat bridge for direct-instantiation tests that
-     * inject a Random/ToxinPathGenerator. Production path uses the 7-arg
-     * autowired ctor above which supplies the Spring-wired EmergenceMetrics.
+     * inject a Random. Production path uses the 7-arg autowired ctor above
+     * which supplies the Spring-wired EmergenceMetrics.
      */
     EnvironmentEngine(WorldGrid worldGrid, SeasonTracker seasonTracker,
                       EnvironmentConfig config, BuffRegistry buffRegistry,
                       FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
                       EnvCleanupHooksBean envCleanupHooksBean,
                       Random rng, EmergenceMetrics emergenceMetrics) {
-        this(worldGrid, seasonTracker, config, buffRegistry, fertilityConfig, deathFinalizer,
-                envCleanupHooksBean, new ToxinPathGenerator(), rng, emergenceMetrics);
-    }
-
-    EnvironmentEngine(WorldGrid worldGrid, SeasonTracker seasonTracker,
-                      EnvironmentConfig config, BuffRegistry buffRegistry,
-                      FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
-                      EnvCleanupHooksBean envCleanupHooksBean,
-                      ToxinPathGenerator toxinPathGenerator, Random rng,
-                      EmergenceMetrics emergenceMetrics) {
         this.worldGrid = worldGrid;
         this.seasonTracker = seasonTracker;
         this.config = config;
@@ -312,7 +307,6 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         this.deathFinalizer = deathFinalizer;
         this.envCleanupHooksBean = envCleanupHooksBean;
         this.rng = rng;
-        this.toxinPathGenerator = toxinPathGenerator;
         this.emergenceMetrics = emergenceMetrics;
         int w = worldGrid.getWidth();
         int h = worldGrid.getHeight();
@@ -321,6 +315,17 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         this.mutagenGrid = new byte[w][h];
         this.mutagenGridNext = new byte[w][h];
         this.mutagenLastReinforcedTick = new long[w][h];
+    }
+
+    /** Back-compat shim for tests passing explicit ToxinPathGenerator + EmergenceMetrics. */
+    EnvironmentEngine(WorldGrid worldGrid, SeasonTracker seasonTracker,
+                      EnvironmentConfig config, BuffRegistry buffRegistry,
+                      FertilityConfig fertilityConfig, DeathFinalizer deathFinalizer,
+                      EnvCleanupHooksBean envCleanupHooksBean,
+                      ToxinPathGenerator ignored, Random rng,
+                      EmergenceMetrics emergenceMetrics) {
+        this(worldGrid, seasonTracker, config, buffRegistry, fertilityConfig, deathFinalizer,
+                envCleanupHooksBean, rng, emergenceMetrics);
     }
 
     /**
@@ -402,11 +407,12 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         if (rng.nextDouble() >= lambda) return;
 
         Toxin tx = config.toxin();
-        long seed = rng.nextLong();
-        List<Position> path = toxinPathGenerator.generatePath(
+        long seed = rng.nextLong();   // EXISTING draw — do NOT add a second nextLong() (Phase 19.1 D-06)
+        List<Position> path = ToxinPathGenerator.generatePath(
                 worldGrid.getWidth(), worldGrid.getHeight(),
                 tx.pathPointsMin(), tx.pathPointsMax(),
-                tx.pathOffsetMin(), tx.pathOffsetMax());
+                tx.pathOffsetMin(), tx.pathOffsetMax(),
+                seed);                // reuse the already-drawn seed (same long stored on ToxinEvent)
         activeToxin = new ToxinEvent(tickNumber, tx.lifetimeTicks(), path, 0, seed);
         toxinEventCount++; // Plan 14-06 Task 3b: rising-edge counter
         log.debug("Toxin spawned: tick={} pathLen={} seed={}", tickNumber, path.size(), seed);
@@ -767,6 +773,14 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             snapshot = new ArrayList<>(grants);
             grants.clear();
         }
+        // Phase 19.1 D-04 — stable iteration order before RNG consumption.
+        // CHM iteration order is non-deterministic; same-tick multi-cure currently
+        // produces different buff outcomes across runs at the same seed.
+        snapshot.sort(
+            java.util.Comparator.comparing(PendingGrant::entityId)
+                .thenComparingInt(PendingGrant::initialTicks)         // Phase 19.1 D-04 tiebreaker (B2.1)
+                .thenComparingInt(g -> g.position().x())
+                .thenComparingInt(g -> g.position().y()));
         for (var pg : snapshot) {
             Position p = pg.position();
             Cell cell = worldGrid.getCell(p.x(), p.y());
@@ -1611,12 +1625,14 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     /** Test helper — force an active toxin event (skips Poisson roll). */
     void forceSpawnToxinForTest(long tickNumber) {
         Toxin tx = config.toxin();
-        long seed = rng.nextLong();
-        List<Position> path = toxinPathGenerator.generatePath(
+        // Phase 19.1 B2.3 — use fixed TEST_TOXIN_SEED for deterministic test-path placement.
+        // Do NOT use 0L (collapses derived sequences) or rng.nextLong() (advances rng state).
+        List<Position> path = ToxinPathGenerator.generatePath(
                 worldGrid.getWidth(), worldGrid.getHeight(),
                 tx.pathPointsMin(), tx.pathPointsMax(),
-                tx.pathOffsetMin(), tx.pathOffsetMax());
-        activeToxin = new ToxinEvent(tickNumber, tx.lifetimeTicks(), path, 0, seed);
+                tx.pathOffsetMin(), tx.pathOffsetMax(),
+                TEST_TOXIN_SEED);
+        activeToxin = new ToxinEvent(tickNumber, tx.lifetimeTicks(), path, 0, TEST_TOXIN_SEED);
     }
 
     ToxinEvent activeToxinEvent() {
