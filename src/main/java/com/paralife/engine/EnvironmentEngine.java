@@ -1733,8 +1733,20 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 (existing, incoming) -> incoming.expiryTick() > existing.expiryTick() ? incoming : existing);
     }
 
-    /** Plan 15-08 Task 2 — test helper: directly grant FLEEING (used by ZeroTrust test). */
-    void grantFleeingForTest(String entityId, long expiryTick, int strikeX, int strikeY) {
+    /**
+     * Phase 19.1 D-09 — remove the FLEEING entry for the given entity. Mirror of
+     * {@link #transferFleeing(String, String)}. Idempotent — no-op when the entity
+     * has no FLEEING state. Used by WorldWebSocketHandler.cleanupBot on disconnect
+     * paths that bypass DeathFinalizer (where the existing per-tick expiry would
+     * otherwise leave a slow leak).
+     */
+    public void fleeingRemove(String entityId) {
+        if (entityId == null) return;
+        fleeing.remove(entityId);
+    }
+
+    /** Plan 15-08 Task 2 — test helper: directly grant FLEEING (used by ZeroTrust test and cross-package tests). */
+    public void grantFleeingForTest(String entityId, long expiryTick, int strikeX, int strikeY) {
         if (entityId == null) return;
         fleeing.put(entityId, new Fleeing(expiryTick, strikeX, strikeY));
     }

@@ -14,6 +14,9 @@ import com.paralife.codec.CodecException;
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.ActionResolver;
+import com.paralife.engine.BuffRegistry;
+import com.paralife.engine.DeathCleanupHooks;
+import com.paralife.engine.EnvironmentEngine;
 import com.paralife.engine.EntityLifecycleListener;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.EligibleCellIndex;
@@ -142,6 +145,23 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
      * (same null-guard pattern as eligibleCellIndex / admissionGate).
      */
     private final LiveEntityRegistry liveEntityRegistry;
+
+    /**
+     * Phase 19.1 D-09 — env-side state cleanup on disconnect.
+     * Field-injected to avoid widening constructor signatures (back-compat ctors delegate
+     * to the primary ctor and do not accept these collaborators). Null in back-compat tests
+     * that do not exercise the cleanup path — all call sites null-guard.
+     */
+    @Autowired(required = false)
+    private BuffRegistry buffRegistry;
+
+    /** Phase 19.1 D-09 — infection + mutagen state cleanup on disconnect. */
+    @Autowired(required = false)
+    private DeathCleanupHooks deathCleanupHooks;
+
+    /** Phase 19.1 D-09 — FLEEING state cleanup on disconnect. */
+    @Autowired(required = false)
+    private EnvironmentEngine environmentEngine;
 
     @Autowired
     public WorldWebSocketHandler(SessionRegistry sessionRegistry,
@@ -758,6 +778,13 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         // or grace-window mis-tuning.
         if (admissionMetrics != null) admissionMetrics.incTerminalDropout();
 
+        // Phase 19.1 D-09 (A4.3 amendment) — env-state cleanup BEFORE the
+        // sessionId-null early-return so entityId-only paths (admission abort,
+        // post-mark-dead cleanup) don't leak env-state.
+        if (buffRegistry != null) buffRegistry.unregisterEntity(entityId);
+        if (deathCleanupHooks != null) deathCleanupHooks.clearInfectionOnDeath(entityId);
+        if (environmentEngine != null) environmentEngine.fleeingRemove(entityId);
+
         String sessionId = botRegistry.getSessionByEntity(entityId).orElse(null);
         io.micrometer.core.instrument.Tags bucketTags = admissionMetrics != null
                 ? admissionMetrics.lookupBucketTags(entityId) : null;
@@ -864,6 +891,12 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         if (entityId != null) {
             respawnCountAtStall.remove(entityId);
             if (resumeTokenRegistry != null) resumeTokenRegistry.clearActive(entityId);
+            // Phase 19.1 D-09 — env-side state ownership: disconnect must release these.
+            // DeathFinalizer normally clears them, but disconnect-without-death never
+            // reaches it. Without this, BuffRegistry/infection/FLEEING leak per disconnect.
+            if (buffRegistry != null) buffRegistry.unregisterEntity(entityId);
+            if (deathCleanupHooks != null) deathCleanupHooks.clearInfectionOnDeath(entityId);
+            if (environmentEngine != null) environmentEngine.fleeingRemove(entityId);
         }
         botRegistry.getBySession(sessionId).ifPresent(state -> {
             var pos = state.position();
