@@ -111,6 +111,20 @@ the actual `sendMessage` call. Writers: drain VT (`OutboundSender.drainLoop`), k
 `WorldWebSocketHandler.sendFrame`. Encoding and metric recording stay outside the monitor — the
 monitor only protects the non-thread-safe `sendMessage` invocation.
 
+**markStalled close-then-best-effort-OOB (Phase 19.1, D-07):** `WorldWebSocketHandler.markStalled`
+invokes `OutboundSender.detachSession(WebSocketSession, CloseStatus.SERVICE_RESTARTED)` (the
+close-aware overload with caller-supplied status), not the `String` overload. The transport-close
+fires first, which causes any blocked Jetty write inside the drain VT's `synchronized(session)`
+block to throw `IOException`, allowing the VT to exit cleanly. The OOB 408 frame that follows is
+best-effort: `WorldWebSocketHandler.sendOutOfBand` carries an `isOpen()` guard at line 923 that
+causes the call to return instantly once the transport has been closed (i.e., the OOB call is not
+just exception-swallowed — it is structurally short-circuited the moment `isOpen()` returns
+false). No second `session.close(...)` is issued; the close-aware detach already carried
+`SERVICE_RESTARTED` to the wire. The close itself is the reconnect signal — clients observing it
+issue an `r|<species>|<resumeToken>` against the grace window. This trade-off is intentional: it
+eliminates the tick-thread block that the previous `String`-overload path suffered when a slow
+client kept the Jetty write blocked.
+
 ### Connection model (Phase 18, D-05 / D-21)
 
 **WS:entity 1:1** — one WebSocket connection per entity, always. Every entity on the grid has

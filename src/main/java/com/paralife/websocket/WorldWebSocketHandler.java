@@ -723,16 +723,21 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
                     session.getId(), entityId);
         }
 
-        // Detach sender VT FIRST (joins for up to 100ms per Plan 06).
+        // Phase 19.1 D-07 — close-aware detach with SERVICE_RESTARTED status.
+        // Transport closes first, causing the blocked Jetty write to throw
+        // IOException and the drain VT to exit. The wire-level close frame
+        // carries the semantically-correct status code in one round-trip.
         if (outboundSender != null) {
-            outboundSender.detachSession(session.getId());
+            outboundSender.detachSession(session, CloseStatus.SERVICE_RESTARTED);
         }
 
-        // Now safe to write directly: VT has joined, no concurrent writer.
+        // OOB 408 is best-effort — the session is already closed by detachSession.
+        // sendOutOfBand carries an isOpen() guard at line 923 that causes the call
+        // to return instantly once the transport has been closed (D3-M1).
         sendOutOfBand(session, new Frame.ErrorFrame(408, Optional.of(RejectionToken.RECONNECT_REQUIRED)));
-
-        // Close the WS to force client into reconnect/resume flow.
-        try { session.close(CloseStatus.SERVICE_RESTARTED); } catch (IOException ignored) {}
+        // The redundant session.close(SERVICE_RESTARTED) previously here is REMOVED:
+        // detachSession(session, SERVICE_RESTARTED) already closed the transport with
+        // the same status. A second close is a no-op at best, masks IOException at worst.
     }
 
     // ── Cleanup helpers ──────────────────────────────────────────────────────

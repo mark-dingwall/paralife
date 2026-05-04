@@ -135,13 +135,12 @@ public class OutboundSender {
      *
      * <p><b>Phase 22 (TD-19.5-A):</b> when the drain VT is mid-{@code sendMessage}, plain
      * {@code Thread.interrupt()} cannot break Jetty's blocking socket write — the 100ms join
-     * times out and produces a WARN. Callers that own a {@link WebSocketSession} reference
-     * for a session being torn down should use {@link #detachSession(WebSocketSession)}
-     * instead, which closes the transport first so Jetty unblocks sendMessage immediately
-     * and the interrupt then succeeds. This {@code String}-keyed overload retains the old
-     * behaviour for paths that need the drain VT stopped without closing the session
-     * (notably {@code WorldWebSocketHandler.markStalled}, which sends an out-of-band 408
-     * after detach and closes the WS itself afterwards).
+     * times out and produces a WARN (and increments the {@code paralife.outbound.detach.timeout}
+     * counter, Phase 19.1 D-14). Callers that own a {@link WebSocketSession} reference should
+     * use {@link #detachSession(WebSocketSession, CloseStatus)} instead, which closes the
+     * transport first. {@code WorldWebSocketHandler.markStalled} uses that overload (Phase 19.1
+     * D-07) with {@link CloseStatus#SERVICE_RESTARTED} — the transport-close unblocks the
+     * stuck write, making the interrupt effective.
      */
     public void detachSession(String sessionId) {
         queues.remove(sessionId);
@@ -164,29 +163,38 @@ public class OutboundSender {
     /**
      * Phase 22 (TD-19.5-A): session-aware detach for graceful-disconnect and transport-error
      * paths ({@code afterConnectionClosed}, {@code handleTransportError}, server shutdown).
-     *
-     * <p>Closes the WebSocket transport (if still open) so Jetty unblocks any in-flight
-     * {@code sendMessage} with an IOException, then interrupts the drain VT and returns
-     * <b>without</b> joining. The drain VT terminates asynchronously: its loop guard
-     * ({@code !session.isOpen() → continue}, then the interrupt flag exits the {@code while})
-     * means it cannot perform another write after this returns. No subsequent caller in these
-     * paths needs the VT to have actually exited, so the 100ms join — which under shutdown-
-     * hook fanout times out and produces "did not exit" warnings — is omitted here.
-     *
-     * <p>Do <b>not</b> use this overload from {@code markStalled}: that path needs the
-     * session open long enough to deliver the out-of-band 408 frame, AND it relies on the
-     * join contract to ensure the drain VT has released {@code synchronized(session)}
-     * before {@code sendOutOfBand} acquires it. {@code markStalled} stays on
-     * {@link #detachSession(String)}.
+     * Delegates to {@link #detachSession(WebSocketSession, CloseStatus)} with
+     * {@link CloseStatus#GOING_AWAY} — preserves every existing caller's behaviour.
      *
      * <p>If {@code session} is {@code null} this is a no-op.
      */
     public void detachSession(WebSocketSession session) {
+        detachSession(session, CloseStatus.GOING_AWAY);
+    }
+
+    /**
+     * Phase 19.1 D-07 — close-aware detach with caller-supplied close status.
+     *
+     * <p>Closes the WebSocket transport (if still open) with {@code closeStatus} so Jetty
+     * unblocks any in-flight {@code sendMessage} with an IOException, then interrupts the
+     * drain VT and returns <b>without</b> joining. The drain VT terminates asynchronously:
+     * its loop guard ({@code !session.isOpen() → continue}, then the interrupt flag exits
+     * the {@code while}) means it cannot perform another write after this returns.
+     *
+     * <p>Phase 19.1 D-07 — markStalled DOES use this overload. The transport-close
+     * happens first, unblocking any in-flight Jetty write so the drain VT can
+     * exit. Callers must accept that any frame queued or sent immediately after
+     * detach (e.g., a courtesy OOB 408) is best-effort: the close itself is the
+     * reconnect signal.
+     *
+     * <p>If {@code session} is {@code null} this is a no-op.
+     */
+    public void detachSession(WebSocketSession session, CloseStatus closeStatus) {
         if (session == null) return;
         String sessionId = session.getId();
         if (session.isOpen()) {
             try {
-                session.close(CloseStatus.GOING_AWAY);
+                session.close(closeStatus);
             } catch (Exception ignored) {
                 // close-on-close races are benign — drain VT termination is driven by the
                 // interrupt below regardless of close outcome.
