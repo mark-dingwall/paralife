@@ -831,6 +831,16 @@ public class SimulationEngine {
                 updateBotRegistryForFormation(cf.bp1(), memberId1, cf.pos1());
                 updateBotRegistryForFormation(cf.bp2(), memberId2, cf.pos2());
 
+                // Phase 19.1 D-10 — preserve FLEEING through composite formation.
+                // Mirror of bond formation :763-764 and composite revert :1272.
+                // FLEEING is spatial context (strike coord) not a buff — it has a coherent
+                // mapping to the member that occupied the same cell. Transfer before the
+                // bp-level CLEANSE below so the FLEEING entry survives under memberId.
+                if (environmentEngine != null) {
+                    environmentEngine.transferFleeing(cf.bp1().id(), memberId1);
+                    environmentEngine.transferFleeing(cf.bp2().id(), memberId2);
+                }
+
                 // Plan 14-03 cycle-6 HIGH #2: CompositeFormation from an infected
                 // BondedPair is a DELIBERATE CLEANSE. Rationale: BondedPair-level
                 // buffs have no coherent mapping to role-specialised composite
@@ -879,6 +889,9 @@ public class SimulationEngine {
     }
 
     private void updateBotRegistryForFormation(Entity.BondedPair bp, String newMemberId, Position pos) {
+        // Phase 19.1 D-02 (F1 fix): replace unregisterByEntity + register with remapEntity
+        // to avoid enqueuing a spurious DeathNotice that causes TickBroadcaster to emit
+        // phantom v|D terminal frames to live sessions after composite formation.
         // Phase 19.5 H-A: BotRegistry was remapped to bp.id() at bond formation
         // (H2 / d509cff), so the surviving session is keyed by bp.id() — NOT
         // primaryEntityId(). The pre-fix lookup of primaryEntityId/secondaryEntityId
@@ -1294,8 +1307,9 @@ public class SimulationEngine {
      * prefix, but the map lookup uses the original key). If future callers
      * need strict id preservation across dissolve, migrate infection here too.
      */
-    private void dissolveToParticles(CompositeRegistry.CompositeState composite,
-                                      Set<String> processedComposites) {
+    /** Phase 19.1 D-10 (E4.1) — package-private for test access via SimulationEngineCompositeFormationTest. */
+    void dissolveToParticles(CompositeRegistry.CompositeState composite,
+                              Set<String> processedComposites) {
         for (String memberId : new ArrayList<>(composite.getMemberIds())) {
             Position pos = composite.getPositionForMember(memberId);
             if (pos == null) continue;
@@ -1310,6 +1324,12 @@ public class SimulationEngine {
                 worldGrid.setEntity(pos.x(), pos.y(), particle);
                 // Phase 19 SCALE-06 — STRUCTURAL: composite dissolved, particle placed.
                 if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
+
+                // Phase 19.1 D-10 — preserve FLEEING through dissolve.
+                // Mirror of bond formation :763-764 and composite revert :1272.
+                if (environmentEngine != null) {
+                    environmentEngine.transferFleeing(cm.id(), particle.id());
+                }
 
                 // Remap session from CompositeMember to new Particle.
                 // Phase 19.5 H-A: fire EntityLifecycleListener for ATTR_ENTITY_ID

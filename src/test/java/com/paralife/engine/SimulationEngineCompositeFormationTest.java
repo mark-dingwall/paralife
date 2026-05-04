@@ -15,8 +15,9 @@ import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.TestPropertySource;
 
+import java.util.HashSet;
+
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
@@ -39,6 +40,9 @@ import static org.mockito.Mockito.verify;
  * <p>Verified: no custom {@code ApplicationEventMulticaster} bean with a
  * {@code TaskExecutor} is wired — dispatch is synchronous (default Spring
  * {@code SimpleApplicationEventMulticaster}).
+ *
+ * <p>Phase 19.1 D-10 (E4.1 amendment): two additional tests assert FLEEING transfer
+ * at bp→cm composite formation and cm→particle dissolve identity transitions.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @TestPropertySource(properties = {
@@ -69,6 +73,12 @@ class SimulationEngineCompositeFormationTest {
 
     @Autowired
     private CompositeRegistry compositeRegistry;
+
+    @Autowired
+    private EnvironmentEngine environmentEngine;
+
+    @Autowired
+    private SimulationEngine simulationEngine;
 
     @Autowired
     private ApplicationEventPublisher publisher;
@@ -145,5 +155,75 @@ class SimulationEngineCompositeFormationTest {
         assertThat(botRegistry.getSessionForEntity(cm2Id))
                 .as("Session-2 should be rebound to new composite member at pos2")
                 .isPresent();
+    }
+
+    // ── Phase 19.1 D-10 (E4.1 amendment) — FLEEING transfer behavioural tests ──
+
+    @Test
+    @DisplayName("D-10 (E4.1) — FLEEING transfers from bp1 to cm member on composite formation")
+    void fleeingTransfersOnCompositeFormation() {
+        // Grant FLEEING to BP1 before the formation tick.
+        // Expiry far in the future so it does not expire during the tick.
+        environmentEngine.grantFleeingForTest(BP1_ID, 9999L, 3, 3);
+
+        assertThat(environmentEngine.getFleeing(BP1_ID))
+                .as("BP1 must have FLEEING before formation")
+                .isNotNull();
+
+        // Fire 1 tick — composite formation replaces BP1 with cm member at POS1.
+        publisher.publishEvent(new TickEvent(1L));
+
+        // Verify formation actually happened.
+        assertThat(worldGrid.getCell(POS1.x(), POS1.y()).occupant())
+                .as("POS1 must hold CompositeMember after formation tick")
+                .isInstanceOf(CompositeMember.class);
+
+        String cm1Id = ((CompositeMember) worldGrid.getCell(POS1.x(), POS1.y()).occupant()).id();
+
+        // D-10 assertion: FLEEING must have moved from bp1.id() → cm member id.
+        assertThat(environmentEngine.getFleeing(BP1_ID))
+                .as("BP1 FLEEING must be removed after transfer to composite member")
+                .isNull();
+        assertThat(environmentEngine.getFleeing(cm1Id))
+                .as("composite member must inherit FLEEING from bp1 after formation")
+                .isNotNull();
+    }
+
+    @Test
+    @DisplayName("D-10 (E4.1) — FLEEING transfers from composite member to particle on dissolve")
+    void fleeingTransfersOnCompositeDissolve() {
+        // First, form the composite by firing tick 1.
+        publisher.publishEvent(new TickEvent(1L));
+
+        assertThat(worldGrid.getCell(POS1.x(), POS1.y()).occupant())
+                .as("POS1 must hold CompositeMember after formation")
+                .isInstanceOf(CompositeMember.class);
+
+        String cm1Id = ((CompositeMember) worldGrid.getCell(POS1.x(), POS1.y()).occupant()).id();
+        String compositeId = ((CompositeMember) worldGrid.getCell(POS1.x(), POS1.y()).occupant()).compositeId();
+
+        // Grant FLEEING to the composite member after formation.
+        environmentEngine.grantFleeingForTest(cm1Id, 9999L, 4, 4);
+
+        assertThat(environmentEngine.getFleeing(cm1Id))
+                .as("composite member must have FLEEING before dissolve")
+                .isNotNull();
+
+        // Invoke dissolveToParticles directly (package-private test seam — D-10 E4.1 amendment).
+        // This avoids the probabilistic shatter die roll in checkPanicZone.
+        compositeRegistry.getComposite(compositeId).ifPresent(state ->
+                simulationEngine.dissolveToParticles(state, new HashSet<>()));
+
+        // After dissolve, cm1Id maps to a particle with id = cm1Id + "-p"
+        // (see SimulationEngine.dissolveToParticles — particle = new Particle(cm.id() + "-p", ...)).
+        String particleId = cm1Id + "-p";
+
+        // D-10 assertion: FLEEING must have moved from cm.id() → particle.id().
+        assertThat(environmentEngine.getFleeing(cm1Id))
+                .as("composite member FLEEING must be removed after transfer to particle")
+                .isNull();
+        assertThat(environmentEngine.getFleeing(particleId))
+                .as("particle must inherit FLEEING from composite member after dissolve")
+                .isNotNull();
     }
 }
