@@ -187,3 +187,18 @@ Plans:
 ### Phase 999.x: PopulationDynamicsTest determinism (BACKLOG)
 
 Pin RNG seed or widen variation tolerance for `PopulationDynamicsTest.allThreeTypesSurvive500Ticks` (probabilistic flat-line on extinction). Not scale-related; separate from P21/P22.1.
+
+### Phase 999.3: Verb-role coupling cleanup — V tightening + solo A enablement + RPS multi-target research (BACKLOG)
+
+**Goal:** Resolve the codec-vs-resolver verb-eligibility mismatch surfaced during Phase 19.1 pass-6 verb-coverage deep-dive (2026-05-04). Today `ActionResolver.queueAction` accepts `V` and `A` from any session, but solo entities silently no-op at Phase 2 (`:498` for A, `:503-507` for V). The codec advertises capability that the resolver doesn't honour — counter-intuitive for bot authors, latent footgun. This phase cleans up the coupling in two opposite directions plus one paired research item.
+
+**Requirements:** None (post-MVP tech debt; protocol-coherence + emergence enabler)
+**Depends on:** Phase 19.1 (golden-trace baseline must be in place before V/A behaviour changes — both will rebaseline)
+**Plans:** 0 plans (promote with `/gsd-capture --backlog promote` when ready)
+
+Sub-items:
+- [ ] **M-A-001 — Disallow V verb for solo entities.** IRV voting is composite-LOCOMOTOR coordination only; solo V is degenerate. Investigate: (a) queue-time rejection with `E|400|verb-not-eligible-for-role`, (b) per-entity-class verb whitelist (`Entity.allowedVerbs() : Set<Character>`), (c) defence in depth (whitelist + rejection). Belt-and-suspenders may apply. Effect on trace baseline: GoldenTraceWithActionsTest fixture either drops V or asserts the error frame; rebaseline deliberately.
+- [ ] **M-A-002 — Allow solo entities to use the A verb (directional attack).** Today solo Particles cannot directionally choose attack targets — `case 'A'` is silent rest at `ActionResolver.java:498`. Implement `resolveSoloAttack` in Phase 2 taking a numpad direction and applying RPS combat against the target cell. Even as a refactor (no new functional surface) it is worth doing for cognitive coherence. Bigger payoff: enables emergent **pack tactics** — when multiple solo predators are adjacent to two prey candidates and one is weakened/starving, all preferring the weaker target produces emergent pack-hunting from simple local rules, exactly the emergence narrative the project targets. Pair with G-block per-verb floor expansion (`{M,E,R}` → `{M,E,R,A}`) at the future plan.
+- [ ] **M-A-003 — Research: how does current RPS combat resolve multi-target adjacency?** When `SimulationEngine @Order(10)` resolves passive RPS combat for a solo entity adjacent to multiple eligible prey, how is the target chosen? Deterministic by scan order (N→NE→…) or random? Does it consider prey state (energy, starving flag, buffs)? If deterministic, M-A-002 mainly adds *target preference* (small refactor). If random, M-A-002 introduces deterministic-by-bot-choice combat alongside random-by-position combat (different mental model). **Gates M-A-002 design.** Output: `RESEARCH.md`-style write-up with file paths, line numbers, code traces of the multi-target path in `SimulationEngine`.
+
+**Source-of-context for promotion:** see `.planning/phases/19.1-address-p19-multi-review-pass-4-findings-f1-f2-f3-unshipped-/19.1-REVIEWS-pass6-TRIAGE.md` and the verb-coverage deep-dive referenced from G1-revised's anti-reflag note in `19.1-05-PLAN.md` line 38. The G1-revised treatment in Phase 19.1 deliberately pins current "permissive at queue, silent at resolve" semantics in the golden trace; this phase rebaselines after the cleanup lands.
