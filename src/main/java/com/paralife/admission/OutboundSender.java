@@ -74,6 +74,13 @@ public class OutboundSender {
      *
      * <p>Catch in the drain loop is {@code Exception} (NOT {@code Throwable}) per REVIEWS LOW-10:
      * {@code OutOfMemoryError} / {@code StackOverflowError} still propagate per JVM contract.
+     *
+     * <p><b>Warning (Phase 19.1 D-17):</b> callbacks run inside the
+     * {@code synchronized(session)} monitor. Listeners <b>must be cheap and
+     * must not block</b> — any wait, sleep, or I/O inside a listener can
+     * stall the drain VT and (under markStalled / sendOutOfBand contention)
+     * the tick thread itself. Use only for fast hash/digest captures and
+     * test-only assertions.
      */
     @FunctionalInterface
     public interface FrameEmitListener {
@@ -264,6 +271,13 @@ public class OutboundSender {
     }
 
     private void drainLoop(WebSocketSession session, ArrayBlockingQueue<Frame> queue) {
+        // Phase 19.1 D-18 — frame-drop contract at close.
+        // Any frames remaining in `queue` when the loop exits (close, interrupt,
+        // or IOException from a stuck Jetty write being unblocked by the close-
+        // aware detachSession overload) are dropped intentionally. This is the
+        // documented backpressure semantics: outstanding frames are the cost of
+        // releasing the slow client. See class-level Javadoc for the full
+        // close-time contract.
         try {
             while (!Thread.currentThread().isInterrupted()) {
                 Frame frame = queue.take();
