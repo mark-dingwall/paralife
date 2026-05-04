@@ -1,5 +1,6 @@
 package com.paralife.engine;
 
+import com.paralife.codec.Frame;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
 import com.paralife.world.Entity.BondedPair;
@@ -12,6 +13,7 @@ import com.paralife.world.GridConfig;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -99,6 +101,9 @@ class LiveEntityRegistryInvariantTest {
     private CompositeRegistry compositeRegistry;
 
     @Autowired
+    private ActionResolver actionResolver;
+
+    @Autowired
     private ApplicationEventPublisher publisher;
 
     @BeforeEach
@@ -107,6 +112,9 @@ class LiveEntityRegistryInvariantTest {
         liveEntityRegistry.clearForTest();
         botRegistry.clear();
         compositeRegistry.clear();
+        // Phase 19.1 D-12: clear actionResolver state between tests to avoid
+        // lastReproducedTick cooldown leaking into subsequent reproduction tests.
+        actionResolver.clearStateForTest();
     }
 
     // ── Scenario 1: AT-REST ──────────────────────────────────────────────────
@@ -282,6 +290,81 @@ class LiveEntityRegistryInvariantTest {
 
         // Phase 19.5 M6: EntityEntry.sessionId field deleted; per-session attribution
         // lives in BotRegistry exclusively. No registry-level assertion remains.
+    }
+
+    // ── Scenario 5: POST-MOVEMENT ────────────────────────────────────────────
+
+    /**
+     * Phase 19.1 D-12 / LM — registry matches grid after movement action.
+     *
+     * Seed 2 particles at non-overlapping cells; queue an M action (numpad '6' = East)
+     * for one of them; drive 1 tick; assert registry == grid occupants.
+     *
+     * B5.1: queueAction is sessionId-keyed (ActionResolver.java:351), not entityId.
+     * C5.3: tick driving via publisher.publishEvent; tickEngine.tickOnce() does not exist.
+     */
+    @Test
+    @DisplayName("Phase 19.1 D-12 / LM — registry matches grid after movement action")
+    void registryMatchesGridOccupantsAfterMovement() {
+        // Seed p1 at (3,3) and p2 at (5,5) — non-adjacent so p1's move won't collide.
+        var p1 = new Particle("p1-move", ParticleType.CATALYST, 80);
+        var p2 = new Particle("p2-move", ParticleType.MEMBRANE, 80);
+
+        worldGrid.setEntity(3, 3, p1);
+        worldGrid.setEntity(5, 5, p2);
+        liveEntityRegistry.register("p1-move", new Position(3, 3));
+        liveEntityRegistry.register("p2-move", new Position(5, 5));
+
+        // B5.1: queueAction is sessionId-keyed. Register p1 in botRegistry with a fake session.
+        botRegistry.register("sess-p1-move", "p1-move", new Position(3, 3));
+        // Queue M action with direction '6' (East) — target cell (4,3) is empty.
+        actionResolver.queueAction("sess-p1-move",
+                new Frame.ActionFrame('M', Optional.of("6")));
+
+        // C5.3: publish TickEvent; tickEngine.tickOnce() does not exist.
+        publisher.publishEvent(new TickEvent(1L));
+
+        assertRegistryMatchesGrid("POST-MOVEMENT after M action");
+    }
+
+    // ── Scenario 6: POST-REPRODUCTION ────────────────────────────────────────
+
+    /**
+     * Phase 19.1 D-12 / LM — registry matches grid after reproduction action.
+     *
+     * Seed 1 high-energy CATALYST parent; queue R action with numpad '6' (East);
+     * drive 1 tick; assert child particle is in registry AND parent remains.
+     *
+     * D3-T5: reproduce takes a numpad direction (target cell relative to parent),
+     * NOT a mate id. CATALYST reproduce-energy-cost=40; parent needs energy >= 48
+     * (cost + starvation floor). Energy=80 satisfies this.
+     * B5.1: queueAction is sessionId-keyed.
+     * C5.3: tick driving via publisher.publishEvent.
+     */
+    @Test
+    @DisplayName("Phase 19.1 D-12 / LM — registry matches grid after reproduction action")
+    void registryMatchesGridOccupantsAfterReproduction() {
+        // CATALYST: max-energy=80, reproduce-energy-cost=40, starvation-threshold=30%,
+        // starvation-floor=10% (8 energy). Parent energy=80 >= cost(40) + floor(8) = 48. OK.
+        var parent = new Particle("p1-repro", ParticleType.CATALYST, 80);
+
+        worldGrid.setEntity(3, 3, parent);
+        liveEntityRegistry.register("p1-repro", new Position(3, 3));
+
+        // Target cell (4,3) is East='6'; must be empty for reproduction to succeed.
+        // No other entity is placed there.
+        botRegistry.register("sess-p1-repro", "p1-repro", new Position(3, 3));
+        actionResolver.queueAction("sess-p1-repro",
+                new Frame.ActionFrame('R', Optional.of("6")));
+
+        // C5.3: publish TickEvent.
+        publisher.publishEvent(new TickEvent(1L));
+
+        // Registry must match grid: parent at (3,3) + child at (4,3).
+        assertRegistryMatchesGrid("POST-REPRODUCTION after R action");
+        assertThat(liveEntityRegistry.snapshot().size())
+                .as("Registry must have >= 2 entries after reproduction (parent + child)")
+                .isGreaterThanOrEqualTo(2);
     }
 
     // ── Invariant helper ─────────────────────────────────────────────────────
