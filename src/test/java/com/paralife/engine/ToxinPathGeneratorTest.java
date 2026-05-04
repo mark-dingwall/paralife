@@ -4,7 +4,6 @@ import com.paralife.world.Position;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.Random;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
@@ -12,9 +11,9 @@ import static org.assertj.core.api.Assertions.within;
 /**
  * Task 1 tests for {@link ToxinPathGenerator} and {@link ToxinEvent}.
  *
- * <p>Tests live in {@code com.paralife.engine} (cycle-4 action item #10) so
- * they have access to the package-private {@code ToxinPathGenerator(Random)}
- * constructor and {@code static catmullRom} helper.
+ * <p>Phase 19.1 C2.1: {@link ToxinPathGenerator} is now a static-method holder
+ * (no constructors, no per-instance RNG). Tests use the static
+ * {@code generatePath(..., long seed)} API directly.
  */
 class ToxinPathGeneratorTest {
 
@@ -38,10 +37,9 @@ class ToxinPathGeneratorTest {
 
     @Test
     void generatePathIsDeterministicForSameSeed() {
-        ToxinPathGenerator gen1 = new ToxinPathGenerator(new Random(42L));
-        ToxinPathGenerator gen2 = new ToxinPathGenerator(new Random(42L));
-        List<Position> a = gen1.generatePath(64, 64, 4, 8, 5, 20);
-        List<Position> b = gen2.generatePath(64, 64, 4, 8, 5, 20);
+        // Phase 19.1 D-06: static API — same seed, same path every time.
+        List<Position> a = ToxinPathGenerator.generatePath(64, 64, 4, 8, 5, 20, 42L);
+        List<Position> b = ToxinPathGenerator.generatePath(64, 64, 4, 8, 5, 20, 42L);
         assertThat(a).isEqualTo(b);
     }
 
@@ -50,18 +48,16 @@ class ToxinPathGeneratorTest {
         // Path starts at one edge, ends at the opposite edge. First-to-last
         // point sum of abs deltas should be at least the grid width - a few
         // cells (approximates "traverses the grid").
-        ToxinPathGenerator gen = new ToxinPathGenerator(new Random(7L));
-        List<Position> path = gen.generatePath(64, 64, 4, 8, 5, 20);
+        List<Position> path = ToxinPathGenerator.generatePath(64, 64, 4, 8, 5, 20, 7L);
         assertThat(path).isNotEmpty();
         assertThat(path.size()).isGreaterThan(10);
     }
 
     @Test
     void pathPointsAllInGridBounds() {
-        ToxinPathGenerator gen = new ToxinPathGenerator(new Random(3L));
         int w = 48;
         int h = 48;
-        List<Position> path = gen.generatePath(w, h, 4, 8, 5, 20);
+        List<Position> path = ToxinPathGenerator.generatePath(w, h, 4, 8, 5, 20, 3L);
         assertThat(path).allSatisfy(p -> {
             assertThat(p.x()).isBetween(0, w - 1);
             assertThat(p.y()).isBetween(0, h - 1);
@@ -69,16 +65,25 @@ class ToxinPathGeneratorTest {
     }
 
     @Test
-    void noArgConstructorDelegatesToDefaultRandom() {
-        // cycle-6 MEDIUM: 14-04 unit tests use `new ToxinPathGenerator()` (no-arg).
-        // Lock that path here — path generation must not NPE when no Random is supplied.
-        ToxinPathGenerator gen = new ToxinPathGenerator();
-        List<Position> path = gen.generatePath(32, 32, 4, 8, 5, 25);
-        assertThat(path).isNotEmpty();
-        assertThat(path).allSatisfy(p -> {
-            assertThat(p.x()).isBetween(0, 31);
-            assertThat(p.y()).isBetween(0, 31);
-        });
+    void differentSeedsProduceDifferentPaths() {
+        // Phase 19.1 D-06 falsifier check: different seeds must (overwhelmingly) differ.
+        List<Position> a = ToxinPathGenerator.generatePath(64, 64, 4, 8, 5, 20, 0xDEADBEEFL);
+        List<Position> b = ToxinPathGenerator.generatePath(64, 64, 4, 8, 5, 20, 0xCAFEBABEL);
+        assertThat(a).isNotEqualTo(b);
+    }
+
+    @Test
+    void multiToxinSeedDeterminism() {
+        // Phase 19.1 D-06: sequential calls with distinct seeds are each individually
+        // reproducible — verifies no shared mutable state leaks between calls.
+        long[] seeds = { 0xDEADBEEFL, 100L, 999999L };
+        for (long seed : seeds) {
+            List<Position> first = ToxinPathGenerator.generatePath(64, 64, 4, 8, 5, 20, seed);
+            List<Position> second = ToxinPathGenerator.generatePath(64, 64, 4, 8, 5, 20, seed);
+            assertThat(first)
+                    .as("Same seed %d must always produce same path", seed)
+                    .isEqualTo(second);
+        }
     }
 
     // ── ToxinEvent record tests ────────────────────────────────────

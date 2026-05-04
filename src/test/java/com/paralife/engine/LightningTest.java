@@ -42,8 +42,8 @@ import static org.mockito.Mockito.mock;
  *       delegation chain actually runs.</li>
  * </ol>
  *
- * <p>Unit-test setup constructs {@code new ToxinPathGenerator()} (no-arg
- * public constructor pinned by 14-02 Task 1) per cycle-6 MEDIUM.
+ * <p>Unit-test setup passes {@code null} for the (now-ignored) ToxinPathGenerator
+ * parameter — Phase 19.1 C2.1: ToxinPathGenerator is fully-static, no instance needed.
  *
  * <p>Composite integration test scope (cycle-6 LOW): pinned at
  * {@code dissolution-chance=0.0} — proves graceful-degradation only.
@@ -71,15 +71,13 @@ class LightningTest {
         CompositeRegistry composites = mock(CompositeRegistry.class);
         SimulationEngine sim = mock(SimulationEngine.class);
         DeathFinalizer finalizer = new DeathFinalizer(grid, bots, buffs, composites, hooksBean, sim);
-        // Cycle-6 MEDIUM: ToxinPathGenerator has a pinned no-arg public
-        // constructor (internally delegates to this(new Random())). 14-02
-        // Task 1 is authoritative. Pass in explicitly so the unit tests
-        // own the construction surface.
-        ToxinPathGenerator toxinPathGen = new ToxinPathGenerator();
+        // Phase 19.1 C2.1: ToxinPathGenerator is now fully-static; null is passed for the
+        // back-compat ignored parameter. The constructor shim accepts ToxinPathGenerator but
+        // does not use it.
         env = new EnvironmentEngine(grid,
                 new SeasonTracker(new SeasonsConfig(200, 0.5)),
                 cfg, buffs, fertilityCfg, finalizer, hooksBean,
-                toxinPathGen, new Random(42L));
+                (ToxinPathGenerator) null, new Random(42L));
         hooksBean.registerCompostSink(env::applyCompost);
     }
 

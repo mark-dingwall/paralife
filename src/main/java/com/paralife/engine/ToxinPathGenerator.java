@@ -15,34 +15,17 @@ import java.util.Random;
  * point to the integer grid — see {@link #generatePath}. This matches
  * RESEARCH.md Pitfall 8 and the microbes.js:207-223 reference.
  *
- * <p><b>Constructor pair (cycle-6 MEDIUM):</b>
- * <ul>
- *   <li>{@link #ToxinPathGenerator()} — public no-arg. Delegates internally to
- *       {@code this(new Random())}. Used by {@code EnvironmentEngine}'s
- *       production constructor and by 14-04's unit-test setup.</li>
- *   <li>{@link #ToxinPathGenerator(Random)} — package-private. Used by
- *       deterministic-seeded tests in this package.</li>
- * </ul>
+ * <p><b>Phase 19.1 Option A — stateless static (C2.1 pin):</b>
+ * All constructors removed. {@link #generatePath} is {@code public static};
+ * callers supply a {@code long seed} per call and a local {@code Random(seed)}
+ * is constructed inside the method. No per-instance RNG state. No resetSeed.
+ * This makes path generation byte-exact for a given seed regardless of call
+ * order, fixing the RNG-determinism HIGH finding (D-06).
  */
 public final class ToxinPathGenerator {
 
-    private final Random rng;
-
-    /**
-     * Public no-arg constructor. cycle-6 MEDIUM: pinned so callers outside this
-     * package can construct without supplying a Random.
-     */
-    public ToxinPathGenerator() {
-        this(new Random());
-    }
-
-    /**
-     * Package-private constructor for deterministic tests. cycle-6 MEDIUM:
-     * kept package-private so only tests in {@code com.paralife.engine} can
-     * inject a seeded Random.
-     */
-    ToxinPathGenerator(Random rng) {
-        this.rng = rng;
+    private ToxinPathGenerator() {
+        // Utility class — no instances.
     }
 
     /**
@@ -54,28 +37,39 @@ public final class ToxinPathGenerator {
      * {@code Math.floorMod} is applied ONLY at the final cell-materialisation
      * step per the Toroidal wrapping contract.
      *
+     * <p>Phase 19.1 D-06: callers supply a {@code seed} per invocation.
+     * A local {@code Random(seed)} is constructed inside this method — no
+     * shared mutable RNG state. Two calls with the same {@code seed} and grid
+     * dimensions always return an equal {@code List<Position>}.
+     *
      * @param width            grid width
      * @param height           grid height
      * @param pathPointsMin    minimum number of waypoints (> 1)
      * @param pathPointsMax    maximum number of waypoints (>= pathPointsMin)
      * @param pathOffsetMin    minimum perpendicular waypoint offset
      * @param pathOffsetMax    maximum perpendicular waypoint offset
+     * @param seed             per-call RNG seed; caller is responsible for
+     *                         supplying a stable seed (e.g. the seed already
+     *                         drawn by {@code EnvironmentEngine.spawnToxin})
      * @return ordered list of grid-materialised {@link Position}s
      */
-    public List<Position> generatePath(int width, int height,
-                                        int pathPointsMin, int pathPointsMax,
-                                        int pathOffsetMin, int pathOffsetMax) {
+    public static List<Position> generatePath(int width, int height,
+                                               int pathPointsMin, int pathPointsMax,
+                                               int pathOffsetMin, int pathOffsetMax,
+                                               long seed) {
+        Random localRng = new Random(seed);
+
         // ── Step 1: pick entry/exit edge pair ──────────────────────────
         // 0=N edge, 1=E, 2=S, 3=W. Exit is the opposite edge so paths traverse
         // the grid rather than skirting one side.
-        int entryEdge = rng.nextInt(4);
+        int entryEdge = localRng.nextInt(4);
         int exitEdge = (entryEdge + 2) % 4;
-        double[] entry = pickEdgePoint(entryEdge, width, height);
-        double[] exit = pickEdgePoint(exitEdge, width, height);
+        double[] entry = pickEdgePoint(entryEdge, width, height, localRng);
+        double[] exit = pickEdgePoint(exitEdge, width, height, localRng);
 
         // ── Step 2: waypoint generation in UN-WRAPPED coords ──────────
         int waypointCount = (pathPointsMax > pathPointsMin)
-                ? pathPointsMin + rng.nextInt(pathPointsMax - pathPointsMin + 1)
+                ? pathPointsMin + localRng.nextInt(pathPointsMax - pathPointsMin + 1)
                 : pathPointsMin;
         List<double[]> waypoints = new ArrayList<>(waypointCount);
         waypoints.add(entry);
@@ -93,8 +87,8 @@ public final class ToxinPathGenerator {
             double cx = entry[0] + t * dx;
             double cy = entry[1] + t * dy;
             int range = pathOffsetMax - pathOffsetMin + 1;
-            double mag = (range > 0 ? pathOffsetMin + rng.nextInt(range) : pathOffsetMin)
-                    * (rng.nextBoolean() ? 1.0 : -1.0);
+            double mag = (range > 0 ? pathOffsetMin + localRng.nextInt(range) : pathOffsetMin)
+                    * (localRng.nextBoolean() ? 1.0 : -1.0);
             waypoints.add(new double[] { cx + px * mag, cy + py * mag });
         }
         waypoints.add(exit);
@@ -139,7 +133,7 @@ public final class ToxinPathGenerator {
      * Pick a point on the given edge. {@code edge}: 0=N (y=0), 1=E (x=w-1),
      * 2=S (y=h-1), 3=W (x=0). Returns un-wrapped double coords.
      */
-    private double[] pickEdgePoint(int edge, int width, int height) {
+    private static double[] pickEdgePoint(int edge, int width, int height, Random rng) {
         return switch (edge) {
             case 0 -> new double[] { rng.nextInt(width), 0.0 };
             case 1 -> new double[] { width - 1.0, rng.nextInt(height) };
