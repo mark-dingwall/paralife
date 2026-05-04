@@ -885,8 +885,7 @@ public class SimulationEngine {
         // both returned empty post-H2, leaking the session→bp.id() entry into the
         // composite era and orphaning the predator session.
         botRegistry.getSessionForEntity(bp.id()).ifPresent(sessionId -> {
-            botRegistry.unregisterByEntity(bp.id());
-            botRegistry.register(sessionId, newMemberId, pos);
+            botRegistry.remapEntity(sessionId, newMemberId, pos);
             if (entityLifecycleListener != null) {
                 entityLifecycleListener.onEntityRemapped(sessionId, bp.id(), newMemberId);
             }
