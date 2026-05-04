@@ -1,18 +1,25 @@
 package com.paralife.engine;
 
+import com.paralife.engine.EnvCleanupHooksBean.PendingGrant;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -203,5 +210,71 @@ class EnvironmentDeterminismTest {
             if (b != null && b != 0) return true;
         }
         return false;
+    }
+
+    // ── Phase 19.1 D-04 multi-cure determinism fixture ──────────────
+
+    /**
+     * Phase 19.1 D-04: same-tick multi-cure buff outcomes must be byte-exact
+     * across two same-seed runs. Before the fix, CHM iteration order in
+     * {@code processPendingGrants} produced non-deterministic RNG consumption.
+     */
+    @Test
+    @DisplayName("F4 — same-tick multi-cure produces byte-exact buff state across same-seed runs (D-04)")
+    void multiCureSameSeedDeterminism() {
+        Map<String, List<BuffRegistry.ActiveBuff>> run1 = driveMultiCureScenario();
+        Map<String, List<BuffRegistry.ActiveBuff>> run2 = driveMultiCureScenario();
+        assertThat(run2)
+                .as("Phase 19.1 D-04 — pendingGrants must be sorted before randomBuff(). "
+                        + "If this fails, processPendingGrants is consuming RNG in CHM order.")
+                .isEqualTo(run1);
+    }
+
+    /**
+     * Drives the multi-cure scenario: place 5 Particle entities, enqueue one
+     * PendingGrant for each in the same tick, run 300 ticks, return the sorted
+     * buff snapshot.
+     *
+     * <p>resetAll() brings EnvironmentEngine.rng back to seed 42, so two consecutive
+     * calls produce identical Poisson roll sequences — the ONLY variable is whether
+     * processPendingGrants iterates in a stable sorted order.
+     */
+    private Map<String, List<BuffRegistry.ActiveBuff>> driveMultiCureScenario() {
+        resetAll();
+
+        // Place 5 particles at distinct positions
+        String[] ids = {"mc-e1", "mc-e2", "mc-e3", "mc-e4", "mc-e5"};
+        Position[] positions = {
+                new Position(1, 1), new Position(2, 3), new Position(5, 7),
+                new Position(10, 12), new Position(20, 20)
+        };
+        for (int i = 0; i < ids.length; i++) {
+            worldGrid.setEntity(positions[i].x(), positions[i].y(),
+                    new Particle(ids[i], ParticleType.CATALYST, 80, 100));
+        }
+
+        // Enqueue one PendingGrant per entity directly into envCleanupHooksBean
+        // (the same path tickBuffsAndInfections uses). initialTicks=10 for all
+        // so the comparator's entityId key differentiates them.
+        for (int i = 0; i < ids.length; i++) {
+            Entity occ = worldGrid.getCell(positions[i].x(), positions[i].y()).occupant();
+            envCleanupHooksBean.addPendingGrant(
+                    new PendingGrant(ids[i], 10, occ, positions[i]));
+        }
+
+        // Tick 1 will drain pendingGrants and call randomBuff() for each entity
+        for (long tick = 1; tick <= 300; tick++) {
+            environmentEngine.onTickEnvOnlyForTest(tick);
+        }
+
+        // Capture sorted buff snapshot: entityId -> sorted list of (buffType, expiryTick)
+        Map<String, List<BuffRegistry.ActiveBuff>> snapshot = new TreeMap<>();
+        for (String id : ids) {
+            List<BuffRegistry.ActiveBuff> buffs = buffRegistry.getBuffs(id).stream()
+                    .sorted(Comparator.comparing(b -> b.type().name()))
+                    .collect(Collectors.toList());
+            snapshot.put(id, buffs);
+        }
+        return snapshot;
     }
 }
