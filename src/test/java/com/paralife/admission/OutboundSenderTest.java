@@ -10,6 +10,10 @@ import org.springframework.web.socket.WebSocketExtension;
 import org.springframework.web.socket.WebSocketMessage;
 import org.springframework.web.socket.WebSocketSession;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
+
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.security.Principal;
@@ -24,6 +28,13 @@ class OutboundSenderTest {
     private SimpleMeterRegistry meterReg;
     private AdmissionMetrics metrics;
     private OutboundSender sender;
+
+    // G4 (pass-6 triage 2026-05-04) — `never` promoted to test-class field so
+    // @AfterEach can release the parked drain VT regardless of test outcome.
+    // L5 pass-7 triage — explicit null initialiser.
+    private CountDownLatch never = null;
+    // M3 pass-7 triage — captured drain Thread reference so @AfterEach can join + assert exit.
+    private Thread drainThread = null;
 
     @BeforeEach
     void setup() {
@@ -160,6 +171,11 @@ class OutboundSenderTest {
         sender.offer("session-sr", new Frame.RegisterFrame('C'));   // VT enters sendMessage, blocks
         awaitUntil(() -> s.sendInFlight, 2000);
 
+        // B3.3 — capture thread BEFORE detach: post-detach senderThread(id) returns null
+        // because detachSession removes the map entry first.
+        Thread t = sender.senderThread("session-sr");
+        assertThat(t).as("drain VT must be live before detach").isNotNull();
+
         long start = System.nanoTime();
         sender.detachSession(s);   // closes transport → unblocks send → VT exits via interrupt
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
@@ -167,6 +183,71 @@ class OutboundSenderTest {
         assertThat(s.closed).isTrue();
         assertThat(elapsedMs).isLessThan(200);
         assertThat(sender.queueDepth("session-sr")).isEqualTo(-1);
+
+        // Phase 19.1 D-13 / EL — drain VT must exit after detach
+        boolean joined = t.join(java.time.Duration.ofSeconds(5));
+        assertThat(joined).as("Phase 19.1 D-13 / EL — drain VT must exit after detach").isTrue();
+        assertThat(t.isAlive()).as("Phase 19.1 D-13").isFalse();
+    }
+
+    @Test
+    @DisplayName("Phase 19.1 D-14 / E3.2 — detachSession(String) join-timeout increments paralife.outbound.detach.timeout counter")
+    void detachTimeoutIncrementsCounter() throws Exception {
+        // Setup: register a fake session whose sendMessage blocks on a latch that
+        // is NEVER counted down DURING the test. The drain VT enters
+        // take()→sendMessage→awaitLatch. detachSession(String) interrupts the VT;
+        // the fake's sendMessage swallows the interrupt and keeps blocking past the
+        // join timeout, so the counter increments.
+        // @AfterEach releaseStuckVT() counts the latch down so the drain VT unwinds.
+        never = new CountDownLatch(1);
+        FakeSession fake = new FakeSession("session-dt") {
+            @Override
+            public void sendMessage(WebSocketMessage<?> message) throws java.io.IOException {
+                // Swallow interrupt — block indefinitely until `never` is counted down.
+                try { never.await(); } catch (InterruptedException ie) {
+                    // Re-park after interrupt — do NOT honour it, so the join times out.
+                    try { never.await(); } catch (InterruptedException ie2) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+        };
+        sender.attachSession(fake, 2);
+        sender.offer(fake.getId(), new Frame.RegisterFrame('C'));   // wedges the drain VT in sendMessage
+
+        // Wait until the drain VT is provably blocked in sendMessage before calling detachSession.
+        // Give it time to take the frame and enter sendMessage.
+        Thread.sleep(50);
+
+        // M3 pass-7 triage — capture the drain Thread so @AfterEach can join + assert exit.
+        this.drainThread = sender.senderThread(fake.getId());
+
+        double before = meterReg.counter(AdmissionMetrics.M_DETACH_TIMEOUT).count();
+        sender.detachSession(fake.getId());   // String overload — Step 3 increment site
+        double after  = meterReg.counter(AdmissionMetrics.M_DETACH_TIMEOUT).count();
+
+        assertThat(after - before)
+            .as("Phase 19.1 D-14 / E3.2 — detachSession(String) join-timeout must increment counter")
+            .isEqualTo(1.0d);
+    }
+
+    @AfterEach
+    void releaseStuckVT() throws InterruptedException {
+        // G4 (pass-6 triage 2026-05-04) — unblock the drain VT so the test class
+        // does not leak a parked VT across forkEvery=1 runs. Count down `never`
+        // so the fake sendMessage returns, then interrupt the thread so the drain
+        // loop exits if it re-enters queue.take().
+        if (never != null) {
+            never.countDown();
+        }
+        // M3 pass-7 triage — interrupt + join the captured drain Thread.
+        if (drainThread != null) {
+            drainThread.interrupt();   // unblocks any subsequent queue.take() after sendMessage returns
+            drainThread.join(500);
+            assertThat(drainThread.isAlive())
+                    .as("drain VT must exit within 500ms of latch release + interrupt")
+                    .isFalse();
+        }
     }
 
     @Test

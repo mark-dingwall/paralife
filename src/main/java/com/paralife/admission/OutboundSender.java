@@ -152,6 +152,7 @@ public class OutboundSender {
         try {
             boolean exited = t.join(java.time.Duration.ofMillis(DETACH_JOIN_TIMEOUT_MS));
             if (!exited) {
+                if (metrics != null) metrics.incDetachTimeout();   // Phase 19.1 D-14
                 log.warn("Sender VT for session={} did not exit within {}ms after interrupt",
                         sessionId, DETACH_JOIN_TIMEOUT_MS);
             }
@@ -247,6 +248,11 @@ public class OutboundSender {
     boolean hasOverflowFired(String sessionId) {
         AtomicBoolean fired = overflowFiredFlags.get(sessionId);
         return fired != null && fired.get();
+    }
+
+    /** Test-only: returns the live drain VT for {@code sessionId}, or null if detached. */
+    Thread senderThread(String sessionId) {
+        return senderThreads.get(sessionId);
     }
 
     private void drainLoop(WebSocketSession session, ArrayBlockingQueue<Frame> queue) {

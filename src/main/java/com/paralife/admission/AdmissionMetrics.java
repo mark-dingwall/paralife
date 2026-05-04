@@ -70,6 +70,8 @@ public class AdmissionMetrics {
     public static final String M_STALLED_TOTAL      = "paralife.backpressure.stalled.total";
     /** Phase 19 SCALE-06 (REVIEWS LOW-12): bounded lost-race retries counter. */
     public static final String M_PLACEMENT_LOST_RACE = "paralife.placement.lost-race.total";
+    /** Phase 19.1 D-14: drain VT join timed out. */
+    public static final String M_DETACH_TIMEOUT = "paralife.outbound.detach.timeout";
 
     /** Session attribute key for entity id — shared constant for callers that need it. */
     public static final String ATTR_ENTITY_ID = "entityId";
@@ -107,6 +109,8 @@ public class AdmissionMetrics {
     private final DistributionSummary frameSize;
     /** Phase 19 SCALE-06 (REVIEWS LOW-12): placement lost-race counter. */
     private final Counter lostRace;
+    /** Phase 19.1 D-14: drain VT did not exit within join timeout. */
+    private final Counter detachTimeout;
 
     // ── Constructor ──────────────────────────────────────────────────────────
 
@@ -167,6 +171,10 @@ public class AdmissionMetrics {
         // Phase 19 SCALE-06 (REVIEWS LOW-12): placement lost-race retry counter.
         this.lostRace = Counter.builder(M_PLACEMENT_LOST_RACE)
                 .description("Placement: sampled cell lost the trySetEntity race (bounded 3-retry)")
+                .register(registry);
+        // Phase 19.1 D-14: detach-timeout counter.
+        this.detachTimeout = Counter.builder(M_DETACH_TIMEOUT)
+                .description("OutboundSender.detachSession join timed out (drain VT did not exit within 100ms)")
                 .register(registry);
     }
 
@@ -423,4 +431,7 @@ public class AdmissionMetrics {
      * Called by {@code OutboundSender.drainLoop}.
      */
     public void recordFrameSize(int bytes) { frameSize.record(bytes); }
+
+    /** Phase 19.1 D-14: increment when drain VT join timed out in detachSession(String). */
+    public void incDetachTimeout() { detachTimeout.increment(); }
 }
