@@ -275,9 +275,16 @@ class StallRecoveryIntegrationTest {
         assertThat(awaitHandlerLog("BACKPRESSURE stalled", Duration.ofSeconds(5))).isTrue();
         bot1.releaseReceive();
 
-        // Server closed the WS via SERVICE_RESTARTED after sending E|408|reconnect-required.
-        // Verify both: close fired, and an E|408|reconnect-required was delivered before close.
-        assertThat(bot1.awaitClose(Duration.ofSeconds(5))).isTrue();
+        // Phase 19.1 D-07 amendment: markStalled closes the transport via
+        // detachSession(session, SERVICE_RESTARTED) FIRST, then sends OOB 408 best-effort.
+        // The sendOutOfBand isOpen() guard short-circuits when the session is already closed,
+        // so the 408 frame may NOT arrive. The close itself is the reconnect signal.
+        // See: CLAUDE.md "markStalled close-then-best-effort-OOB (Phase 19.1, D-07)".
+        // Assert: close fired (the required reconnect signal).
+        assertThat(bot1.awaitClose(Duration.ofSeconds(5)))
+                .as("Stalled session must be closed (SERVICE_RESTARTED is the reconnect signal, D-07)")
+                .isTrue();
+        // The 408 is best-effort — log its presence for debugging but do NOT assert it.
         boolean got408 = bot1.received().stream().anyMatch(raw -> {
             try {
                 Frame f = PerceptionCodec.decode(raw);
@@ -288,9 +295,8 @@ class StallRecoveryIntegrationTest {
                 return false;
             }
         });
-        assertThat(got408)
-                .as("Stalled session must receive E|408|reconnect-required before close. Frames=" + bot1.received())
-                .isTrue();
+        // Informational log: expected false after D-07 (transport closes before OOB fires).
+        System.out.println("D-07 info: got408=" + got408 + " frames=" + bot1.received());
     }
 
     @Test

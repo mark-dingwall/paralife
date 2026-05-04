@@ -129,15 +129,15 @@ class AttributionRebindTest {
 
         handler.markStalled(session, tickEngine.currentTick());
 
-        // The bot should receive E|408|reconnect-required and increment its counter.
-        // Allow 5 seconds for CI reliability.
-        Awaitility.await()
-                .atMost(Duration.ofSeconds(5))
-                .pollInterval(Duration.ofMillis(50))
-                .untilAsserted(() ->
-                        assertThat(bot.getE408ReconnectRequiredCount())
-                                .as("Bot must have received E|408|reconnect-required")
-                                .isGreaterThanOrEqualTo(1));
+        // Phase 19.1 D-07 amendment: markStalled now calls
+        // outboundSender.detachSession(session, SERVICE_RESTARTED) which closes the transport
+        // FIRST. The OOB 408 frame sent afterward is best-effort — sendOutOfBand short-circuits
+        // on isOpen()==false. The close itself is the reconnect signal: BotClient.onClose fires
+        // and reconnects with the stored resumeToken (lines 525-530 in BotClient.java).
+        // We do NOT assert getE408ReconnectRequiredCount() >= 1 here because the 408 may not
+        // arrive; instead we assert the rebind cycle completes (below), which is the stronger
+        // invariant. The 408 counter remains observable for informational purposes.
+        // See: CLAUDE.md "markStalled close-then-best-effort-OOB (Phase 19.1, D-07)"
 
         // Wait for the STALLED-pivot reconnect to complete: a new server-side session must
         // exist with both ATTR_HARNESS=test-attribution AND ATTR_SOURCE=harness, and must
