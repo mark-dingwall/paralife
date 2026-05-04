@@ -1,9 +1,11 @@
 package com.paralife.codec;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -125,6 +127,41 @@ class PerceptionCodecErrorTest {
                 () -> PerceptionCodec.decode(bomb.toString()));
         assertTrue(ex.getMessage().contains("MAX_S_ENTRIES"),
                 "Expected MAX_S_ENTRIES in message: " + ex.getMessage());
+    }
+
+    /**
+     * Phase 19.1 D-01 (F2 fix) — {@code validateEventCode} must accept {@code 'B'} (BUFF/absorBed).
+     * 'B' was added to {@code Event.java} compact-ctor in Phase 19.5 E1 but the codec switch
+     * at {@code PerceptionCodec.java:685} was not updated — causing every prey-of-bond respawn
+     * to throw {@link CodecException}. This test is RED until the codec switch is fixed.
+     */
+    @Test
+    @DisplayName("F2 — validateEventCode accepts 'B' (BUFF) — Phase 19.1 D-01")
+    void validateEventCodeAcceptsB() {
+        // V8-shape: "T|004|0D2F|18/50|vBH3" — swap H for B but B has NO magnitude (mirrors 'D').
+        // Use a no-magnitude v-block frame: "T|004|0D2F|18/50|vB"
+        // (analogous to V5's "...vS" which uses the no-magnitude event S).
+        assertDoesNotThrow(() -> PerceptionCodec.decode("T|004|0D2F|18/50|vB"),
+                "Phase 19.1 D-01 — codec must accept 'B' event code (BUFF/absorBed added in Phase 19.5 E1)");
+    }
+
+    @Test
+    @DisplayName("F2 — validateEventCode rejects unknown code 'Z'")
+    void validateEventCodeRejectsZ() {
+        CodecException ex = assertThrows(CodecException.class,
+                () -> PerceptionCodec.decode("T|004|0D2F|18/50|vZ"),
+                "Codec must reject unknown event code 'Z'");
+        assertTrue(ex.getMessage().contains("Unknown event code 'Z'"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("F2 — eventHasMagnitude returns false for 'B'")
+    void eventHasMagnitudeReturnsFalseForB() {
+        // A magnitude v-block row for B would be invalid (B has no magnitude like D).
+        // Drive this via a frame that would be valid if B had magnitude — it must be rejected.
+        // The absence of exception for "vB" (no magnitude) confirms eventHasMagnitude('B')==false.
+        assertDoesNotThrow(() -> PerceptionCodec.decode("T|004|0D2F|18/50|vB"),
+                "Phase 19.1 D-01 — 'B' must be accepted as a no-magnitude event (mirrors 'D')");
     }
 
     /**

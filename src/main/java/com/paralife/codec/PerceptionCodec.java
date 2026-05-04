@@ -682,7 +682,7 @@ public final class PerceptionCodec {
 
     private static void validateEventCode(char code, int pos) {
         switch (code) {
-            case 'E', 'A', 'H', 'T', 'M', 'R', 'L', 'N', 'S', 'D' -> { /* ok */ }
+            case 'E', 'A', 'H', 'T', 'M', 'R', 'L', 'N', 'S', 'D', 'B' -> { /* ok */ }
             default -> throw new CodecException("Unknown event code '" + code + "' at " + pos);
         }
     }
@@ -691,7 +691,7 @@ public final class PerceptionCodec {
         // Per §8.4 table: E/A/H/T/M/R/L have magnitude; N/S/D do not.
         return switch (code) {
             case 'E', 'A', 'H', 'T', 'M', 'R', 'L' -> true;
-            case 'N', 'S', 'D' -> false;
+            case 'N', 'S', 'D', 'B' -> false;
             default -> false;
         };
     }
