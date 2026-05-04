@@ -112,11 +112,12 @@ Plans:
 - Existing 166-test suite stays green
 
 Plans:
-- [ ] 19.1-01-PLAN.md — Unshipped fix verification & landing — F2 codec 'B' + D-15 codec convention gate, F1 composite remap, F3 markDead clearActive
-- [ ] 19.1-02-PLAN.md — Determinism hardening — F4 sort pendingGrants, CE sort registry snapshot, TX seeded ToxinPathGenerator (reuse :404 seed) + EnvironmentDeterminismTest extensions
-- [ ] 19.1-03-PLAN.md — Backpressure correctness — MS close-aware markStalled + tick-bound integration test, EL VT-exit assertion, L1 detach-timeout metric
-- [ ] 19.1-04-PLAN.md — Lifecycle leaks — AM remapBucketTags, BL cleanupBot env-state cleanup (with TDD probe), FL composite-boundary FLEEING transfer
-- [ ] 19.1-05-PLAN.md — Regression coverage + polish (merged 05/06) — GT GoldenTraceWithActionsTest, LM movement/reproduction invariants, DR-pin ActionResolverDrainSemanticsTest, OD CLAUDE.md @Order accuracy, FE/FD OutboundSender Javadoc, ES processInteractions snapshot hoist
+- [x] 19.1-01-PLAN.md — Unshipped fix verification & landing — F2 codec 'B' + D-15 codec convention gate, F1 composite remap, F3 markDead clearActive
+- [x] 19.1-02-PLAN.md — Determinism hardening — F4 sort pendingGrants, CE sort registry snapshot, TX seeded ToxinPathGenerator (reuse :404 seed) + EnvironmentDeterminismTest extensions
+- [x] 19.1-03-PLAN.md — Backpressure correctness — MS close-aware markStalled + tick-bound integration test, EL VT-exit assertion, L1 detach-timeout metric
+- [x] 19.1-04-PLAN.md — Lifecycle leaks — AM remapBucketTags, BL cleanupBot env-state cleanup (with TDD probe), FL composite-boundary FLEEING transfer
+- [x] 19.1-05-PLAN.md — Regression coverage + polish (merged 05/06) — GT GoldenTraceWithActionsTest, LM movement/reproduction invariants, OD CLAUDE.md @Order accuracy, FE/FD OutboundSender Javadoc, ES processInteractions snapshot hoist (DR-pin cut per pass-8)
+- [x] 19.1-AMENDMENTS-PLAN.md — Docs-only meta-plan; B-amendments landed across pass-4..pass-8 doc commits (`dfeded0`)
 
 **Cross-cutting constraints:**
 - Existing 166-test suite stays green
