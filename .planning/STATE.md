@@ -21,15 +21,15 @@ progress:
 See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
-**Current focus:** Phase 22 closing — see `.planning/phases/22-integration-test-resource-leak-audit/22-SUMMARY.md`. Next: P19.5 rework (separate agent) → `/gsd-plan-phase 20`.
+**Current focus:** Phase 19.1 complete; P22 closed (incident response, see `phases/22-integration-test-resource-leak-audit/22-SUMMARY.md`). Next: `/gsd-discuss-phase 20`. P19.5 pass-3 findings (F1/F2/F3/F4 + D-15 codec gate) verified shipped via P19.1 on 2026-05-05 — pointer retired.
 
 ## Current Position
 
 Milestone: v3.0 (Scale Engineering / M4) — active
 Phase: 19.1 — COMPLETE
-Plan: n/a (P22 was incident response, no formal plan)
-Status: Phase 19.1 complete
-Last activity: 2026-05-04 -- Phase 19.1 marked complete
+Plan: n/a (next phase = 20, ready to discuss)
+Status: Phase 19.1 complete; P19.5 pointer retired (findings shipped via P19.1)
+Last activity: 2026-05-05 -- P19.5 findings verified shipped; P20 early artifacts archived as superseded
 
 Progress: [████████░░] 81%
 
@@ -58,12 +58,12 @@ Progress: [████████░░] 81%
 
 ## Session Continuity
 
-Last session: 2026-05-04T20:29:51.163Z
-Stopped at: context exhaustion at 77% (2026-05-03)
+Last session: 2026-05-05
+Stopped at: P19.1 complete; P20 early CONTEXT/DISCUSSION-LOG archived as superseded (fired 2026-05-02 before P19.1 work)
 Resume file: None
-Next command: P19.5 rework (separate agent — see `19-MULTI-REVIEW-pass3-VALIDATED.md`), then `/gsd-plan-phase 20`
+Next command: `/gsd-discuss-phase 20` — fresh CONTEXT to capture post-P19.1 reality (TD-19.5-A flaky golden-trace, TD-22-B disabled encode perf gate, L1 detach-timeout, strengthened test gates)
 
-## Regression Alarm — fast-track P22.1 if any reappear during P19.5/P20/P21
+## Regression Alarm — fast-track P22.1 if any reappear during P20/P21
 
 - Sender-VT "did not exit" warnings reappear in any test run
 - Leaked-thread count regresses
