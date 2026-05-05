@@ -18,11 +18,6 @@ import org.springframework.stereotype.Component;
  * tick it landed. Drains post-action buff grants enqueued by composite attack
  * cures (added in Plan 14-03). Keeps the DI graph acyclic and the tick
  * ordering explicit.
- *
- * <p>NOTE: Plan 14-03 Task 2 Step 4 UPDATES the onTick body to pass
- * {@code event.tickNumber()} to
- * {@link EnvironmentEngine#drainPostActionGrants(long)} (cycle-6 HIGH #5a).
- * Plan 01 ships the no-arg version.
  */
 @Component
 public class EnvPostActionReconciler {

@@ -62,5 +62,12 @@ public record Event(char code, Optional<Coord> coord, OptionalInt magnitude) {
         if (magnitude.isPresent() && (magnitude.getAsInt() < 0 || magnitude.getAsInt() > 63)) {
             throw new IllegalArgumentException("magnitude out of range: " + magnitude.getAsInt());
         }
+        boolean codeWantsMagnitude = MAG_CODES.indexOf(code) >= 0;
+        if (codeWantsMagnitude != magnitude.isPresent()) {
+            throw new IllegalArgumentException(
+                "Event code '" + code + "' magnitude shape mismatch: "
+                + "code-requires-magnitude=" + codeWantsMagnitude
+                + ", magnitude-present=" + magnitude.isPresent());
+        }
     }
 }

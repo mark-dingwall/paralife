@@ -21,10 +21,6 @@ import static org.mockito.Mockito.mock;
  *   <li>onTick invokes {@link EnvironmentEngine#processEnvDeaths()} first, then
  *       {@link EnvironmentEngine#drainPostActionGrants()}.</li>
  * </ol>
- *
- * <p>Plan 14-03 Task 2 Step 5 UPDATES this test to verify
- * {@code drainPostActionGrants(anyLong())} once the signature changes.
- * Plan 01 ships the no-arg verify (cycle-6 HIGH #5b).
  */
 class EnvPostActionReconcilerTest {
 

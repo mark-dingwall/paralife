@@ -340,7 +340,7 @@ public class SimulationEngine {
     }
 
     @EventListener
-    @Order(10) // Before TickBroadcaster (default order = Integer.MAX_VALUE)
+    @Order(10) // Before TickBroadcaster (@Order 50)
     public void onTick(TickEvent event) {
         if (!config.enabled()) {
             return;
@@ -1135,26 +1135,23 @@ public class SimulationEngine {
         var sortedComposites = new ArrayList<>(compositeRegistry.getAll());
         sortedComposites.sort(Comparator.comparing(CompositeRegistry.CompositeState::getCompositeId));
 
+        // Phase 3c panic-zone first — may dissolve composites (which removes them
+        // from previousPoolEnergy at SimulationEngine.java:1393).
+        for (var composite : sortedComposites) {
+            if (processedComposites.contains(composite.getCompositeId())) continue;
+            checkPanicZone(composite, processedComposites);
+        }
+
+        // Build currentPoolEnergies ONLY from survivors so dissolved composites
+        // don't get re-added to previousPoolEnergy via putAll.
         Map<String, Integer> currentPoolEnergies = new HashMap<>();
         for (var composite : sortedComposites) {
             if (processedComposites.contains(composite.getCompositeId())) continue;
             currentPoolEnergies.put(composite.getCompositeId(), composite.getSharedPoolEnergy());
         }
 
-        for (var composite : sortedComposites) {
-            if (processedComposites.contains(composite.getCompositeId())) continue;
-            checkPanicZone(composite, processedComposites);
-        }
-
-        // Update previous pool energy tracking for next tick
         previousPoolEnergy.clear();
         previousPoolEnergy.putAll(currentPoolEnergies);
-        // Also track composites that weren't processed (survived this tick)
-        for (var composite : sortedComposites) {
-            if (!previousPoolEnergy.containsKey(composite.getCompositeId())) {
-                previousPoolEnergy.put(composite.getCompositeId(), composite.getSharedPoolEnergy());
-            }
-        }
 
         return deaths;
     }
