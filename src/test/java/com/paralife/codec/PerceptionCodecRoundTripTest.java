@@ -6,7 +6,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -85,7 +84,9 @@ class PerceptionCodecRoundTripTest {
      */
     private static String buildMinimalEventFrame(char code) {
         // D3-M4: B is no-magnitude (confirmed by Phase 19.1 D-01 fix to eventHasMagnitude).
-        boolean needsMagnitude = Set.of('E', 'A', 'H', 'T', 'M', 'R', 'L').contains(code);
+        // Phase 19.1 follow-up — driven from Event.MAG_CODES so adding a MAG code there
+        // automatically routes the round-trip through the magnitude-frame branch.
+        boolean needsMagnitude = Event.MAG_CODES.indexOf(code) >= 0;
         if (needsMagnitude) {
             // Magnitude path: pinned from V8 = "T|004|0D2F|18/50|v6H3"
             // Substitute code char at position of 'H'; coord=6, magnitude=3 constant.

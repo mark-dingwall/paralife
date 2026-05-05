@@ -391,7 +391,7 @@ public class ActionResolver {
     }
 
     @EventListener
-    @Order(20) // After SimulationEngine(10), before PerceptionBroadcaster(50)
+    @Order(20) // After SimulationEngine(10), before TickBroadcaster(50)
     public void onTick(TickEvent event) {
         this.currentTick = event.tickNumber();
         // Phase 19.5 M-A: drain via iterator + remove(key, value). Concurrent

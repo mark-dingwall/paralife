@@ -8,7 +8,7 @@ import com.paralife.world.Entity.Particle;
 /**
  * Shared helper for extracting an entity's id regardless of subtype.
  * Consolidates the helper previously duplicated in {@code EnvironmentEngine}
- * and {@code PerceptionBroadcaster} (cycle-3 HIGH).
+ * and {@code TickBroadcaster} (cycle-3 HIGH).
  *
  * <p>Returns {@code null} for {@link Entity.Rock} and {@link Entity.Nutrient}
  * since those passive entities are never tracked in buff / infection

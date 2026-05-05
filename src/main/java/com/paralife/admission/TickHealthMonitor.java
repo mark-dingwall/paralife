@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
  * Rolling-window hysteresis gate (Phase 17 D-14, D-15).
  *
  * <p>Samples {@link TickEngine#getLastTickWorkMs()} once per tick at {@code @Order(Integer.MAX_VALUE)}
- * (after all other listeners including {@code TickBroadcaster @Order(100)}) into a ring buffer of
+ * (after all other listeners including {@code TickBroadcaster @Order(50)}) into a ring buffer of
  * size {@code windowTicks}. Computes the rolling mean. Opens the gate when mean &gt;
  * {@code highWaterPct} of {@link TickConfig#intervalMs}; clears when mean &lt;
  * {@code lowWaterPct}. Hysteresis (gap between watermarks) prevents flapping.

@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Registry for composite organism shared state.
- * Thread-safe for concurrent reads (WebSocket, PerceptionBroadcaster).
+ * Thread-safe for concurrent reads (WebSocket, TickBroadcaster).
  * Mutations happen in the single-threaded tick pipeline.
  *
  * <p>Tracks:
@@ -36,7 +36,7 @@ public class CompositeRegistry {
     /**
      * Mutable composite state. Tick pipeline is single-threaded for mutations;
      * CopyOnWriteArrayList and AtomicInteger provide safe concurrent reads
-     * (e.g., from PerceptionBroadcaster on WebSocket threads).
+     * (e.g., from TickBroadcaster on WebSocket threads).
      */
     public static class CompositeState {
 

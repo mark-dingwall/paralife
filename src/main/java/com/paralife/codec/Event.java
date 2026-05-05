@@ -33,12 +33,26 @@ public record Event(char code, Optional<Coord> coord, OptionalInt magnitude) {
      */
     public static final String ALL_CODES = "EAHTMRLNSDB";
 
+    /**
+     * Phase 19.1 follow-up — codes that carry a magnitude byte per SCHEMA §8.4.
+     * Subset of {@link #ALL_CODES}. Adding a new MAG-bearing code: append here
+     * AND to ALL_CODES; the round-trip test will then exercise the magnitude
+     * encode/decode path automatically.
+     */
+    public static final String MAG_CODES = "EAHTMRL";
+
     private static final Set<Character> CODE_SET;
 
     static {
         Set<Character> s = new HashSet<>();
         for (char c : ALL_CODES.toCharArray()) s.add(c);
         CODE_SET = Collections.unmodifiableSet(s);
+        // Invariant: every MAG_CODES char must be in ALL_CODES. Fails fast at class load.
+        for (char c : MAG_CODES.toCharArray()) {
+            if (!CODE_SET.contains(c)) {
+                throw new AssertionError("MAG_CODES char '" + c + "' not present in ALL_CODES");
+            }
+        }
     }
 
     public Event {

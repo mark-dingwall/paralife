@@ -305,7 +305,7 @@ class GoldenTraceEquivalenceTest {
 
         // Step 3: drive ticks. TickEvent dispatch exercises the full @Order chain
         // (SimulationEngine @10 → EnvironmentEngine @14 → ActionResolver @20 →
-        //  EnvPostActionReconciler @25 → PerceptionBroadcaster @50 → TickBroadcaster @100).
+        //  EnvPostActionReconciler @25 → TickBroadcaster @50).
         for (int t = 0; t < TICK_COUNT; t++) {
             applicationEventPublisher.publishEvent(new TickEvent(t));
             awaitAllSessionQueuesDrained();

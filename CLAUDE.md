@@ -119,10 +119,9 @@ invokes `OutboundSender.detachSession(WebSocketSession, CloseStatus.SERVICE_REST
 close-aware overload with caller-supplied status), not the `String` overload. The transport-close
 fires first, which causes any blocked Jetty write inside the drain VT's `synchronized(session)`
 block to throw `IOException`, allowing the VT to exit cleanly. The OOB 408 frame that follows is
-best-effort: `WorldWebSocketHandler.sendOutOfBand` carries an `isOpen()` guard at line 923 that
-causes the call to return instantly once the transport has been closed (i.e., the OOB call is not
-just exception-swallowed — it is structurally short-circuited the moment `isOpen()` returns
-false). No second `session.close(...)` is issued; the close-aware detach already carried
+best-effort: `WorldWebSocketHandler.sendOutOfBand` carries an `isOpen()` guard at line 965;
+the close itself is the reconnect signal — OOB is not load-bearing. No second
+`session.close(...)` is issued; the close-aware detach already carried
 `SERVICE_RESTARTED` to the wire. The close itself is the reconnect signal — clients observing it
 issue an `r|<species>|<resumeToken>` against the grace window. This trade-off is intentional: it
 eliminates the tick-thread block that the previous `String`-overload path suffered when a slow

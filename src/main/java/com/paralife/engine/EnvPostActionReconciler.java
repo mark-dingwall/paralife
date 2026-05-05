@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
  * for composite attack-path env side-effects.
  *
  * <p>Runs between {@code ActionResolver(@Order 20)} and
- * {@code PerceptionBroadcaster(@Order 50)}.
+ * {@code TickBroadcaster(@Order 50)}.
  *
  * <p>Re-invokes {@link EnvironmentEngine#processEnvDeaths} so lethal splash
  * damage from composite attacks (added in Plan 14-02) finalises in the same

@@ -74,9 +74,11 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
  * <p><b>Idempotent {@link #markStalled}:</b> guarded by {@link #ATTR_STALL_TICK} presence;
  * the overflow callback fires at most once per attach lifecycle (Plan 06 fire-once guard).
  *
- * <p><b>Out-of-band 408 delivery:</b> {@link #markStalled} detaches the OutboundSender VT
- * first (joins for up to 100ms), then sends the error frame directly via
- * {@code synchronized(session)} — guaranteed delivery even when the queue is saturated.
+ * <p><b>Close-then-best-effort-OOB (Phase 19.1 D-07):</b> {@link #markStalled} invokes the
+ * close-aware {@link OutboundSender#detachSession(WebSocketSession, CloseStatus)} overload with
+ * {@code SERVICE_RESTARTED}; the wire-level close is the reconnect signal. The 408 OOB frame
+ * that follows is best-effort — short-circuited by the {@code isOpen()} guard in
+ * {@link #sendOutOfBand} once the transport has been closed.
  */
 @Component
 public class WorldWebSocketHandler extends TextWebSocketHandler implements EntityLifecycleListener {
@@ -696,13 +698,16 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
      *   <li>Sets ATTR_STALL_TICK (idempotency gate).</li>
      *   <li>Snapshots respawn count for restore-on-rebind (claude MEDIUM).</li>
      *   <li>Converts the ACTIVE resume token to STALLED in the registry.</li>
-     *   <li>Detaches OutboundSender VT (joins for up to 100ms — Plan 06 detach contract).</li>
-     *   <li>Sends E|408|reconnect-required OUT-OF-BAND (direct sendMessage, post-detach).</li>
-     *   <li>Closes the WS with SERVICE_RESTARTED to force client reconnect flow.</li>
+     *   <li>Detaches OutboundSender VT via the close-aware overload
+     *       ({@code detachSession(session, SERVICE_RESTARTED)}) — the wire-level close fires
+     *       first, unblocking any in-flight Jetty write so the drain VT exits cleanly. The
+     *       close itself is the reconnect signal (Phase 19.1 D-07).</li>
+     *   <li>Best-effort E|408|reconnect-required OOB via {@link #sendOutOfBand}; short-circuited
+     *       by the {@code isOpen()} guard once the transport has been closed.</li>
      * </ol>
      *
-     * <p>Steps 4–5 ordering is critical: detach first so the sender VT has stopped writing,
-     * then the inbound thread can safely call sendMessage directly.
+     * <p>No second {@code session.close(...)} is issued — the close-aware detach already
+     * carried {@code SERVICE_RESTARTED} to the wire.
      */
     public void markStalled(WebSocketSession session, long stallTick) {
         if (session == null) return;
@@ -752,8 +757,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         }
 
         // OOB 408 is best-effort — the session is already closed by detachSession.
-        // sendOutOfBand carries an isOpen() guard at line 923 that causes the call
-        // to return instantly once the transport has been closed (D3-M1).
+        // sendOutOfBand carries an isOpen() guard at line 965; the close itself is the
+        // reconnect signal — OOB is not load-bearing (D3-M1).
         sendOutOfBand(session, new Frame.ErrorFrame(408, Optional.of(RejectionToken.RECONNECT_REQUIRED)));
         // The redundant session.close(SERVICE_RESTARTED) previously here is REMOVED:
         // detachSession(session, SERVICE_RESTARTED) already closed the transport with
@@ -959,7 +964,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
 
     /**
      * Direct synchronized send — used ONLY when bypassing the queue (markStalled / stalled-inbound 408).
-     * Safe to call AFTER outboundSender.detachSession completes its 100ms join.
+     * Best-effort: the {@code isOpen()} guard short-circuits once the transport has been closed
+     * (e.g., by the close-aware {@code detachSession(session, status)} overload).
      */
     private void sendOutOfBand(WebSocketSession session, Frame frame) {
         if (session == null || !session.isOpen()) return;

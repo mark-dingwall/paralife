@@ -33,8 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>Loads the FULL production pipeline via {@code @SpringBootTest} —
  *       SimulationEngine @Order(10), EnvironmentEngine @Order(14),
  *       CompositeEnergyDistributor @Order(15), ActionResolver @Order(20),
- *       EnvPostActionReconciler @Order(25), PerceptionBroadcaster @Order(50),
- *       TickBroadcaster @Order(100).</li>
+ *       EnvPostActionReconciler @Order(25), TickBroadcaster @Order(50).</li>
  *   <li>Seeds a realistic starting population of ~30 Particles + 5 BondedPairs.</li>
  *   <li>Drives 300 ticks via {@link ApplicationEventPublisher#publishEvent} —
  *       no {@code Thread.sleep}.</li>

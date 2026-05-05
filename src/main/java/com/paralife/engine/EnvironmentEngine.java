@@ -194,7 +194,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
      * Phase 19.5 M1: mirror the {@link #cellStatusCache} volatile-snapshot pattern.
      * Today's only reader (TickBroadcaster.getEntityStatus at @Order(50)) runs on
      * the same tick thread as the @Order(14) writer — safe via happens-before.
-     * Phase 20.1 parallel PerceptionBroadcaster (CONTEXT D-12) is the activation
+     * Phase 20.1 parallel TickBroadcaster (CONTEXT D-12) is the activation
      * path for concurrent WS-thread reads. Pre-emptively closing the footgun:
      * staging map for in-tick writes; volatile snapshot published at the end of
      * {@link #buildStatusCaches()} via single Map.copyOf swap.
@@ -358,7 +358,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     public void onTick(TickEvent event) {
         try {
             // Always rebuild caches and expire buffs, even when config.enabled() is false,
-            // so PerceptionBroadcaster reads a consistent empty surface (Pitfall 7).
+            // so TickBroadcaster reads a consistent empty surface (Pitfall 7).
             // REVIEWS CONSENSUS-H4 / Phase 19.5 M1: staging maps reset here; volatile
             // snapshots published at end of buildStatusCaches().
             cellStatusStaging.clear();
@@ -941,7 +941,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
 
     /**
      * Populate {@link #cellStatusCache} and {@link #entityStatusCache} for
-     * PerceptionBroadcaster (Plan 05).
+     * TickBroadcaster (Plan 05).
      */
     void buildStatusCaches() {
         Toxin tx = config.toxin();

@@ -688,12 +688,7 @@ public final class PerceptionCodec {
     }
 
     private static boolean eventHasMagnitude(char code) {
-        // Per §8.4 table: E/A/H/T/M/R/L have magnitude; N/S/D do not.
-        return switch (code) {
-            case 'E', 'A', 'H', 'T', 'M', 'R', 'L' -> true;
-            case 'N', 'S', 'D', 'B' -> false;
-            default -> false;
-        };
+        return Event.MAG_CODES.indexOf(code) >= 0;
     }
 
     // ---- p block parse ----

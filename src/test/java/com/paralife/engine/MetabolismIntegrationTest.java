@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Exercises the complete metabolism system end-to-end with real bot actions
  * flowing through the full tick pipeline — SimulationEngine decay/combat,
- * ActionResolver consume/reproduce, PerceptionBroadcaster, TickBroadcaster.
+ * ActionResolver consume/reproduce, TickBroadcaster.
  *
  * <p>Runs for ~600 ticks (3 full years at 200 ticks/year) on a 64x64 grid with
  * 30 heuristic bots (10 per type). Verifies:

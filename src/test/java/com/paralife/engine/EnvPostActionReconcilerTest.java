@@ -17,7 +17,7 @@ import static org.mockito.Mockito.mock;
  * <p>Asserts:
  * <ol>
  *   <li>@Order(25) present on the onTick listener — strictly between
- *       ActionResolver(@Order 20) and PerceptionBroadcaster(@Order 50).</li>
+ *       ActionResolver(@Order 20) and TickBroadcaster(@Order 50).</li>
  *   <li>onTick invokes {@link EnvironmentEngine#processEnvDeaths()} first, then
  *       {@link EnvironmentEngine#drainPostActionGrants()}.</li>
  * </ol>
@@ -29,12 +29,12 @@ import static org.mockito.Mockito.mock;
 class EnvPostActionReconcilerTest {
 
     @Test
-    void tickOrderIs25BetweenActionResolverAndPerceptionBroadcaster() throws Exception {
+    void tickOrderIs25BetweenActionResolverAndTickBroadcaster() throws Exception {
         Method onTick = EnvPostActionReconciler.class.getMethod("onTick", TickEvent.class);
         Order order = onTick.getAnnotation(Order.class);
         assertThat(order).as("@Order present on onTick").isNotNull();
         assertThat(order.value())
-                .as("@Order(25) — strictly between ActionResolver(@Order 20) and PerceptionBroadcaster(@Order 50)")
+                .as("@Order(25) — strictly between ActionResolver(@Order 20) and TickBroadcaster(@Order 50)")
                 .isEqualTo(25);
         assertThat(EnvPostActionReconciler.TICK_ORDER).isEqualTo(25);
     }

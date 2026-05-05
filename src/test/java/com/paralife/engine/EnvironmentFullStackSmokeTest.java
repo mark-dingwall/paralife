@@ -196,7 +196,7 @@ class EnvironmentFullStackSmokeTest {
                 Math.floorMod(botPos.y(), h));
         environmentEngine.stampToxinIntensityForTest(toxicCell, 255);
 
-        // Drive ticks so PerceptionBroadcaster emits a new T frame with the
+        // Drive ticks so TickBroadcaster emits a new T frame with the
         // rebuilt cellStatus cache. One tick is enough — but drive a handful in
         // case WebSocket delivery races with the tick loop.
         boolean nonZeroStatusSeen = false;

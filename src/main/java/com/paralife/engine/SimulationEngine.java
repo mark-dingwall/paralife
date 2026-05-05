@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -1126,24 +1127,21 @@ public class SimulationEngine {
             }
         }
 
-        // Phase 3c: Panic zone check for all composites (D-31)
-        // Snapshot current pool energies for decrease detection.
-        //
-        // L1 (Phase 19 review, deferred to Phase 21):
-        // compositeRegistry.getAll() iteration order is non-deterministic
-        // (ConcurrentHashMap.values()). Inert today: GoldenTrace 200-tick scenario
-        // never reaches panic-zone shatter (energy never < 12% critical threshold;
-        // simRng.nextDouble() not consumed for shatter). If panic-zone shatter is
-        // ever exercised in the digest gate, switch to LinkedHashMap-backed
-        // registry or sort by insertion-tick before iterating to restore
-        // determinism.
+        // Phase 3c: Panic zone check for all composites (D-31).
+        // Phase 19.1 follow-up — stable iteration order before RNG consumption.
+        // compositeRegistry.getAll() is backed by ConcurrentHashMap; sort once by
+        // compositeId so simRng.nextDouble() in checkPanicZone is consumed in a
+        // deterministic order. Mirror of CompositeEnergyDistributor.onTick.
+        var sortedComposites = new ArrayList<>(compositeRegistry.getAll());
+        sortedComposites.sort(Comparator.comparing(CompositeRegistry.CompositeState::getCompositeId));
+
         Map<String, Integer> currentPoolEnergies = new HashMap<>();
-        for (var composite : compositeRegistry.getAll()) {
+        for (var composite : sortedComposites) {
             if (processedComposites.contains(composite.getCompositeId())) continue;
             currentPoolEnergies.put(composite.getCompositeId(), composite.getSharedPoolEnergy());
         }
 
-        for (var composite : new ArrayList<>(compositeRegistry.getAll())) {
+        for (var composite : sortedComposites) {
             if (processedComposites.contains(composite.getCompositeId())) continue;
             checkPanicZone(composite, processedComposites);
         }
@@ -1152,7 +1150,7 @@ public class SimulationEngine {
         previousPoolEnergy.clear();
         previousPoolEnergy.putAll(currentPoolEnergies);
         // Also track composites that weren't processed (survived this tick)
-        for (var composite : compositeRegistry.getAll()) {
+        for (var composite : sortedComposites) {
             if (!previousPoolEnergy.containsKey(composite.getCompositeId())) {
                 previousPoolEnergy.put(composite.getCompositeId(), composite.getSharedPoolEnergy());
             }
