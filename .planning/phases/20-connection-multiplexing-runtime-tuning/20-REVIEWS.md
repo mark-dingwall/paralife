@@ -1,359 +1,292 @@
 ---
 phase: 20
+pass: 2 (re-review after replan against 20-REVIEW-DISPOSITIONS.md)
 reviewers: [gemini, claude, codex, opencode]
-reviewed_at: 2026-05-09T13:12:15Z
-plans_reviewed:
-  - 20-01-PLAN.md
-  - 20-01b-PLAN.md
-  - 20-02-PLAN.md
-  - 20-03-PLAN.md
-  - 20-04-PLAN.md
-  - 20-05-PLAN.md
-  - 20-06-PLAN.md
-models:
-  gemini: gemini-3.1-pro-preview
-  claude: opus
-  codex: gpt-5.5 (reasoning_effort=high)
-  opencode: openrouter/deepseek/deepseek-v4-pro
+models: {gemini: gemini-3-pro-preview, claude: opus, codex: gpt-5.5 (high effort), opencode: openrouter/deepseek/deepseek-v4-pro}
+reviewed_at: 2026-05-09T14:01:52Z
+plans_reviewed: [20-01-PLAN.md, 20-01b-PLAN.md, 20-02-PLAN.md, 20-03-PLAN.md, 20-04-PLAN.md, 20-05-PLAN.md, 20-06-PLAN.md]
+supersedes: 20-REVIEWS.md pass-1 (2026-05-09 morning); pass-1 disposed in 20-REVIEW-DISPOSITIONS.md
 ---
 
-# Cross-AI Plan Review — Phase 20
+# Cross-AI Plan Review — Phase 20 (Pass 2)
 
-## Gemini Review
-
-# Phase 20 Plan Review
-
-## Summary
-The Phase 20 plans present a highly pragmatic, evidence-driven approach to scale engineering. By rejecting the architectural complexity of genuine connection multiplexing in favor of transport and JVM tuning (adhering strictly to the `WS:entity 1:1` principle), the plans minimize regression risk while directly satisfying SCALE-08 and SCALE-09. The breakdown across 6 distinct plans is exceptionally well-ordered, separating toolchain bootstrapping, baseline measurement, config wiring, and evidence-gated codec optimizations into clear, testable chunks.
-
-## Strengths
-- **Evidence-Driven Tuning**: Strictly gating codec and configuration changes behind JFR and async-profiler evidence prevents guesswork and scope creep.
-- **Architectural Integrity**: Explicitly documenting and protecting the `WS:entity 1:1` design constraint in `CLAUDE.md`, `README.md`, and inline code ensures the system's foundational concurrency model is preserved.
-- **Flake Mitigation**: The strategy to mask the known `TD-19.5-A` golden-trace flake by running the three-gate stack in-suite (and enforcing two consecutive passes) is a smart, pragmatic workaround.
-- **Dependency Ordering**: The plan sequence (Toolchain -> Baseline -> Additive Config -> Docs -> Codec Opts -> Finalization) is perfectly pipelined, allowing the config plans (2 and 3) to execute in parallel while waiting for baseline measurements.
-- **Backward Compatibility**: The additive nature of the `@ConfigurationProperties` and the careful handling of `outbound-queue-size` (D-20) ensure existing admission logic is not disturbed.
-
-## Concerns
-- **Virtual Threads and `ThreadLocal` (Severity: MEDIUM)**: Plan 5 suggests `ThreadLocal<StringBuilder>` as a potential codec optimization. While safe at the current 1,000-connection scale, Virtual Threads are designed to scale to millions. Attaching a `ThreadLocal` to a VT permanently pins memory to that specific VT. Because `OutboundSender` VTs are long-lived (one per session), this essentially behaves like traditional thread-local pooling. While acceptable for M4, it runs counter to the VT philosophy of keeping threads lightweight and could present memory retention issues at much higher scales.
-- **Forced-Fallback Fragility (Severity: LOW)**: In Plan 5, if no codec hot paths are found, the plan mandates tightening a config knob to produce a "non-zero, baseline-improving delta" in tick work time or detach timeouts. If the system is already highly optimized, the baseline noise floor might mask any small gains, potentially causing the execution agent to loop or escalate unnecessarily.
-- **`@SpringBootTest` Record Binding (Severity: LOW)**: As anticipated in Plan 2, `@SpringBootTest(classes = JettyRuntimeConfig.class)` will likely fail because Spring Boot requires a `@Configuration` class to scan records. The plan provides a fallback, but the execution agent will need to actively use `AdmissionConfigTest.java` as a template to get the wiring right on the first try.
-
-## Suggestions
-- **Codec Optimization Alternatives**: If `StringBuilder` allocation is a hot path, first rely on Java 21's Escape Analysis and Generational ZGC (which are highly optimized for short-lived allocations). If pooling is truly needed, consider a bounded `ConcurrentLinkedQueue` or `ArrayBlockingQueue` of reusable buffers rather than `ThreadLocal`, to maintain the lightweight nature of Virtual Threads.
-- **Fallback Rule Flexibility**: Amend the Plan 5 forced-fallback rule: if tweaking Jetty/App knobs fails to produce a statistically significant delta above the noise floor, allow the agent to document the noise floor and proceed as a verified no-op, rather than treating it as a hard failure.
-- **Test Class Template Strictness**: In Plans 2 and 3, explicitly instruct the agent to copy the inner `@Configuration` / `TestApp` pattern directly from `AdmissionConfigTest.java` to prevent the expected `@SpringBootTest` class loading failures on records.
-
-## Risk Assessment
-**LOW**. The phase is predominantly additive, config-driven, and meticulously gated by existing test suites. The commitment to empirical measurement (JFR) before optimization almost entirely mitigates the risk of introducing regressions or performance bottlenecks. The careful handling of the `WS:entity 1:1` invariant further reduces architectural risk.
+Re-review after planner applied 20-REVIEW-DISPOSITIONS.md fixes for pass-1 concerns #1–#6.
+Reviewers were instructed to skip items already disposed and focus on (a) NEW gaps, (b) DISAGREEMENTS with a specific disposition, (c) FOLLOW-ONs of the fixes.
 
 ---
 
-## Claude Review
+## Gemini Review (gemini-3-pro-preview)
 
-# Phase 20 Plan Review
-
-## Summary
-
-The Phase 20 plan suite is unusually thorough and well-cross-referenced — 7 plans (counting the 1/1b split) with explicit dependency ordering, strong CONTEXT/RESEARCH/PATTERNS upstream, and consistent application of the project's @ConfigurationProperties + spec-doc-per-phase patterns. The hardest design tension is in Plan 5's "SCALE-08 forced-fallback" rule, which is intended to keep the phase from shipping a zero-delta no-op but creates a measurable evidence-vs-shippable-change conflict that should be tightened. Most other concerns are minor: JFR file-size discipline that may force lossy filtering, an untested legacy-key fallback in Plan 2, and a couple of acceptance-criterion regex weaknesses. The three-gate stack + D-12 enforcement + T-20-V5 bounds checks are solid against codec regression. Overall: ready to execute with three targeted clarifications.
-
-## Strengths
-
-- **Dependency ordering is unambiguous.** 20-01 → 20-01b gates everything; 20-02/20-03 parallel; 20-04/20-05 sequential after 20-01b; 20-06 closes. The split of toolchain bring-up (1) from binary capture (1b) is exactly right — keeps the autonomous portion separate from the human-required ritual.
-- **A1–A8 verification gate in Plan 1b.** Routing RESEARCH assumptions into a structured meta.json + summary read by Plan 2 (drop-field-if-A1-fails) and Plan 5 (codec-triage input) closes a common failure mode.
-- **D-12 disabled-tests enforcement is per-file, not count-based** (Plan 5 acceptance) — survives test renames better than `grep -c '@Disabled'`.
-- **D-02 three-place codification with grep-verifiable acceptance** (Plan 6 Task 6.4: 4-file match for `WS:entity 1:1`). Hard to "fix" the architectural choice silently.
-- **Threat model is properly integrated.** T-20-V5 (codec validation bounds), T-20-DOS-1 (frame size cap), and T-20-DOS-2 (pinning) carry through to specific acceptance criteria, not just decoration.
-- **Plan 2 keeps legacy `paralife.websocket.idle-timeout-ms` alive** for one phase — correct migration discipline.
-- **AppRuntimeConfig.OutboundConfig is silent on outbound-queue-size** (D-20). The Test 7/8 binding round-trip + admission invariant proof in Plan 3 is a good pattern.
-
-## Concerns
-
-### HIGH
-
-- **Plan 5 forced-fallback rule undermines D-10's "JFR-driven only" stance.** If the c22e487 baseline shows no codec hot path AND no pinning storm, Plan 5 mandates a `paralife.runtime.*` knob tightening to manufacture a non-zero delta on `tick.health.work-time-ms` or `outbound.detach.timeout`. This is exactly the guesswork D-10/D-13 forbid. The escape hatch (`escalate-no-safe-tightening`) is too easy to skip because the executor is incentivised to ship. Either: (a) reframe SCALE-08 evidence to allow "negative result with citations" as a valid outcome (preferred — a documented baseline showing the system is already well-tuned at 1000 bots IS measured evidence), or (b) require the fallback knob change to cite a specific baseline JFR signal (not just "plausibly-safe tightening") with the same triage rigor as a codec opt. As written, the rule risks shipping a knob change because the rule says we must, not because evidence supports it.
-
-### MEDIUM
-
-- **JFR file-size cap (≤5 MB/file, ≤20 MB total) is tight.** A 180s × 1000-bot run with `settings=profile` typically produces 50–200 MB raw. Plan 1b says "use `jfr filter` if needed," but aggressive filtering can drop the very allocation/pinning events Plan 5 needs to triage codec hot paths. Recommend either (a) relaxing to ≤10 MB/file, ≤50 MB total, or (b) committing a specific `.jfc` config + `jfr filter` command that preserves `jdk.ObjectAllocationInNewTLAB`, `jdk.GCPhasePause`, `jdk.VirtualThreadPinned`, and `jdk.JavaMonitorEnter` events at full fidelity.
-- **Plan 2 legacy-key fallback is untested.** `JettyDeflateCustomizer.jettyRequestUpgradeStrategy` has non-trivial dual-key resolution logic (line: "if `legacyIdleTimeoutMs != 60000L && runtimeConfig.idleTimeoutMs() == 60000L`"). The `JettyRuntimeConfigTest` covers the record but not the fallback. A regression here silently breaks operators who set the legacy key. Add a Spring slice test that exercises both yaml-set combinations.
-- **Plan 5 pinning case interacts ambiguously with the forced-fallback rule.** Task 5.0's decision tree lists `pinning-dominates` and `forced-fallback-knob` as parallel branches, but they overlap: if the JFR shows pinning is the binding constraint, the right answer is `pinning-dominates` (scope-expansion checkpoint), not a forced-fallback knob tightening on something unrelated. Make the precedence explicit: pinning-dominates supersedes forced-fallback.
-- **No smoke test asserts Plan 2 defaults match Jetty 12.0.18 defaults at runtime.** `JettyRuntimeConfigTest.defaultsMatchJetty12Defaults` checks the record's defaults but not that those values are what Jetty actually applies post-upgrade. A typo in `@DefaultValue("4096")` slips through. Optional: add an integration test that opens a WS connection and inspects the negotiated session policy.
-
-### LOW
-
-- **Plan 4 §3 GC-choice rationale uses `Pending — JFR-driven` text that Plan 6 must replace.** Easy to miss. Plan 6 Task 6.1 has `grep -ciE "^\\s*_pending_"` but won't catch the un-italicised `Pending — JFR-driven`. Strengthen the regex or use a sentinel like `_PENDING_PLAN_5_` that's hard to leave in by accident.
-- **`OutboundConfig.queueWatermarkPct` and `EncodeConfig.encodeBatchHint` bind but no consumer reads them in Phase 20.** Dead-config risk. Defensible (live-tunable seam for M5 admin UI), but call it out in `20-RUNTIME.md` §2.2 so a future reader doesn't assume they're wired.
-- **Plan 1b's git checkout dance** (`git checkout c22e487` → capture → `git checkout -`) assumes a clean worktree. Plan 1's commits (bootstrap doc + profiles README) must already be committed before 1b runs, otherwise checkout fails. Plan 1b's resume-signal should explicitly verify `git status` clean before the checkout.
-- **Plan 5 `synchronized(session)` count check** has no recorded baseline value, just "unchanged from c22e487 baseline." If someone added a `synchronized(session)` block in Plan 5's codec opt by accident, the comparison fails open. Pin it: "exactly 4 occurrences in OutboundSender.java" (or whatever the actual count is at c22e487).
-- **Plan 4 manual verification asks for three full recipe runs (100/500/1000 bots).** That's ~10–15 minutes of wall time per recipe at full duration. Acceptable smoke shape: short-duration `--duration 30` for the 100/500 verification, full duration only for 1000.
-- **Plan 5 Task 5.1 "two consecutive in-suite greens" doesn't actually address TD-19.5-A.** TD-19.5-A only flakes in *isolated* runs; in-suite is supposed to be reliable. So 2× in-suite is belt-and-braces but doesn't guard against a *new* flake source. Document what 2× actually catches (state-pollution flakes), not TD-19.5-A.
-
-## Suggestions
-
-1. **Reframe SCALE-08 evidence acceptance.** Add to CONTEXT or 20-RUNTIME.md §1: "Measured evidence that the baseline is already at the relevant performance floor at the 1000-bot tier IS sufficient SCALE-08 evidence — a documented null-result is a measurement, not a no-op." This lets Plan 5 ship the negative finding without forced-fallback theatre.
-2. **If you keep the forced-fallback rule, require it to cite a specific baseline JFR signal** (not just "plausibly-safe tightening"). Wire the rule to the same triage rigor as codec opts.
-3. **Relax profile size discipline OR pin a `.jfc` filter.** ≤10 MB/file, ≤50 MB total is more realistic for 1000-bot 180s runs at `settings=profile`. Alternatively, commit `tools/p20-profile.jfc` that selects exactly the events Plan 5 needs.
-4. **Add a Plan 2 test for the legacy `paralife.websocket.idle-timeout-ms` fallback.** Spring slice test exercising (legacy-only set), (new-only set), (both set) — assert effectiveIdleMs in each case.
-5. **Make pinning-dominates precedence explicit in Plan 5 Task 5.0.** Decision tree should list pinning first; only if pinning ≤ threshold does forced-fallback enter consideration.
-6. **Add an "if-then" matrix in 20-04 §3** — for each tier, the recipe's GC choice depends on baseline JFR finding X; document the decision predicate so the executor can replace `Pending — JFR-driven` mechanically rather than narratively.
-7. **Plan 6 Task 6.5: extend the Per-Task Verification Map row count check.** 14 is a soft lower bound — pin actual expected count once all PLAN.md files are written, otherwise Task 6.5 silently passes with stub-row leakage.
-
-## Risk Assessment
-
-**MEDIUM**.
-
-Justification: The plans are technically sound, well-ordered, and exhaustively cross-referenced — code-correctness risk is LOW (the @ConfigurationProperties wiring is a direct mirror of `AdmissionConfig`; defaults match Jetty defaults; three-gate stack guards equivalence). The disabled-test enforcement (D-12) and codec validation bound checks (T-20-V5) are robust.
-
-The MEDIUM rating is driven primarily by the Plan 5 forced-fallback rule, which encodes a perverse incentive in the very phase whose D-10/D-13 decisions explicitly forbid evidence-free recommendations. If the c22e487 baseline shows the system is already well-tuned (a real possibility — Phase 19.1 closed many performance items), the executor faces a tension between shipping evidence-free changes and triggering a checkpoint that may be perceived as "failing" the phase. Reframing SCALE-08 to accept a null-result + the JVM/Jetty/codec tuning *surface* as the deliverable resolves this cleanly.
-
-The JFR file-size discipline is the next-most-likely operational friction point during execution. Everything else is cosmetic or readily fixable in flight.
-
----
-
-## Codex Review
-
-## Summary
-
-The phase plan is unusually thorough and mostly coherent: it protects the locked WS:entity 1:1 architecture, makes SCALE-09 evidence-driven, and gives operators a concrete tuning surface. The main risks are dependency mismatches around Plan 20-01/20-01b, some Spring/Jetty binding assumptions that may not compile cleanly, and a forced “non-zero improvement” requirement in Plan 20-05 that could incentivize unsafe tuning if the measured baseline is already good.
-
-## Strengths
-
-- Strong traceability from SCALE-08/SCALE-09 to plans, artifacts, validation, and docs.
-- Good decision discipline around “equivalent overhead reduction” instead of real multiplexing.
-- Baseline SHA anchoring with `c22e487` is a solid reproducibility move.
-- The three-gate equivalence stack is correctly reused for compact protocol safety.
-- D-12 disabled-test constraints are explicit and repeatedly protected.
-- Plan 20-03 handles D-20 well by not moving or shadowing `paralife.admission.backpressure.outbound-queue-size`.
-- Documentation deliverables are not an afterthought; `20-RUNTIME.md`, README, CLAUDE, and inline comments reinforce the architecture.
-
-## Concerns
-
-- **HIGH: Plan 20-02 depends on 20-01 but needs A1 from 20-01b.**  
-  Plan 20-02 repeatedly says to read `20-01-SUMMARY.md` for Jetty 12.0.18 setter availability, but A1 is verified in 20-01b. Either Plan 20-02 must depend on 20-01b, or A1 must move into Plan 20-01.
-
-- **HIGH: Plan 20-05’s “must show non-zero improvement” rule is risky.**  
-  If the baseline is already near floor, forcing a default tightening just to produce a measurable delta can create cargo-cult tuning. SCALE-08/SCALE-09 require measured strategy and evidence, not necessarily a guaranteed improvement on two selected gauges from every Plan 5 change. A defensible “no codec hot path; no safe tuning; no change shipped” result should be acceptable if documented.
-
-- **HIGH: JFR artifact size budget may be unrealistic.**  
-  `settings=profile` for 60-180 seconds at 1000 bots may exceed 5 MB. The plan mentions filtering, but acceptance requires raw files under 5 MB. Decide whether filtered JFRs are acceptable evidence, and preserve enough metadata to avoid losing the events needed for later review.
-
-- **MEDIUM: Jetty idle-timeout defaults are described inconsistently.**  
-  Plan 20-02 says defaults match Jetty 12.0.18 defaults, but `idleTimeoutMs=60000` is the project’s existing default, while the plan itself says Jetty default is 30000. Reword to “defaults preserve current project behavior” rather than “Jetty defaults.”
-
-- **MEDIUM: Legacy/new idle-timeout precedence is not reliably detectable.**  
-  With a primitive `@DefaultValue("60000")`, the record cannot tell whether `paralife.runtime.jetty.idle-timeout-ms=60000` was explicitly set or defaulted. The fallback logic cannot correctly implement “new key wins if both are set” in all cases. Use Spring `Binder` or a nullable wrapper if this distinction matters.
-
-- **MEDIUM: Spring config tests may be brittle.**  
-  Static inner test classes with `@SpringBootTest(classes = JettyRuntimeConfig.class)` / `AppRuntimeConfig.class` may not be discovered or may not bind as intended. Prefer `ApplicationContextRunner` with `ConfigurationPropertiesAutoConfiguration` and `withPropertyValues(...)`.
-
-- **MEDIUM: Plan 20-03 creates config knobs with no consumers.**  
-  This is acceptable if framed as binding surface only, but the plan currently calls some fields `[live-tunable]` and “application-level tuning” while no runtime behavior changes. That weakens SCALE-08 unless later plans consume the knobs or `20-RUNTIME.md` is explicit that they are future-ready only.
-
-- **MEDIUM: async-profiler install path conflicts with repo-size policy.**  
-  Research resolved “external + bootstrap docs,” but Plan 20-01 still allows in-tree `tools/async-profiler/`. Since artifacts already have a tight size budget, keep the tool external unless there is a deliberate reason to commit it.
-
-- **LOW: README replacement may be scope-creepy.**  
-  Replacing the one-line README with project overview is fine, but Plan 20’s objective is tuning. Keep it minimal and avoid accidentally becoming a broader documentation rewrite.
-
-- **LOW: “666-test suite” does not match supplied context.**  
-  The context says current count is 136 test files and stale counts were dropped. The plans should avoid repeating any “666 tests” or similar numeric claim unless verified.
-
-## Suggestions
-
-- Change Plan 20-02 dependency to `depends_on: [20-01b]`, or move A1 verification into Plan 20-01.
-- Rewrite Jetty defaults language: “defaults preserve current project behavior and Jetty’s existing frame/buffer defaults where applicable.”
-- Replace idle-timeout fallback logic with one of:
-  - keep only legacy key for idle timeout this phase and document new key as not yet owning that field, or
-  - bind with `Binder`/nullable properties so explicit-new vs default-new can be detected.
-- Use `ApplicationContextRunner` for `JettyRuntimeConfigTest` and `AppRuntimeConfigTest`.
-- Relax Plan 20-05 acceptance to: “ship an optimization only if measured improvement exists; otherwise document no safe change and preserve baseline evidence.” Do not force tuning.
-- Clarify whether committed `.jfr` files are raw, filtered, or summarized. If filtered, require `*.meta.json` to list included/excluded events.
-- Add a small compile gate immediately after Plan 20-02 because Jetty API setter/package assumptions are one of the highest compile-risk areas.
-- In Plan 20-03, label unused fields as “reserved” rather than “live-tunable” unless a consumer actually reads them.
-- Add explicit server lifecycle cleanup to human capture plans: kill server on failure, confirm port 8080 is free before each run, and avoid mixing stale JFRs from failed attempts.
-
-## Risk Assessment
-
-**Overall risk: MEDIUM.**
-
-The plan is strong on traceability, documentation, and protocol-regression safety, so the architecture is unlikely to drift accidentally. The biggest risks are execution risks: profile capture may be harder than specified, Plan 20-02 may hit Spring/Jetty binding issues, and Plan 20-05’s forced-improvement requirement could push unsafe or meaningless tuning. Fixing the dependency mismatch and softening the forced-delta rule would bring the plan close to low risk.
-
----
-
-## OpenCode Review
-
-Let me also check a few more key files to complete my analysis:
-# Cross-AI Plan Review — Phase 20
+# Phase 20 Cross-AI Plan Review
 
 ## 1. Summary
 
-Phase 20's plans define a cautious, defensible tuning phase: profile the c22e487 baseline, add two `@ConfigurationProperties` records for Jetty and application knobs, ship JVM presets as documentation, land JFR-driven codec opts (or a forced-fallback runtime knob tightening if evidence is absent), and finalise `20-RUNTIME.md` with three-place D-02 rationale codification. The 6-plan (7 with 20-01b) wave structure respects strict dependency ordering. The decision to take SCALE-08's "or equivalent" escape hatch (tune per-connection cost rather than collapse connections) is explicit, well-argued, and defended at three codification sites. The core risk is execution uncertainty in Plan 5 — its output is gated on JFR evidence that doesn't exist yet.
+This is an excellent replan that maturely and thoroughly resolves the first-pass review concerns. The decision to embrace a "documented null-result" (Concern #1 reframing) is the standout improvement—it removes the perverse incentive to ship fragile, manufactured optimizations just to satisfy a diff requirement, grounding the phase entirely in evidence. The extraction of the legacy idle-timeout fallback logic into a testable helper (Concern #4) is pragmatic and correctly avoids scope-creeping into a full Spring `Binder` migration. The plan slicing, particularly the split of toolchain bootstrap (20-01) from the baseline capture (20-01b), creates a clear, executable sequence.
 
 ## 2. Strengths
 
-- **Sound dependency ordering.** Wave 1 toolchain → Wave 2 baseline + additive records in parallel → Wave 3 presets + codec opts → Wave 4 docs. No cycles, no false parallelism.
-- **Reproducibility discipline.** D-19 SHA-anchored baselines (c22e487) with `git checkout` ritual, `.meta.json` sidecars, and explicit re-run instructions — makes "evidence over assertion" actionable.
-- **D-20 alongside-not-move is well-defended.** Plan 3 includes an explicit Test 8 (`d20AlongsideNotMove`) that verifies `AdmissionConfig.backpressure().outboundQueueSize() == 128`, and Plan 5 adds per-file `@Disabled` grep to prevent accidental re-enable.
-- **Plan 20-05's decision tree is well-structured.** Three outcomes (codec-opts → pinning-dominates → forced-fallback) each have a clear verification gate and escalation path. The B2/W5 non-zero-delta requirement prevents silent no-op shipment.
-- **Jetty extension point reuse.** `addWebSocketConfigurer` already exists at `JettyDeflateCustomizer.java:75-82`; Plan 2 chains 7 additional setters onto the same lambda — minimal surface area, zero new architectural points.
-- **Legacy key fallback is correct.** Plan 2's `effectiveIdleMs` logic correctly gives the new `paralife.runtime.jetty.idle-timeout-ms` priority when explicitly set, while still resolving the legacy `paralife.websocket.idle-timeout-ms` when the new key is at default.
-- **Three-gate stack + TD-19.5-A flake mitigation.** D-11 explicitly gates on in-suite runs only (masks the ~40% isolated flake), and Plan 5 requires two consecutive greens per opt — pragmatic given the known VT race.
+*   **Evidence-Driven Decision Tree:** Plan 5's triage protocol—evaluating VT pinning, then codec hot-paths, then knob-tightening, and finally defaulting to a null-result—is a masterclass in safe performance engineering.
+*   **Flake Mitigation:** Mandating two consecutive *in-suite* green runs for the three-gate stack in Plan 5 perfectly navigates the known `GoldenTraceEquivalenceTest` flake (TD-19.5-A) without blocking progress.
+*   **Architectural Defense:** The rigorous three-place codification of the `WS:entity 1:1` invariant ensures future contributors will understand the design intent before attempting misguided multiplexing "optimizations."
 
 ## 3. Concerns
 
-- **(HIGH) SCALE-08 evidence is structurally fragile.** Plan 5 could ship with a single knob tightening (e.g., `idle-timeout-ms` reduction) as the sole SCALE-08 deliverable. The forced-fallback rule prevents a true no-op, but a single default change may not constitute meaningful "overhead reduction at high bot counts." The requirement text's "or equivalent" clause technically permits this, but Phase 21's benchmark may reveal the tuning didn't materially move the needle. Consider adding a minimum effect-size threshold to the Plan 5 success criteria (e.g., `work-time-ms` delta ≥ baseline_p95 × 5%).
-
-- **(HIGH) `jdk.VirtualThreadPinned` is load-bearing but Plan 5's scope excludes the most impactful fix.** RESEARCH §Pitfall 2 identifies 4 `synchronized(session)` pinning sites as the highest-risk overhead at scale. If the baseline JFR shows non-trivial pinning, Plan 5's decision tree escalates to a scope-expansion checkpoint rather than applying the fix (`synchronized` → `ReentrantLock`). The `ReentrantLock` conversion is a small, well-understood refactor that could dominate all other tuning wins combined. Deferring it to a "pinning-dominates" checkpoint that may or may not be picked up introduces a real bottleneck risk.
-
-- **(MEDIUM) CLAUDE.md insertion spans GSD boundary markers.** Plan 6 Task 6.2 inserts the Runtime tuning subsection after line 142 (`<!-- GSD:architecture-end -->`) but before line 144 (`<!-- GSD:skills-start -->`). The content fits the Architecture section semantically, but GSD tools that parse section-boundary comments may need updating if they rely on strict adjacency. Low practical risk, but worth flagging.
-
-- **(MEDIUM) `idleTimeoutMs` overrides interact with keepalive silently.** Plan 2 exposes Jetty's idle timeout as a tunable knob with default 60000ms. The keepalive PING cadence is `paralife.websocket.keepalive-ticks: 30` × `tick.interval-ms: 500` = 15s. If an operator tunes `idleTimeoutMs` below 15s without also adjusting keepalive cadence, idle connections close spuriously. No cross-validation guard exists. Consider adding a compact-ctor or `@PostConstruct` validation in `JettyDeflateCustomizer` that warns when `idleTimeoutMs < 2 × keepaliveTicks × tickIntervalMs`.
-
-- **(MEDIUM) `encodeBatchHint` and `parallelEncodeThreshold` are defined but never consumed.** Plan 3 states consumer wiring is "deferred to later plans" — acceptable for reservation fields. However, their presence in `application.yml` could confuse operators who try tuning them and see no effect. Documenting them as `[reserved for Phase 19.1 — no effect in Phase 20]` in the yaml comments and `20-RUNTIME.md` §2.2 would close this gap.
-
-- **(LOW) `OutputBufferSize` knob lacks a lower-bound cross-check with typical frame sizes.** Jetty's `outputBufferSize` defaults to 4096; our typical TickFrame is ~256 bytes. Reducing it below 256 could cause Jetty to fragment or allocate internal overflow. Plan 2's compact-ctor rejects `outputBufferSize < 256` which is sufficient, but the doc doesn't explain why 256 was chosen.
-
-- **(LOW) Profile capture assumes a single `loadHarnessJar` naming pattern.** The shell commands use `build/libs/paralife-*-load-harness.jar` glob. If Phase 18's build produces multiple JARs matching that pattern (e.g., a fat jar and a slim jar), the glob may pick the wrong one. The existing `build.gradle.kts` `loadHarnessJar` task produces a single artifact, so this is currently safe.
+*   **MEDIUM — Follow-on of Concern #5: `frameSizeBudgetBytes` is a dead config.**
+    *   *Type:* FOLLOW-ON
+    *   *Detail:* The replan successfully tagged `queueWatermarkPct`, `encodeBatchHint`, and `parallelEncodeThreshold` as `[reserved]` because they lack consumers. However, it left `frameSizeBudgetBytes` tagged as `[live-tunable]`. Plan 5 strictly dictates "No public API change (`encode(Frame)`, `decode*`, `validate*` signatures unchanged)". Because `PerceptionCodec.encode(Frame)` allocates its own `StringBuilder` internally and takes no capacity argument, it is structurally impossible for the codec to consume `frameSizeBudgetBytes` from `AppRuntimeConfig` without an API change. Therefore, this config is just as dead as the others.
+*   **LOW — Weak D-20 invariant unit test.**
+    *   *Type:* NEW
+    *   *Detail:* In `AppRuntimeConfigTest`, Test 8 (`d20AlongsideNotMove_admissionBackpressureUntouched`) instantiates `AdmissionConfig.defaults()` to check that the queue size is 128. This only tests the static factory method; it does not test whether Spring actually avoided shadowing/overwriting the value during YAML binding. (Note: The `grep` in Task 3.2 mitigates this risk in practice, making it a low severity issue).
 
 ## 4. Suggestions
 
-- **Add an effect-size threshold to Plan 5's forced-fallback rule.** Instead of "any non-zero delta," require the delta to exceed `max(1ms, baseline_p95 * 0.05)` for `work-time-ms` or `max(1, baseline_count * 0.05)` for `detach.timeout`. Prevents a token change from satisfying SCALE-08.
-
-- **Move the `ReentrantLock` conversion from "scope-expansion checkpoint" to a first-class Plan 5 task.** If the baseline JFR shows `jdk.VirtualThreadPinned` count > 50/min, Plan 5 should land the conversion directly (only if three-gate stack stays green post-conversion). This is the single highest-impact code change Phase 20 could ship. The `synchronized(session)` → `ReentrantLock` conversion is well-understood, small (~20 line change across 4 sites), and carries low semantic risk since the monitor is only used for mutex, never for `wait()`/`notify()`.
-
-- **Add a keepalive-vs-idle cross-validation check in Plan 2.** In `JettyDeflateCustomizer.jettyRequestUpgradeStrategy()`, add: `if (runtimeConfig.idleTimeoutMs() < keepaliveTicks * tickIntervalMs * 2) log.warn(...)`. Optional — operator-documentation in `20-RUNTIME.md` §3 would also suffice.
-
-- **Tag `encodeBatchHint` and `parallelEncodeThreshold` as `[Phase 19.1 reservation]` in yaml comments.** Replace `[live-tunable]` with `[Phase 19.1 reservation — no-op in Phase 20]` so operators don't waste time tuning these before the consumer is wired.
-
-- **Add a `profiles/.gitattributes` entry or `.gitignore` note.** JFR binary files benefit from `*.jfr binary` in `.gitattributes` and should have max size documented so reviewers don't accidentally commit a 200MB recording.
+*   **Fix for the MEDIUM concern (Dead Config):** In Plan 20-03, update both `AppRuntimeConfig.java` and `application.yml` to tag `frameSizeBudgetBytes` as `[reserved — no effect in Phase 20] codec sizing hint; consumer wiring deferred`. This keeps the schema additive but prevents operator confusion, perfectly aligning with the disposition for Concern #5.
+*   **Fix for the LOW concern (Weak Test):** (Optional) In `AppRuntimeConfigTest`, move the D-20 assertion into `BindingRoundTripTest`. Autowire `AdmissionConfig` alongside `AppRuntimeConfig` and assert that the loaded Spring context preserved the `128` value for the admission backpressure queue.
 
 ## 5. Risk Assessment
 
-**OVERALL: MEDIUM**
+**LOW.** 
 
-The phase is well-scoped, well-ordered, and well-guarded against regression (three-gate stack + full-suite minus 4 disabled + D-20 invariant test). The architecture decisions (WS:entity 1:1, no wire mutation, no multi-entity-per-session) are locked and defended at three codification sites.
+The implementation constraints are incredibly tight, and the test gates (including the consecutive-run requirement and strict bounds checking) provide a massive safety net. The reframing to allow a documented null-result eliminates the primary risk of this phase (shipping bad code to hit arbitrary performance targets). Once the minor dead-config tag is addressed, this phase is exceptionally safe to execute.
 
-The medium risk comes from Plan 5's evidence-dependence: the phase's measurable SCALE-08 output is contingent on JFR findings that don't exist yet. The forced-fallback rule (B2/W5) prevents a true zero-delta shipment but may produce a weak result. The `ReentrantLock` conversion — the single most impactful tuning change — is gated behind a scope-expansion checkpoint rather than treated as a first-class task. If the baseline JFR shows significant pinning and Plan 5 doesn't land the Lock conversion, Phase 21's benchmark may find the per-connection overhead path is still the binding constraint, triggering a late-cycle revisit of D-01/D-03 that could have been avoided.
+---
+
+## Claude Review (opus)
+
+# Phase 20 Re-Review (Pass 2)
+
+## Summary
+
+Replan adequately addresses prior-pass concerns. D-21 (null-result acceptance) cleanly resolves Concern #1's perverse incentive. Task 2.3 (legacy idle-timeout fallback) closes Concern #4 with appropriate scope (unit test + helper extraction, not Spring `Binder` migration). Concern #6 wave-bump cascade is canonical and self-documenting. Concern #5 retag eliminates dead-config operator confusion. File-size cap relaxation (Concern #3) plus `jfr filter` deferred-fallback is pragmatic. Phase 999.6 stub for the `synchronized → ReentrantLock` conversion (Concern #2) is correctly backlog-not-MVP. Plan 5's four-outcome decision tree with explicit precedence (pinning-dominates > codec opts > runtime-knob > null-result) is the right shape. Risk: **LOW**.
+
+## Strengths
+
+- Plan 5 Task 5.0 decision tree precedence ordering correctly puts pinning-dominates first, blocking the failure mode where forced-fallback knob tightening would mask a real architectural problem.
+- D-21 codifies that the tuning surface (Plans 2+3+4) IS the SCALE-08 deliverable — measurement of equivalence is itself evidence. This is a structurally cleaner SCALE-08 framing than the original "must show non-zero delta" rule.
+- Task 2.3 helper-extraction approach (`resolveEffectiveIdleMs` package-private) avoids Spring `Binder` / nullable-wrapper migration scope creep while still pinning all 4 yaml combinations.
+- Disposition document's idempotency contract ("future review re-flagging MUST be marked resolved-by-disposition") is the right shape for review-loop convergence.
+- Wave numbering now follows `wave = max(deps_waves) + 1` canonically. Verified: 20-01=1, 20-01b=2, 20-02=3, 20-03=2, 20-04=4, 20-05=4, 20-06=5.
+
+## Concerns
+
+### NEW-1 — Plan 5 outcome 3 (runtime-knob tightening) doesn't require updating downstream-affected docs (LOW)
+
+Type: NEW (not in dispositions).
+
+If outcome 3 fires and the executor tightens `paralife.runtime.jetty.idle-timeout-ms` default away from 60000, the existing `JettyDeflateCustomizer.java:69-73` javadoc rationale ("Idle timeout is raised from Jetty's 30s default to ... 60s ... defensive belt to the keepalive service's braces") is no longer accurate. Plan 5 Task 5.1 outcome-3 path lists the change as "config-only" but doesn't require updating that javadoc. Minor doc-drift risk if outcome 3 lands.
+
+**Fix:** Plan 5 Task 5.1 outcome-3 acceptance — add a checklist item: "If a knob default changes, update the javadoc/comment at the binding site (e.g., `JettyDeflateCustomizer.java:69-73`) to reflect the new default + cite the JFR signal that justified the change." One-line addition.
+
+### NEW-2 — Plan 6 Task 6.1 §4.3 narrative depth pressure for outcome 4 (null-result) (LOW)
+
+Type: NEW.
+
+Plan 6 Task 6.1 acceptance requires `wc -l 20-RUNTIME.md ≥ 350 lines`. For a true null-result outcome, §4.3 (per-tier narrative) and §4.4 (codec opts) would be substantively sparse. The 350-line floor risks pushing the executor toward filler text rather than recording "we measured, system is at floor, no opt shipped, here's the evidence" concisely.
+
+**Fix:** soften acceptance to `≥250 lines for outcome 4 (null-result), ≥350 lines for outcomes 2/3`, OR drop the line-count bar in favour of a section-presence grep (which is already there separately). Honesty > volume.
+
+### NEW-3 — Plan 5 outcome verification: noise-floor threshold not defined (LOW)
+
+Type: NEW.
+
+Plan 5 Task 5.2 outcome-4 acceptance says "tuned ≈ baseline within noise floor" but never defines noise floor. Plan 5 outcome-2/3 acceptance says "If the measured delta is below noise floor, document the noise-floor evidence and proceed." Without a concrete threshold (e.g., `±5%` on `paralife.tick.health.work-time-ms` mean across 3 sample windows), executors may diverge in interpretation.
+
+**Fix:** add a one-line noise-floor convention to D-21 or to Plan 5's success criteria — e.g., "noise floor = ±5% of baseline mean OR within 1 standard deviation, whichever is larger; computed across the JFR sample window." Plan 5 Task 5.2 cites this convention.
+
+### NEW-4 — Codec-opt verification: full-suite flake handling unspecified (LOW)
+
+Type: NEW.
+
+Plan 5 Task 5.1 codec-opt cycle: Run 1 (three-gate, in-suite) → Run 2 (three-gate, in-suite) → full suite. If full suite flakes on an unrelated test (e.g., a `forkEvery=1` carrier-starvation timer), the plan doesn't say whether to revert the codec change or retry the full suite. Could lead to inappropriate reverts or repeat cycles.
+
+**Fix:** Plan 5 Task 5.1 — add a one-sentence note: "If full suite reports failures unrelated to the codec opt (per Phase 22 known flake list TD-22-A..D), retry the full suite once before reverting; if the same failure recurs, revert and skip." Aligns with TD-19.5-A in-suite-only convention already in place for the three-gate stack.
+
+### Resolved-by-disposition cross-check
+
+I scanned for items already disposed and confirm none are re-raised in this concern set. Concerns #1-#6 in `20-REVIEW-DISPOSITIONS.md` are all addressed in the replan; the four NEW concerns above are follow-on/edge-case clarifications, not disagreements with dispositions.
+
+## Suggestions
+
+1. **Plan 5 Task 5.1 outcome-3 acceptance (NEW-1):** add javadoc/comment-update checklist item when knob default changes.
+2. **Plan 6 Task 6.1 acceptance (NEW-2):** tier line-count requirement by Plan 5 outcome OR replace with section-presence grep.
+3. **D-21 or Plan 5 success criteria (NEW-3):** define "noise floor" — `±5% of baseline mean OR ±1σ, whichever larger`.
+4. **Plan 5 Task 5.1 codec cycle (NEW-4):** specify single-retry-then-revert protocol for unrelated full-suite flakes.
+5. **Trust-but-verify (out-of-band):** disposition doc asserts `.planning/phases/999.6-vt-pinning-reentrantlock-conversion/CONTEXT.md` exists — confirm via filesystem before sign-off.
+
+## Risk Assessment
+
+**LOW.** All four NEW concerns are minor process/doc clarifications, not architectural or correctness gaps. SCALE-08 / SCALE-09 success criteria are achievable under all four Plan 5 outcomes. Wave ordering, dependency declarations, and security controls (T-20-V5 codec bounds, T-20-DOS-1 Jetty maxFrameSize, D-12 disabled-tests untouched) are all intact. The replan is shippable as-is; the four NEW items can land as 5-line edits to the affected plans without further review.
+
+---
+
+## Codex Review (gpt-5.5 high effort)
+
+**Summary**
+
+The replan addresses the main first-pass concerns well. I treated dispositions #1-#6 as resolved-by-disposition and did not re-raise them. The remaining issues are mostly follow-ons introduced by the fixes: the plan now permits a couple of evidence paths that either cannot be measured as written or could accidentally claim SCALE-08 completion while documenting an unresolved bottleneck.
+
+**Strengths**
+
+- The forced-fallback problem is fixed: Plan 20-05 now permits a documented null-result and removes pressure to manufacture a delta.
+- The ReentrantLock/pinning work is correctly treated as evidence-triggered and not silently expanded into MVP scope.
+- Dependency ordering is much cleaner after splitting 20-01/20-01b and gating 20-02 on A1.
+- D-20 alongside-not-move is explicitly protected in Plan 20-03.
+- The D-02 rationale is now hard to miss across README, CLAUDE, and source comments.
+
+**Concerns**
+
+- **HIGH — NEW:** The headline metric collection path is not executable as written.  
+  Plan 20-05 says to read `paralife.tick.health.work-time-ms` and `paralife.outbound.detach.timeout` from `/tmp/p20-tuned-server.log`, but these are Micrometer meters registered in `AdmissionMetrics`, not log lines. Plan 20-01b also does not persist baseline actuator metric snapshots, so Plan 20-05/20-06 may not have valid baseline values for D-13/D-18.
+
+- **HIGH — FOLLOW-ON of dispositions #1/#2:** The `pinning-dominates` branch can still be shipped as a SCALE-08 outcome.  
+  D-21 permits a documented null-result only when the baseline is already at the performance floor. If JFR shows `jdk.VirtualThreadPinned` is dominant, that is not a null-result; it is evidence of an unresolved overhead path. Plan 20-05 should not allow “file Phase 999.6 and ship Plan 5 as SCALE-08” unless the requirement is explicitly downgraded.
+
+- **MEDIUM — FOLLOW-ON of disposition #5:** `queue-watermark-pct` is still treated as effective in later plans.  
+  Plan 20-03 correctly labels it `[reserved — no effect in Phase 20]`, but Plan 20-04 recipes describe it as a tighter slow-client signal, and Plan 20-05 lists it as a runtime-knob tightening candidate for `detach.timeout`. With no consumer wiring, changing this value cannot produce a measured runtime delta.
+
+- **MEDIUM — NEW:** Plan 20-06 overclaims 100/500 tuned evidence.  
+  It says to mark 100/500 as `tuned ≡ baseline` if only the 1000-bot tuned JFR was captured. But D-13 requires per-tier before/after evidence, and Plan 5 changes can affect all tiers. Equivalence should be measured or explicitly not claimed.
+
+- **LOW — NEW:** Capture commands have execution hazards.  
+  After `git checkout c22e487`, the new `profiles/` directory may not exist, so `JFR_OUT=.../profiles/...` can fail without `mkdir -p`. Also `build/libs/paralife-*.jar` is ambiguous once `loadHarnessJar` exists, and the three sequential 60s flamegraphs can run past the 180s load window.
+
+- **LOW — NEW:** Plan 20-02 wording says defaults match Jetty defaults, but `idleTimeoutMs=60000` matches the current project default, not Jetty’s 30s default. The behavior is probably right; the text/test name should be corrected.
+
+**Suggestions**
+
+- Add metric snapshot artifacts to 20-01b and 20-05: use `/actuator/metrics/paralife.tick.health.work-time-ms`, `/actuator/metrics/paralife.outbound.detach.timeout`, and preferably periodic sampling or `paralife.tick.work.ms` distribution stats for mean work time.
+- Make `pinning-dominates` a blocking outcome for Phase 20 acceptance unless scope is expanded or the phase explicitly records SCALE-08 as not closed.
+- Remove `queue-watermark-pct` from Plan 20-04 recipe overrides and Plan 20-05 runtime-knob candidates, unless Plan 20-05 also wires a real consumer and tests it.
+- Capture tuned 100/500 JFR + metric sidecars, or revise D-13/20-RUNTIME so those tiers are baseline-only and not presented as before/after evidence.
+- Harden capture scripts with `mkdir -p`, explicit `SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | head -1)`, and either longer harness duration or separate flamegraph runs.
+- Rename “Jetty defaults” to “project-current defaults; Jetty defaults except idle timeout.”
+
+**Risk Assessment**
+
+**HIGH** until the metric-capture and pinning-dominates acceptance issues are fixed. The implementation scope is otherwise controlled, but as written the phase could produce documentation that appears to satisfy SCALE-08/SCALE-09 without actually having valid headline measurements or resolving a measured dominant overhead path.
+
+---
+
+## OpenCode Review (openrouter/deepseek/deepseek-v4-pro)
+
+# Cross-AI Review — Phase 20 Plans (Re-Review)
+
+## Summary
+
+The replan adequately addressed prior-pass concerns. Concern #1 (null-result acceptance), #4 (idle-timeout test), #5 (reserved tags), and #6 (dependency bump) are correctly resolved. Concern #2 (ReentrantLock backlogging) and #3 (JFR cap relaxation) are properly deferred. The wave renumbering cascade is self-consistent. No disagreements with any disposition. One new MEDIUM concern (Plan 5 "paused" ambiguity) and two LOW observations.
+
+## Strengths
+
+- **D-21 null-result acceptance** closes the forced-fallback perverse incentive cleanly — all four Plan 5 outcomes are traceable and none manufacture a delta
+- **Concern #4 fix** (four-case idle-timeout test + `resolveEffectiveIdleMs` extraction) is surgically minimal — adds coverage without scope-creeping into Spring `Binder`/nullable migration
+- **Concern #5 fix** retags reserved fields to `[reserved — no effect in Phase 20]` — zero-risk change that kills the operator-confusion gap
+- **Three-gate two-consecutive-green rule** (RESEARCH Pitfall 4) is the right TD-19.5-A flake mitigation — running once is ~40% flaky; twice consecutive makes false-green vanishingly unlikely
+- **Plan 6's four-file D-02 grep gate** (`grep -lE "WS:entity 1:1" README.md CLAUDE.md WorldWebSocketHandler.java OutboundSender.java | wc -l == 4`) is the right paranoia check — cheap and definitive
+
+## Concerns
+
+### Concern #7 — Plan 5 outcome 1 "paused" wording ambiguous (MEDIUM, NEW)
+
+Plan 20-05 Task 5.1 says for pinning-dominates: "Plan 5 is paused. The orchestrator decides whether to expand scope." But Plan 6 depends on Plan 5, and Task 5.2 (tuned-JFR capture) still needs to run even under outcome 1 (to produce equivalence evidence). The intent — don't silently convert `synchronized` — is correct, but "paused" reads as a blocking state rather than a valid completion. Plan 6 can proceed with outcome 1's documented finding (pinning count + affected sites in 20-05-TRIAGE.md) without waiting for scope expansion.
+
+**Suggested fix:** In Task 5.1 outcome 1 text, replace "Plan 5 is paused. The orchestrator decides whether to expand scope (in which case the executor receives an updated plan...)" with "Plan 5 proceeds to Task 5.2 with the documented pinning finding; the orchestrator decides in parallel whether to expand scope via a separate plan. The pinning evidence is itself a valid Plan 5 completion." Task 5.2's tuned-JFR capture still runs (equivalence proof regardless of outcome).
+
+### Concern #8 — `20-PATTERNS.md` referenced but not provided (LOW, NEW)
+
+All seven plans reference `@.planning/phases/20-connection-multiplexing-runtime-tuning/20-PATTERNS.md` in their `<context>` or `<read_first>` blocks. This file is not in the review packet. If it doesn't exist, the executor will encounter a missing reference.
+
+**Suggested fix:** Either include 20-PATTERNS.md (if it exists) or remove the reference from context blocks (the plans are self-contained enough without it).
+
+### Concern #9 — Plan 20-03 / Plan 20-02 YAML merge fragility (LOW, NEW)
+
+Plan 20-03 Task 3.2 says "if Plan 2 (Wave 2 sibling) has not yet committed the `paralife.runtime.jetty:` block when this task runs, the executor must Read the file first and create the parent `paralife: runtime:` skeleton if absent." This is handled explicitly but creates an ordering sensitivity between two files adding to the same YAML subtree.
+
+**Suggested fix:** No code change needed — the Read-first instruction is adequate. This is an execution-note concern, not a plan defect.
+
+## Suggestions
+
+1. **Concern #7:** Clarify Plan 5 outcome 1 as a non-blocking completion per above
+2. **Concern #8:** Resolve 20-PATTERNS.md existence before execution
+3. **Minor:** Task 6.4's `oldString` for `afterConnectionEstablished` depends on exact whitespace matching — the executor should `Read` the actual file first (which the plan's `<read_first>` already instructs) to avoid Edit-tool failure on whitespace drift
+
+## Risk Assessment
+
+**LOW.** The plans are coherent, dependency ordering is consistent after the wave renumbering cascade, and all six prior concerns are correctly disposed. The one new MEDIUM concern (outcome 1 "paused" ambiguity) is a language fix, not a structural problem — Plan 5's actual task flow (triage → act-or-document → capture-tuned-JFR) works correctly for all four outcomes. No blocking issues.
+
 
 ---
 
 ## Consensus Summary
 
-Four reviewers agree the plan is well-ordered, traceability-strong, and architecturally
-disciplined (WS:entity 1:1 protected, D-20 alongside-not-move correctly handled, three-gate
-equivalence stack reused, D-12 per-file disabled-test enforcement). Divergence is mostly on
-overall risk: Gemini = LOW; Codex / Claude / OpenCode = MEDIUM. The MEDIUM camp's pivotal
-concern is Plan 20-05's forced-fallback rule.
+All four reviewers confirm the replan adequately addresses pass-1 dispositions #1–#6 and explicitly mark concerns #1–#6 as resolved-by-disposition (no re-flagging). Risk verdicts split: Gemini, Claude, OpenCode call it **LOW**; Codex calls it **HIGH** until two specific issues are tightened (metric capture path + pinning-dominates acceptance).
 
-### Agreed Strengths
+### Agreed Strengths (2+ reviewers)
 
-- **Dependency ordering** — Wave 1 toolchain → Wave 2 baseline + additive records (parallel)
-  → Wave 3 presets + codec opts → Wave 4 finalisation. Codex/Gemini/Claude/OpenCode all
-  endorse the 6-plan (7 with 20-01b) split.
-- **Reproducibility discipline** — D-19 SHA-anchored baseline against `c22e487`,
-  `.meta.json` sidecars, structured A1–A8 verification gate in 20-01b. Codex/Claude/OpenCode.
-- **Architectural integrity** — WS:entity 1:1 codified at three sites (README / CLAUDE.md /
-  inline). All four reviewers cite this as the right architectural posture for SCALE-08's
-  "or equivalent" escape hatch.
-- **D-20 alongside-not-move** — `paralife.admission.backpressure.outbound-queue-size` left
-  authoritative; explicit invariant test (`d20AlongsideNotMove`). Codex/OpenCode call this
-  the canonical pattern for the new `paralife.runtime.app.*` record.
-- **Threat-model integration** — T-20-V5 (codec validation bounds), T-20-DOS-1 (frame size
-  cap), T-20-DOS-2 (pinning) all flow to specific acceptance criteria. Claude flags this
-  explicitly; Codex/OpenCode endorse implicitly via "well-defended" and "no decoration"
-  framings.
-- **Backward compatibility** — additive `@ConfigurationProperties` + legacy idle-timeout
-  fallback for one phase. Gemini/OpenCode/Codex.
-- **Codec safety** — Three-gate stack + D-12 enforcement + T-20-V5 bounds checks block
-  protocol regression. Claude/OpenCode.
+- **D-21 null-result acceptance** removes the forced-fallback perverse incentive (gemini, claude, codex, opencode).
+- **Decision-tree precedence** (pinning-dominates → codec opts → runtime-knob → null-result) (gemini, claude, codex).
+- **Concern #4 helper extraction** (`resolveEffectiveIdleMs`) avoids Spring `Binder` migration scope creep (gemini, claude, opencode).
+- **Concern #5 reserved retag** kills operator-confusion gap on dead-tunable fields (gemini, claude, opencode).
+- **D-02 three-place codification** of the WS:entity 1:1 invariant (gemini, claude, codex; opencode flags the four-file grep gate).
+- **TD-19.5-A flake mitigation** via two-consecutive-green / in-suite rule (claude, opencode).
+- **Plan slicing 20-01 / 20-01b** improves dependency ordering (gemini, codex).
 
-### Agreed Concerns (highest priority — raised by 2+ reviewers)
+### Agreed Concerns (2+ reviewers — highest priority)
 
-1. **(HIGH — Codex, Claude, Gemini, OpenCode) Plan 20-05 forced-fallback rule
-   creates evidence-vs-shippable tension.** The "must show non-zero improvement"
-   requirement contradicts D-10/D-13's evidence-only stance: if the c22e487 baseline shows
-   the system is already well-tuned, the executor faces pressure to ship a knob change
-   because the rule says we must, not because evidence supports it.
-   - Convergent fix: reframe SCALE-08 to accept a **documented null-result** as valid
-     measured evidence (Claude, Codex). Failing that, require the fallback knob change
-     to cite a specific baseline JFR signal with the same triage rigor as a codec opt
-     (Claude). OpenCode adds: enforce a minimum effect-size threshold (≥ 5 % of
-     `work-time-ms` p95) so token-sized changes can't satisfy SCALE-08.
+#### A. Reserved-tag follow-on — additional dead configs still tagged `[live-tunable]` (Gemini MEDIUM + Codex MEDIUM, both FOLLOW-ON of disposition #5)
 
-2. **(HIGH — OpenCode primary, Gemini secondary) `synchronized(session)` →
-   `ReentrantLock` conversion is the highest-impact tuning change but is gated behind a
-   scope-expansion checkpoint.** RESEARCH §Pitfall 2 identifies 4 pinning sites; OpenCode
-   argues the conversion should be a first-class Plan 5 task when JFR
-   `jdk.VirtualThreadPinned` count > 50/min, not deferred. Risk: Phase 21's benchmark
-   discovers the per-connection overhead path is still the binding constraint and
-   triggers late-cycle rework.
+Concern #5's retag fix was incomplete:
+- **Gemini:** `frameSizeBudgetBytes` is still `[live-tunable]` but `PerceptionCodec.encode(Frame)` allocates its own `StringBuilder` and takes no capacity argument — and Plan 5 forbids public-API change. Structurally impossible for the codec to consume this config.
+- **Codex:** `queueWatermarkPct` is `[reserved]` in 20-03 but Plan 20-04 recipes describe it as a "tighter slow-client signal" and Plan 20-05 lists it as a runtime-knob tightening candidate. With no consumer wiring, changing it cannot produce a measured runtime delta.
 
-3. **(MEDIUM — Codex, Claude) JFR file-size budget (≤ 5 MB/file, ≤ 20 MB total) is
-   unrealistic for 1000-bot 180 s `settings=profile` runs.** Aggressive `jfr filter` to
-   meet the cap risks dropping the very allocation/pinning events Plan 5 needs. Convergent
-   fix: relax to ≤ 10 MB/file / ≤ 50 MB total **or** commit a pinned `.jfc` filter
-   preserving `ObjectAllocationInNewTLAB`, `GCPhasePause`, `VirtualThreadPinned`,
-   `JavaMonitorEnter` at full fidelity.
+**Recommended fix:** Apply the same Concern #5 retag to `frameSizeBudgetBytes` (in 20-03 / application.yml). Strip references to `queueWatermarkPct` from 20-04 recipe overrides and 20-05 runtime-knob candidates (or wire a real consumer + test). Roughly 5-line edits.
 
-4. **(MEDIUM — Codex, Claude) Plan 20-02 legacy-key idle-timeout fallback is untested
-   and undetectable.** With primitive `@DefaultValue("60000")`, the record cannot
-   distinguish "explicitly set to 60000" from "defaulted." `effectiveIdleMs` resolution
-   logic ("new key wins if both set") cannot be reliably implemented. Convergent fix:
-   add Spring slice tests covering all four yaml-set combinations; consider Spring
-   `Binder` or nullable wrapper to detect explicit-set.
+#### B. Pinning-dominates outcome treatment is under-specified (Codex HIGH + OpenCode MEDIUM — but reviewers DISAGREE on direction)
 
-5. **(MEDIUM — Claude, OpenCode, Codex) Reserved/unconsumed config knobs in
-   `paralife.runtime.app.*` (`queueWatermarkPct`, `encodeBatchHint`,
-   `parallelEncodeThreshold`) bind but no Phase-20 consumer reads them.** Defensible as
-   live-tunable seam but creates "dead-config" risk for operators. Convergent fix:
-   tag yaml comments + `20-RUNTIME.md` §2.2 with `[reserved — no effect in Phase 20]`
-   instead of `[live-tunable]`.
+Plan 5 outcome 1 ("pinning-dominates") wording is ambiguous and reviewers split on what it should mean for SCALE-08 closure:
+- **Codex (HIGH, FOLLOW-ON of #1/#2):** if JFR shows `jdk.VirtualThreadPinned` dominant, that is **not** a null-result — it is evidence of an unresolved overhead path. Plan 20-05 should NOT allow "file Phase 999.6 and ship Plan 5 as SCALE-08" unless SCALE-08 is explicitly downgraded. Treat outcome 1 as blocking.
+- **OpenCode (MEDIUM, NEW):** "Plan 5 is paused" reads as blocking but the actual triage flow (Task 5.2 still runs; equivalence evidence is captured) supports outcome 1 as a valid Plan 5 completion. Reframe wording so Plan 6 can proceed with documented pinning finding without waiting for scope expansion.
 
-6. **(MEDIUM — Codex single, but well-evidenced) Plan 20-02 declares
-   `depends_on: [20-01]` but its compile/wiring relies on Plan 20-01b's A1 (Jetty 12.0.18
-   setter availability).** Either move A1 verification into 20-01 or change 20-02's
-   declared dependency to `[20-01b]`. As written, Plan 20-02 can be claimed runnable
-   when its real precondition isn't met.
+**Divergent views — see "Divergent Views" section below.** The planner must pick a direction (block vs. proceed-with-documented-finding) and codify it explicitly in Plan 20-05 outcome 1, plus Plan 20-06 inheritance truth.
+
+#### C. Metric capture path / noise floor (Codex HIGH + Claude LOW NEW-3)
+
+Two related instrumentation gaps:
+- **Codex (HIGH, NEW):** Plan 20-05 reads `paralife.tick.health.work-time-ms` and `paralife.outbound.detach.timeout` from `/tmp/p20-tuned-server.log`, but these are Micrometer meters (in `AdmissionMetrics`), not log lines. Plan 20-01b also does not persist baseline actuator metric snapshots, so 20-05/20-06 may have no baseline values for D-13/D-18 comparison.
+- **Claude (LOW, NEW-3):** "tuned ≈ baseline within noise floor" is referenced by Plan 5 but noise floor itself is undefined. Executors may diverge.
+
+**Recommended fix:** Plan 20-01b + 20-05 should explicitly snapshot `/actuator/metrics/paralife.tick.health.work-time-ms` (and other named meters) to a JSON sidecar; D-21 or Plan 5 success criteria define noise floor as e.g. `±5% of baseline mean OR ±1σ, whichever is larger`.
+
+### Single-reviewer concerns (LOW unless noted)
+
+- **Claude NEW-1 (LOW):** Plan 5 outcome 3 (knob tightening) doesn't require updating javadoc at `JettyDeflateCustomizer.java:69-73` if idle-timeout default changes.
+- **Claude NEW-2 (LOW):** Plan 6 `wc -l 20-RUNTIME.md ≥ 350` line-count floor is filler-pressure under outcome 4 (null-result) — soften to ≥250 OR replace with section-presence grep.
+- **Claude NEW-4 (LOW):** Plan 5 codec-opt cycle doesn't specify how to handle unrelated full-suite flakes (TD-22-A..D) — recommend single-retry-then-revert.
+- **Codex MEDIUM (NEW):** Plan 20-06 risks overclaiming 100/500 tuned evidence as `tuned ≡ baseline` if only the 1000-bot tuned JFR was captured — D-13 requires per-tier before/after.
+- **Codex LOW (NEW):** Capture commands have hazards — `profiles/` may not exist after `git checkout c22e487` (need `mkdir -p`); `build/libs/paralife-*.jar` ambiguous after `loadHarnessJar`; three sequential 60s flamegraphs may run past 180s load window.
+- **Codex LOW (NEW):** 20-02 wording "defaults match Jetty defaults" is wrong — `idleTimeoutMs=60000` matches **project-current** default, not Jetty's 30s default. Test/text naming.
+- **Gemini LOW (NEW):** `AppRuntimeConfigTest.d20AlongsideNotMove_admissionBackpressureUntouched` only tests `AdmissionConfig.defaults()` static factory — does not test that Spring binding preserved 128 (mitigated by 3.2 grep gate).
+- **OpenCode LOW (NEW):** Plans reference `20-PATTERNS.md` in `<context>` blocks. **Verified: file exists** at `.planning/phases/20-connection-multiplexing-runtime-tuning/20-PATTERNS.md` (576 lines). Concern resolved-on-verification.
+- **OpenCode LOW (NEW):** 20-03 / 20-02 YAML-merge ordering on shared `paralife.runtime.*` subtree — execution-note, not a defect.
 
 ### Divergent Views
 
-- **Overall risk** — Gemini: LOW. Codex / Claude / OpenCode: MEDIUM. The split traces
-  back to whether Plan 20-05's forced-fallback is interpreted as a guardrail (Gemini)
-  or a perverse incentive (the others).
-- **VT-`ThreadLocal` codec pooling (Plan 20-05)** — Gemini flags MEDIUM concern: pinning
-  memory to long-lived `OutboundSender` VTs runs counter to VT philosophy at higher
-  scales; suggests bounded queue of reusable buffers instead. No other reviewer raises
-  this. Worth investigating during Plan 5 codec-opt triage.
-- **TD-19.5-A flake mitigation** — Three reviewers endorse the "two consecutive in-suite
-  greens" rule. Claude alone notes that TD-19.5-A only flakes in *isolated* runs, so the
-  2× rule actually guards against state-pollution flakes, not TD-19.5-A — recommends
-  documenting what 2× catches accurately.
-- **`@SpringBootTest` record binding** — Gemini predicts the `classes = JettyRuntimeConfig.class`
-  shape will fail because Spring needs a `@Configuration` class to scan records;
-  recommends explicit `AdmissionConfigTest.java` template copy. Codex recommends
-  `ApplicationContextRunner`. The plans already have a fallback path but reviewers
-  agree it should be the primary path, not the fallback.
-- **README replacement (Plan 20-06)** — Codex flags LOW scope-creep risk
-  (Phase 20's objective is tuning, not documentation rewrite). Other reviewers don't
-  raise it.
-- **`66x-test suite` numeric claim** — Codex flags a stale "666 tests" reference. Worth a
-  cleanup pass against the current test count.
+**Pinning-dominates outcome treatment (Concern B above):** Codex says block-and-don't-claim-SCALE-08; OpenCode says proceed-as-valid-completion. Both reviewers agree the current "paused" wording is ambiguous; they disagree on what the resolved wording should encode. Worth a short ADR or explicit D-21 amendment before execute-phase.
 
-### Recommended Pre-Execute Actions
+### Risk Verdict
 
-Before launching `/gsd-execute-phase 20`, address (in priority order):
+| Reviewer | Risk | Notes |
+|----------|------|-------|
+| Gemini   | LOW  | Once dead-config retag (`frameSizeBudgetBytes`) is applied, exceptionally safe. |
+| Claude   | LOW  | Four NEW concerns are 5-line process/doc fixes; replan shippable as-is. |
+| Codex    | HIGH | Until metric-capture path and pinning-dominates acceptance are tightened, phase could ship docs that appear to satisfy SCALE-08/09 without valid headline measurements. |
+| OpenCode | LOW  | One MEDIUM language fix on outcome 1; no structural problem. |
 
-1. Resolve the Plan 20-05 forced-fallback / SCALE-08 evidence framing (concern #1).
-2. Decide whether `synchronized → ReentrantLock` is a first-class Plan 5 task gated by JFR
-   evidence, or stays in scope-expansion (concern #2). Document the decision in
-   20-CONTEXT.md.
-3. Either pin a `.jfc` filter or relax JFR file-size caps (concern #3).
-4. Fix Plan 20-02 dependency declaration to `[20-01b]` or move A1 into 20-01 (concern #6).
-5. Add Spring slice test coverage for legacy idle-timeout fallback (concern #4).
-6. Tag reserved knobs explicitly in yaml + RUNTIME.md (concern #5).
+**Aggregate verdict:** Replan is materially stronger than pass-1; three reviewers concur LOW risk, one (Codex) HIGH on two fixable issues. The two HIGH-Codex issues (metric-capture path; pinning-dominates outcome semantics) and the gemini+codex agreed dead-config follow-on warrant a short third planner pass before execution. Estimated effort: ~15 min of edits across 20-03 / 20-04 / 20-05 / 20-01b / 20-06.
 
-To incorporate this feedback into planning, run:
+### Recommended next step
 
 ```
 /gsd-plan-phase 20 --reviews
 ```
+
+Planner should triage: (A) extend Concern #5 retag to `frameSizeBudgetBytes` + strip `queueWatermarkPct` references; (B) pick a direction on pinning-dominates outcome semantics (block vs. proceed-with-finding) and codify in 20-05 + 20-06; (C) add actuator-metric snapshot to 20-01b/20-05 + define noise floor in D-21 or 20-05; then disposition the remaining LOW items as accepted-and-fixed or rejected-out-of-scope per the user MVP-scope rule.
