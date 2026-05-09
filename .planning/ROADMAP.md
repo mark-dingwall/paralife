@@ -189,6 +189,22 @@ Plans:
 
 Pin RNG seed or widen variation tolerance for `PopulationDynamicsTest.allThreeTypesSurvive500Ticks` (probabilistic flat-line on extinction). Not scale-related; separate from P21/P22.1.
 
+### Phase 999.4: `paralife.runtime.app.*` namespace consolidation (BACKLOG)
+
+**Goal:** Fold `paralife.admission.backpressure.outbound-queue-size` (and any sibling keys grown post-P20) under a unified `paralife.runtime.app.outbound.*` namespace. Deprecate-and-alias migration: new keys read first, fall back to old keys with warning. Doc rewrites in `CLAUDE.md` §Outbound concurrency, `17-ADMISSION.md`, and `20-RUNTIME.md`. Test renames.
+
+**Requirements:** None — post-MVP cleanup; D-20 in `.planning/phases/20-connection-multiplexing-runtime-tuning/20-CONTEXT.md` deferred this to keep P20 MVP-direct.
+**Depends on:** Phase 20 (namespace target lives under the new `paralife.runtime.app.*` records P20 introduces)
+**Plans:** 0 plans (promote with `/gsd-capture --backlog promote` when ready)
+
+### Phase 999.5: P20 baseline JFR re-run for apples-to-apples comparison (BACKLOG)
+
+**Goal:** Re-capture P20's baseline JFR against the latest tuned-system HEAD once M4 closes (P21 done, P22.1 cleanup landed). Re-publish before/after deltas in `20-RUNTIME.md`. The original `c22e487`-anchored baseline (P20 D-19) is intentionally frozen for reproducibility — this backlog item produces a fresh baseline so future tuning decisions compare against current reality, not the P19.1-close snapshot.
+
+**Requirements:** None — post-MVP measurement hygiene; D-19 follow-up in `.planning/phases/20-connection-multiplexing-runtime-tuning/20-CONTEXT.md`.
+**Depends on:** Phase 20 (must own the JFR capture infrastructure), Phase 21 (tuning work complete), Phase 22.1 (any invariant cleanup landed)
+**Plans:** 0 plans (promote with `/gsd-capture --backlog promote` when ready)
+
 ### Phase 999.3: Verb-role coupling cleanup — V tightening + solo A enablement + RPS multi-target research (BACKLOG)
 
 **Goal:** Resolve the codec-vs-resolver verb-eligibility mismatch surfaced during Phase 19.1 pass-6 verb-coverage deep-dive (2026-05-04). Today `ActionResolver.queueAction` accepts `V` and `A` from any session, but solo entities silently no-op at Phase 2 (`:498` for A, `:503-507` for V). The codec advertises capability that the resolver doesn't honour — counter-intuitive for bot authors, latent footgun. This phase cleans up the coupling in two opposite directions plus one paired research item.

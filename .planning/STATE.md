@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: completed
-stopped_at: context exhaustion at 77% (2026-05-03)
-last_updated: "2026-05-04T22:08:35.215Z"
-last_activity: 2026-05-04 -- Phase 19.1 marked complete
+stopped_at: Phase 20 context gathered (rebuilt from 2026-05-02 superseded draft + audit; D-17..D-20 added)
+last_updated: "2026-05-09T11:55:31.766Z"
+last_activity: 2026-05-05 -- P19.5 findings verified shipped; P20 early artifacts archived as superseded
 progress:
-  total_phases: 12
+  total_phases: 14
   completed_phases: 4
   total_plans: 27
   completed_plans: 28
@@ -58,9 +58,9 @@ Progress: [████████░░] 81%
 
 ## Session Continuity
 
-Last session: 2026-05-05
-Stopped at: P19.1 complete; P20 early CONTEXT/DISCUSSION-LOG archived as superseded (fired 2026-05-02 before P19.1 work)
-Resume file: None
+Last session: 2026-05-09T11:55:31.755Z
+Stopped at: Phase 20 context gathered (rebuilt from 2026-05-02 superseded draft + audit; D-17..D-20 added)
+Resume file: .planning/phases/20-connection-multiplexing-runtime-tuning/20-CONTEXT.md
 Next command: `/gsd-discuss-phase 20` — fresh CONTEXT to capture post-P19.1 reality (TD-19.5-A flaky golden-trace, TD-22-B disabled encode perf gate, L1 detach-timeout, strengthened test gates)
 
 ## Regression Alarm — fast-track P22.1 if any reappear during P20/P21
