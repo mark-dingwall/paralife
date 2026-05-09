@@ -100,7 +100,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
 
 - **D-05:** **Profile artifacts committed under
   `.planning/phases/20-connection-multiplexing-runtime-tuning/profiles/`.** Raw `.jfr`
-  files plus async-profiler flamegraph HTML, size-bounded (target ≤5 MB per artifact, ≤20 MB
+  files plus async-profiler flamegraph HTML, size-bounded (target ≤10 MB per artifact, ≤50 MB
   total — exact bounds = Claude's Discretion during planning). Findings written into
   `20-RUNTIME.md` with explicit citations of artifact filenames.
 
@@ -218,11 +218,13 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   intact. **Backlog item filed:** future namespace consolidation under
   `paralife.runtime.app.*` (Phase 999.x — see ROADMAP backlog).
 
-### Claude's Discretion
+- **D-21 (added 2026-05-09 per cross-AI review concern #1 — see 20-REVIEW-DISPOSITIONS.md):** **SCALE-08 evidence acceptance permits a documented null-result.** D-10 / D-13's "JFR-driven only" stance applies to *codec* opts. SCALE-08's measurable evidence requirement is satisfied by ANY of: (1) shipped codec opts with JFR-cited delta; (2) JFR-justified runtime-knob (Plan 2 / Plan 3) tightening with measured delta; (3) **documented null-result** showing the c22e487 baseline is at the relevant performance floor at 1000 bots (e.g., `jdk.GCPhasePause` mean ≤1ms, `jdk.VirtualThreadPinned` count <10/min, codec stack ≤2% CPU, allocation steady-state). The tuning surface (Plan 2 + Plan 3 records + Plan 4 per-tier recipes + Plan 1/1b baseline JFRs) IS the SCALE-08 deliverable; a measured null-result is a measurement, not a no-op. Pinning-dominates supersedes runtime-knob tightening (do NOT manufacture a fallback delta on top of dominant pinning — file Phase 999.6 stub instead).
+
+### Claudes Discretion
 
 - Concrete `paralife.runtime.jetty.*` and `paralife.runtime.app.*` field names and defaults
   — driven by profile evidence in planning.
-- Profile artifact size bounds (suggested: ≤5 MB per file, ≤20 MB total).
+- Profile artifact size bounds (suggested: ≤10 MB per file, ≤50 MB total — relaxed from initial ≤5/≤20 per cross-AI review concern #3).
 - Exact LoadHarness ramp / duration / seed combinations for the per-tier profile runs.
 - Whether `paralife.runtime.app.*` is a single record or split.
 - Choice of GC for each tier (ZGC vs G1) — JFR evidence drives this.

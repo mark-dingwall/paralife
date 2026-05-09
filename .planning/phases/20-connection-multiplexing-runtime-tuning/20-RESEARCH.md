@@ -4,6 +4,8 @@
 **Domain:** JVM/Jetty 12/Spring Boot 3.4.4 runtime tuning + JFR/async-profiler workflow
 **Confidence:** HIGH for tooling + Spring/Jetty wiring; MEDIUM for tier-specific GC/heap sizing (real numbers come from D-04/D-05/D-06 profile runs, not from this research); MEDIUM for codec hot-path candidates (gated by D-10 JFR evidence).
 
+> **Note:** D-05 size discipline relaxed to ≤10 MB/file ≤50 MB total per cross-AI review concern #3 (see 20-CONTEXT.md D-05 + 20-REVIEW-DISPOSITIONS.md). Stale 5/20 MB references in this document have been corrected; if you find one, treat it as documentation drift and prefer the 10/50 cap.
+
 ## Summary
 
 Phase 20 is **tuning, not multiplexing**. CONTEXT.md D-01 closes the multi-entity question — Paralife keeps WS:entity 1:1 and reduces per-connection cost via four tunable layers (JVM flags, Jetty WS knobs, application-level knobs, codec internals). This research surfaces the concrete wiring, defaults, profiling commands, and risks the planner needs to slice work.
@@ -51,7 +53,7 @@ Three findings dominate planning shape:
 ### Claude's Discretion
 
 - Concrete `paralife.runtime.jetty.*` and `paralife.runtime.app.*` field names and defaults (driven by profile evidence).
-- Profile artifact size bounds (suggested ≤5 MB per file, ≤20 MB total).
+- Profile artifact size bounds (suggested ≤10 MB per file, ≤50 MB total).
 - Exact LoadHarness ramp / duration / seed for per-tier profile runs.
 - Whether `paralife.runtime.app.*` is a single record or split.
 - GC choice per tier (ZGC vs G1) — JFR evidence drives.
@@ -408,7 +410,7 @@ jcmd "$SERVER_PID" JFR.dump name=p20-tuned-1000 \
 
 ```bash
 # Source: github.com/async-profiler/async-profiler README (verified 2026-05-09)
-# Output: HTML flamegraph (small file size — easy to keep ≤5 MB).
+# Output: HTML flamegraph (small file size — easy to keep ≤10 MB).
 
 ASYNC_PROFILER=tools/async-profiler/bin/asprof
 SERVER_PID=$(jps -l | grep ParalifeApplication | awk '{print $1}')
@@ -427,7 +429,9 @@ $ASYNC_PROFILER -d 60 -e lock -f "$OUT_DIR/lock-1000bots-tuned-${HEAD_SHA}.html"
 
 JFR can run concurrently — they don't conflict on event channels at this scale. [CITED: github.com/async-profiler/async-profiler/issues/436]
 
-### File-size discipline (D-05 spirit — ≤5 MB per file, ≤20 MB total)
+### File-size discipline (D-05 spirit — ≤10 MB per file, ≤50 MB total)
+
+_(D-05 spirit — relaxed by D-05 v2 / 20-CONTEXT.md per cross-AI review concern #3; see 20-REVIEW-DISPOSITIONS.md.)_
 
 ```bash
 # JFR settings=profile produces 50-200 MB at 180s/1000 bots — too large.
@@ -436,7 +440,7 @@ JFR can run concurrently — they don't conflict on event channels at this scale
 # strip via `jfr filter --include-events ...` if needed.
 
 jfr summary "$OUT_DIR/jfr-1000bots-tuned-${HEAD_SHA}.jfr" | head
-# If > 5MB: use `jfr filter` with the events of interest only.
+# If > 10MB: use `jfr filter` with the events of interest only.
 ```
 
 ### Embedding the SHA into the recording's metadata (belt-and-braces)
@@ -471,7 +475,7 @@ JFR recordings carry process metadata — but NOT git SHA. Two reproducibility m
 | A4 | `jdk.VirtualThreadPinned` event default 20ms threshold is appropriate for Paralife | §Pitfall 2 | Pinning under 20ms could be missed at scale. **[ASSUMED]** — Plan 1 may need to lower threshold via custom `.jfc`. |
 | A5 | The four `synchronized(session)` writers documented in CLAUDE.md are exhaustive | §Summary, §Pitfall 2 | A fifth writer exists somewhere not yet documented. **[VERIFIED via grep]** — `grep -rn "synchronized(session)" src/main` matches only the four sites; downgraded to verified. (Result: removed from assumed list. Keeping the entry for transparency.) |
 | A6 | LoadHarness can sustain 1000 bots from a single JVM under the c22e487 codebase | §Architecture Diagram | If LoadHarness itself is the bottleneck, profile attributes wrong cause. **[ASSUMED]** — 18-HARNESS.md §1 D-02 design ceiling is 5000/JVM, but Phase 18 verification only covered ≤1000. Plan 1 verifies before serious tuning. |
-| A7 | `-XX:StartFlightRecording=settings=profile` produces ≤5 MB at 60s × 1000 bots | §Code Examples | Real recording could exceed; need `jfr filter` post-processing | **[ASSUMED]** — confirm in Plan 1; if always >5 MB, plan for filtering. |
+| A7 | `-XX:StartFlightRecording=settings=profile` produces ≤10 MB at 60s × 1000 bots | §Code Examples | Real recording could exceed; need `jfr filter` post-processing | **[ASSUMED]** — confirm in Plan 1; if always >10 MB, plan for filtering. (D-05 cap relaxed to 10/50 MB per cross-AI review concern #3; A7 is now trivially true at the relaxed cap.) |
 | A8 | Generational ZGC default-on in Temurin 21.0.6 | §State of the Art | If still single-gen, GC choice analysis differs | **[ASSUMED]** — `-XX:+UseZGC -XX:+ZGenerational` is the explicit form; verify per-vendor default in Plan 4. |
 
 **The presence of A1-A8 means:** Plan 1 should explicitly verify A1, A2, A6, A7, A8 before later plans depend on them. A3 is replaced by first JFR. A4 may need .jfc tweaking.
@@ -647,7 +651,7 @@ Phase 20 is internal performance tuning. The wire schema is locked (`15-SCHEMA.m
 - `profiles/lock-1000bots-baseline-c22e487.html`
 - Sibling `*.meta.json` files
 
-**Verification:** All artifacts < 5 MB each, total ≤ 20 MB. Server SHA matches filename SHA. Three-gate stack green afterward (sanity).
+**Verification:** All artifacts < 10 MB each, total ≤ 50 MB. Server SHA matches filename SHA. Three-gate stack green afterward (sanity).
 
 **Blocks every later plan.**
 

@@ -228,3 +228,13 @@ Sub-items:
 - [ ] **M-A-003 — Research: how does current RPS combat resolve multi-target adjacency?** When `SimulationEngine @Order(10)` resolves passive RPS combat for a solo entity adjacent to multiple eligible prey, how is the target chosen? Deterministic by scan order (N→NE→…) or random? Does it consider prey state (energy, starving flag, buffs)? If deterministic, M-A-002 mainly adds *target preference* (small refactor). If random, M-A-002 introduces deterministic-by-bot-choice combat alongside random-by-position combat (different mental model). **Gates M-A-002 design.** Output: `RESEARCH.md`-style write-up with file paths, line numbers, code traces of the multi-target path in `SimulationEngine`.
 
 **Source-of-context for promotion:** see `.planning/phases/19.1-address-p19-multi-review-pass-4-findings-f1-f2-f3-unshipped-/19.1-REVIEWS-pass6-TRIAGE.md` and the verb-coverage deep-dive referenced from G1-revised's anti-reflag note in `19.1-05-PLAN.md` line 38. The G1-revised treatment in Phase 19.1 deliberately pins current "permissive at queue, silent at resolve" semantics in the golden trace; this phase rebaselines after the cleanup lands.
+
+### Phase 999.6: VT pinning — `synchronized(session)` → `ReentrantLock` conversion (BACKLOG)
+
+**Goal:** Convert the four `synchronized(session)` writers documented in `CLAUDE.md` §Outbound concurrency to `ReentrantLock`-based mutual exclusion, eliminating virtual-thread carrier pinning at the WebSocket session-write boundary. Preserve the synchronized-session-monitor contract — the conversion is a like-for-like swap of monitor primitive, not a contract relaxation.
+
+**Requirements:** None (post-MVP scale-engineering follow-up; emerges from Phase 20 review concern #2)
+**Depends on:** Phase 20 (Plan 5 Task 5.0 decision tree's `pinning-dominates` outcome triggers promotion) OR Phase 21 benchmark gate finding pinning is the binding constraint at 1000+ bots.
+**Plans:** 0 plans (promote with `/gsd-capture --backlog promote` when JFR evidence shows pinning > threshold)
+
+**Source-of-context for promotion:** see `.planning/phases/999.6-vt-pinning-reentrantlock-conversion/CONTEXT.md` (full stub) and `.planning/phases/20-connection-multiplexing-runtime-tuning/20-REVIEW-DISPOSITIONS.md` Concern #2.

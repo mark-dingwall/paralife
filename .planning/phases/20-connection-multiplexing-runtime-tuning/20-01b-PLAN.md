@@ -19,7 +19,7 @@ requirements: [SCALE-09]
 
 must_haves:
   truths:
-    - "JFR baseline files for 100 / 500 / 1000-bot runs exist under profiles/, each ≤5 MB."
+    - "JFR baseline files for 100 / 500 / 1000-bot runs exist under profiles/, each ≤10 MB."
     - "Three baseline async-profiler flamegraph HTMLs exist (cpu/alloc/lock at 1000 bots)."
     - "Every committed baseline JFR filename contains the literal substring `c22e487` (D-19)."
     - "Each JFR has a sibling *.meta.json carrying captured_at_sha=c22e487, scenario, duration, harness_args, captured_utc, JVM flags, and A1/A2/A6/A7/A8 verification outcomes."
@@ -55,7 +55,7 @@ must_haves:
 <objective>
 Capture the **c22e487 baseline JFRs + flamegraphs** that every later plan cites for before/after deltas. This plan is the gate: no other plan in waves 2/3/4 starts coding without these baseline artifacts in tree (with the explicit exception of Plan 2 + Plan 3, which only need Plan 20-01's toolchain to scaffold their `@ConfigurationProperties` records).
 
-Purpose: D-04 / D-05 / D-06 / D-19 demand JFR + async-profiler artifacts committed under `.planning/phases/20-connection-multiplexing-runtime-tuning/profiles/`, baseline anchored to commit `c22e487`, with size discipline (≤5 MB per file, ≤20 MB total) so reviewers can git-checkout c22e487 and reproduce.
+Purpose: D-04 / D-05 / D-06 / D-19 demand JFR + async-profiler artifacts committed under `.planning/phases/20-connection-multiplexing-runtime-tuning/profiles/`, baseline anchored to commit `c22e487`, with size discipline (≤10 MB per file, ≤50 MB total) so reviewers can git-checkout c22e487 and reproduce.
 
 Output: three baseline JFRs (100/500/1000 bots), three async-profiler flamegraphs at 1000 bots, sibling meta.json files, plus explicit verification of assumptions A1, A2, A6, A7, A8 from RESEARCH.md.
 </objective>
@@ -147,7 +147,7 @@ cat > .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-10
     "A1": "<verbatim setter availability check on Jetty 12.0.18 — see RESEARCH §Assumptions A1>",
     "A2": "async-profiler 4.x version: <output of asprof --version>",
     "A6": "LoadHarness sustained 1000 conns from single JVM: yes/no + final connect-rate",
-    "A7": "JFR file size at 60s × 1000 bots: <bytes> (≤5 MB target)",
+    "A7": "JFR file size at 60s × 1000 bots: <bytes> (≤10 MB target)",
     "A8": "Generational ZGC default-on in Temurin 21.0.6: <output of java -XX:+PrintFlagsFinal -version | grep ZGenerational>"
   }
 }
@@ -158,11 +158,11 @@ EOF
 
 **Verification before reply:**
 - `ls -lh .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/` shows 3 baseline JFRs + 3 baseline flamegraph HTMLs + 3 meta.json
-- Every JFR file size ≤5 MB; total ≤20 MB
+- Every JFR file size ≤10 MB; total ≤50 MB
 - Each filename contains the substring `c22e487`
 - Three-gate stack runs green in-suite: `./gradlew test --tests GoldenTraceEquivalenceTest --tests GoldenTraceWithActionsTest --tests LiveEntityRegistryInvariantTest` exits 0
   </how-to-verify>
-  <resume-signal>Reply `baseline-captured` with file sizes confirmed under 5 MB each AND `./gradlew test --tests GoldenTraceEquivalenceTest --tests GoldenTraceWithActionsTest --tests LiveEntityRegistryInvariantTest` green. If A1 (Jetty 12.0.18 setter availability) reveals a missing setter, note it explicitly so Plan 2 drops that field.</resume-signal>
+  <resume-signal>Reply `baseline-captured` with file sizes confirmed under 10 MB each AND `./gradlew test --tests GoldenTraceEquivalenceTest --tests GoldenTraceWithActionsTest --tests LiveEntityRegistryInvariantTest` green. If A1 (Jetty 12.0.18 setter availability) reveals a missing setter, note it explicitly so Plan 2 drops that field.</resume-signal>
 </task>
 
 <task type="auto">
@@ -177,18 +177,18 @@ Programmatically verify Task 1b.0's outputs and write the plan summary:
 
 1. List artifacts: `ls -lh .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/`
 2. Confirm 3 JFRs (100/500/1000 baselines), 3 flamegraph HTMLs (cpu/alloc/lock at 1000), 3 meta.json. Each filename contains `c22e487`.
-3. Verify total size ≤20 MB: `du -sh .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/`
-4. Verify per-file size ≤5 MB: `find .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/ -type f -size +5M` MUST be empty.
+3. Verify total size ≤50 MB: `du -sh .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/`
+4. Verify per-file size ≤10 MB: `find .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/ -type f -size +10M` MUST be empty.
 5. Run sanity gate: `./gradlew test --tests GoldenTraceEquivalenceTest --tests GoldenTraceWithActionsTest --tests LiveEntityRegistryInvariantTest`
 6. Write `20-01b-SUMMARY.md` capturing: artifacts list with sizes, A1-A8 verification outcomes (from meta.json), three-gate result, any deviations from RESEARCH assumptions (especially A1 — if a Jetty setter is unavailable on 12.0.18, name it explicitly so Plan 2 drops it from the JettyRuntimeConfig record).
   </action>
   <verify>
-    <automated>ls .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-100bots-baseline-c22e487.jfr .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-500bots-baseline-c22e487.jfr .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-1000bots-baseline-c22e487.jfr .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/cpu-1000bots-baseline-c22e487.html .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/alloc-1000bots-baseline-c22e487.html .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/lock-1000bots-baseline-c22e487.html && [ -z "$(find .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/ -type f -size +5M)" ] && [ "$(du -sb .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/ | cut -f1)" -le 20971520 ] && ./gradlew test --tests GoldenTraceEquivalenceTest --tests GoldenTraceWithActionsTest --tests LiveEntityRegistryInvariantTest</automated>
+    <automated>ls .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-100bots-baseline-c22e487.jfr .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-500bots-baseline-c22e487.jfr .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-1000bots-baseline-c22e487.jfr .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/cpu-1000bots-baseline-c22e487.html .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/alloc-1000bots-baseline-c22e487.html .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/lock-1000bots-baseline-c22e487.html && [ -z "$(find .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/ -type f -size +10M)" ] && [ "$(du -sb .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/ | cut -f1)" -le 52428800 ] && ./gradlew test --tests GoldenTraceEquivalenceTest --tests GoldenTraceWithActionsTest --tests LiveEntityRegistryInvariantTest</automated>
   </verify>
   <acceptance_criteria>
     - All 6 baseline files (3 JFRs + 3 flamegraph HTMLs) exist with `c22e487` in filename
-    - `find ... -type f -size +5M` empty (D-05 ≤5 MB per file)
-    - Total profiles/ size ≤20 MB (D-05 budget)
+    - `find ... -type f -size +10M` empty (D-05 ≤10 MB per file)
+    - Total profiles/ size ≤50 MB (D-05 budget)
     - Three-gate stack exits 0 in-suite
     - `20-01b-SUMMARY.md` exists, lists artifacts with sizes, records A1-A8 outcomes
     - `grep -q "c22e487" .planning/phases/20-connection-multiplexing-runtime-tuning/20-01b-SUMMARY.md` (SHA cited)
@@ -212,7 +212,7 @@ Programmatically verify Task 1b.0's outputs and write the plan summary:
 | Threat ID | Category | Component | Disposition | Mitigation Plan |
 |-----------|----------|-----------|-------------|-----------------|
 | T-20-V7 | I (Information disclosure) | meta.json sidecar | mitigate | meta.json carries no secrets, only SHA + scenario + JVM flags + assumption notes; reviewed before commit |
-| T-20-DOS-1 | D (DoS) | profiles/ directory growth | mitigate | D-05 ≤5 MB/file ≤20 MB total enforced by Task 1b.1 acceptance criteria |
+| T-20-DOS-1 | D (DoS) | profiles/ directory growth | mitigate | D-05 ≤10 MB/file ≤50 MB total enforced by Task 1b.1 acceptance criteria |
 </threat_model>
 
 <verification>
@@ -225,7 +225,7 @@ Programmatically verify Task 1b.0's outputs and write the plan summary:
 <success_criteria>
 - 3 JFRs + 3 flamegraph HTMLs + meta.json sidecars under `.planning/phases/20-connection-multiplexing-runtime-tuning/profiles/`
 - D-19 SHA-anchoring enforced (filenames contain `c22e487`)
-- D-05 size discipline enforced (≤5 MB/file, ≤20 MB total)
+- D-05 size discipline enforced (≤10 MB/file, ≤50 MB total)
 - Three-gate stack green in-suite
 - Assumptions A1-A8 from RESEARCH explicitly verified in meta.json + summary
 </success_criteria>
