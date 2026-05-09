@@ -476,37 +476,37 @@ JFR recordings carry process metadata — but NOT git SHA. Two reproducibility m
 
 **The presence of A1-A8 means:** Plan 1 should explicitly verify A1, A2, A6, A7, A8 before later plans depend on them. A3 is replaced by first JFR. A4 may need .jfc tweaking.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **What's the actual `jdk.VirtualThreadPinned` event rate at 1000 bots on c22e487?**
    - What we know: pinning is structurally possible at 4 sites; mitigation is `ReentrantLock`.
    - What's unclear: whether it's a real bottleneck or theoretical.
-   - Recommendation: Plan 1 baseline JFR resolves this. If pinning dominates, Plan 5 may need to expand from "codec opts" to "codec opts + monitor → ReentrantLock conversion."
+   - RESOLVED-DEFERRED-TO-PLAN-5-TRIAGE: Plan 1 baseline JFR resolves this. If pinning dominates, Plan 5 may need to expand from "codec opts" to "codec opts + monitor → ReentrantLock conversion."
 
 2. **Is `paralife.runtime.app.*` one record or several?**
    - What we know: D-09 says either is acceptable.
    - What's unclear: cohesion of the candidate fields (outbound queue + encode-batch + parallel-encode-threshold + buffer-pool capacity).
-   - Recommendation: single record `AppRuntimeConfig` with nested sub-records (`OutboundConfig`, `EncodeConfig`) — matches `AdmissionConfig`'s nested-record style.
+   - RESOLVED: single record `AppRuntimeConfig` with nested sub-records (`OutboundConfig`, `EncodeConfig`) — matches `AdmissionConfig`'s nested-record style.
 
 3. **Should `paralife.runtime.app.outbound-queue-size` shadow `paralife.admission.backpressure.outbound-queue-size`?**
    - What we know: D-20 says no — leave the admission key in place.
    - What's unclear: whether `AppRuntimeConfig.outbound` should reference the admission value (read-through) or stay silent on the queue.
-   - Recommendation: silent — per D-20, queue size lives in admission. `AppRuntimeConfig.outbound` carries SIBLING knobs (e.g., `queue-watermark-pct`, `frame-size-budget-bytes`).
+   - RESOLVED: silent — per D-20, queue size lives in admission. `AppRuntimeConfig.outbound` carries SIBLING knobs (e.g., `queue-watermark-pct`, `frame-size-budget-bytes`).
 
 4. **Is `tools/async-profiler/` committed or external?**
    - What we know: D-05 wants reproducibility; ap-loader allows hermetic embedding (~5 MB).
    - What's unclear: whether the team prefers a fat repo or external bootstrap docs.
-   - Recommendation: external + bootstrap docs — keeps repo small, async-profiler ships frequently.
+   - RESOLVED: external + bootstrap docs — keeps repo small, async-profiler ships frequently.
 
 5. **Should `20-RUNTIME.md` cite JFR via relative paths or commit hashes?**
    - What we know: D-19 anchors filenames to SHA.
    - What's unclear: whether `20-RUNTIME.md` text says `profiles/jfr-1000bots-baseline-c22e487.jfr` or also embeds the SHA-vs-HEAD diff text.
-   - Recommendation: relative paths in body, SHA-vs-HEAD pair listed in a top-level "Profile Index" table. Mirrors `17-ADMISSION.md` style.
+   - RESOLVED: relative paths in body, SHA-vs-HEAD pair listed in a top-level "Profile Index" table. Mirrors `17-ADMISSION.md` style.
 
 6. **Where exactly does the new CLAUDE.md §Runtime tuning subsection land?**
    - What we know: D-15 says "concise" + cross-ref `20-RUNTIME.md`.
    - What's unclear: whether it goes before §Outbound concurrency, after §Connection model, or as a sibling.
-   - Recommendation: AFTER §Connection model (line 142) — natural reading order is Outbound concurrency → Connection model → Runtime tuning. Place a back-reference in §Outbound concurrency pointing forward.
+   - RESOLVED: AFTER §Connection model (line 142) — natural reading order is Outbound concurrency → Connection model → Runtime tuning. Place a back-reference in §Outbound concurrency pointing forward.
 
 ## Environment Availability
 
