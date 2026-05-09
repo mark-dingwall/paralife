@@ -218,7 +218,16 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   intact. **Backlog item filed:** future namespace consolidation under
   `paralife.runtime.app.*` (Phase 999.x — see ROADMAP backlog).
 
-- **D-21 (added 2026-05-09 per cross-AI review concern #1 — see 20-REVIEW-DISPOSITIONS.md):** **SCALE-08 evidence acceptance permits a documented null-result.** D-10 / D-13's "JFR-driven only" stance applies to *codec* opts. SCALE-08's measurable evidence requirement is satisfied by ANY of: (1) shipped codec opts with JFR-cited delta; (2) JFR-justified runtime-knob (Plan 2 / Plan 3) tightening with measured delta; (3) **documented null-result** showing the c22e487 baseline is at the relevant performance floor at 1000 bots (e.g., `jdk.GCPhasePause` mean ≤1ms, `jdk.VirtualThreadPinned` count <10/min, codec stack ≤2% CPU, allocation steady-state). The tuning surface (Plan 2 + Plan 3 records + Plan 4 per-tier recipes + Plan 1/1b baseline JFRs) IS the SCALE-08 deliverable; a measured null-result is a measurement, not a no-op. Pinning-dominates supersedes runtime-knob tightening (do NOT manufacture a fallback delta on top of dominant pinning — file Phase 999.6 stub instead).
+- **D-21 (added 2026-05-09 per cross-AI review concern #1; amended pass-2 evening per Concerns #9 + #11 — see 20-REVIEW-DISPOSITIONS.md):** **SCALE-08 evidence acceptance permits a documented null-result OR a documented dominant-pinning finding.** D-10 / D-13's "JFR-driven only" stance applies to *codec* opts. SCALE-08's measurable evidence requirement is satisfied by ANY of the following four outcomes (in precedence order — earlier outcomes supersede later ones during Plan 5 triage):
+
+  1. **Shipped codec opts** with JFR-cited delta on `paralife.tick.health.work-time-ms` or `paralife.outbound.detach.timeout` (D-10 / D-13).
+  2. **JFR-justified runtime-knob tightening** (Plan 2 / Plan 3 record default change) with measured delta — same triage rigor as a codec opt (JFR signal + two-consecutive-green three-gate verification + tuned-state JFR delta documented).
+  3. **Documented null-result** showing the c22e487 baseline is at the relevant performance floor at 1000 bots (e.g., `jdk.GCPhasePause` mean ≤1ms, `jdk.VirtualThreadPinned` count <10/min, codec stack ≤2% CPU, allocation steady-state). The tuning surface (Plan 2 + Plan 3 records + Plan 4 per-tier recipes + Plan 1/1b baseline JFRs + Plan 5 tuned-state equivalence capture) IS the SCALE-08 deliverable; a measured null-result is a measurement, not a no-op.
+  4. **Dominant pinning with backlog-handoff** (added pass-2 per Concern #9 — adopted OpenCode's reading) — JFR shows `jdk.VirtualThreadPinned` is the binding constraint at the relevant scale AND the `synchronized → ReentrantLock` conversion work is filed as Phase 999.6 (`vt-pinning-reentrantlock-conversion`) per pass-1 Concern #2 disposition AND the tuned-state JFR confirms equivalence (no regression introduced by Plan 5). Structurally identical to outcome 3: the system is at the performance floor for the work Plan 5 is permitted to do; the unresolved overhead path is documented and handed off to a backlog phase rather than masked by a forced-fallback knob change. **Codex's pass-2 reading (block-and-don't-claim-SCALE-08) is rejected per Concern #9 disposition:** the alternative would either downgrade SCALE-08 (rejected — D-21 rationale is sound) or expand Plan 5 scope to include the conversion (rejected — Phase 999.6 backlog is pass-1 #2 disposition).
+
+  **Pinning-dominates supersedes runtime-knob tightening (do NOT manufacture a fallback delta on top of dominant pinning — outcome 4 is the correct disposition; outcome 2 is wrong when pinning is dominant).**
+
+  **Noise floor convention (added pass-2 per Concern #11):** "tuned ≈ baseline within noise floor" means **±5% of baseline mean OR ±1σ, whichever is larger**, computed across the JFR sample window. Plan 5 success criteria + Plan 6 §4.2 cite this convention by reference. Below the noise floor, document the noise-floor evidence and proceed (outcome 3 with a sub-noise-floor delta is acceptable when JFR justified the tightening).
 
 ### Claudes Discretion
 
@@ -304,7 +313,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   `GridConfig.java`, `TickConfig.java` — `@ConfigurationProperties` precedent records the
   new `paralife.runtime.*` records mirror
 - `src/main/resources/application.yml` — config root; new `paralife.runtime.*` keys land
-  here with sensible defaults
+  here with sensible defaults; **`management.endpoints.web.exposure.include: health,info,metrics` (line 15) exposes `/actuator/metrics/{name}` — Plan 1b + Plan 5 use this for headline-gauge JSON sidecar capture per pass-2 Concern #10 disposition**
 - `build.gradle.kts:75-76` — `forkEvery=1` enforced unconditional (P22); D-06 notes profile
   runs are out-of-test so this does not apply
 - `src/test/resources/junit-platform.properties` — 5-min JUnit timeout (P22); same
@@ -315,7 +324,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
 - `.planning/phases/20-connection-multiplexing-runtime-tuning/20-RUNTIME.md` — D-14
   canonical operator/contributor doc
 - `.planning/phases/20-connection-multiplexing-runtime-tuning/profiles/` — D-05 committed
-  JFR + flamegraph artifacts; baseline filenames cite `c22e487` per D-19
+  JFR + flamegraph artifacts; baseline filenames cite `c22e487` per D-19; **per-tier metric sidecar JSON files (`metrics-{N}bots-baseline-c22e487.json` + `metrics-1000bots-tuned-{HEAD}.json`) added pass-2 per Concern #10 disposition**
 
 </canonical_refs>
 
@@ -342,6 +351,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
 - **LoadHarness (Phase 18)** — the 1000-bot driver. Phase 20 profile runs invoke it directly
   via `loadHarnessJar` CLI (D-06); no harness-side code change. `--harness-id` and JSON run
   report give per-run attribution.
+- **Spring Boot Actuator at `/actuator/metrics/{name}`** (already wired via `application.yml:15`) — Plan 1b baseline capture + Plan 5 tuned capture poll the named meters via `curl` into JSON sidecars during the 180s load window. No code change required (pass-2 Concern #10 disposition).
 
 ### Established Patterns
 
@@ -464,3 +474,4 @@ None — no pending todos surfaced for Phase 20.
 
 *Phase: 20-connection-multiplexing-runtime-tuning*
 *Context gathered: 2026-05-09 (rebuilt from 2026-05-02 superseded draft + audit)*
+*Pass-2 amendments: 2026-05-09 evening — D-21 outcome 4 added (dominant pinning with backlog-handoff); noise-floor convention added; actuator metric exposure noted in canonical refs; per-tier metric sidecars added to phase-internal artifacts list*
