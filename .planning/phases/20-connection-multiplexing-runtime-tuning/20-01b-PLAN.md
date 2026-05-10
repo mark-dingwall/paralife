@@ -180,7 +180,14 @@ jfr summary .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/
 #    paths are metrics-100bots-baseline-c22e487.json and metrics-500bots-baseline-c22e487.json.
 #    For the 100/500 tiers flamegraph captures are NOT required — only the 1000 tier needs them
 #    (per existing must_haves; flamegraph capture is at 1000-bot scale only).
-# 7. Stop server, return to HEAD:
+# 7. Pass-3 Concern #21: Run three-gate stack WHILE STILL ON c22e487 and capture
+#    the result for the meta.json `assumptions_verified.three_gate_at_baseline`
+#    field below. Running the gate after `git checkout -` would verify HEAD, not
+#    the baseline SHA the JFRs claim to be anchored to.
+./gradlew test --tests GoldenTraceEquivalenceTest --tests GoldenTraceWithActionsTest --tests LiveEntityRegistryInvariantTest
+THREE_GATE_BASELINE=$?  # 0 == green; record in meta.json A9
+
+# 8. Stop server, return to HEAD:
 kill $SERVER_PID
 git checkout -
 
@@ -199,7 +206,8 @@ cat > .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-10
     "A2": "async-profiler 4.x version: <output of asprof --version>",
     "A6": "LoadHarness sustained 1000 conns from single JVM: yes/no + final connect-rate",
     "A7": "JFR file size at 60s × 1000 bots: <bytes> (≤10 MB target)",
-    "A8": "Generational ZGC default-on in Temurin 21.0.6: <output of java -XX:+PrintFlagsFinal -version | grep ZGenerational>"
+    "A8": "Generational ZGC default-on in Temurin 21.0.6: <output of java -XX:+PrintFlagsFinal -version | grep ZGenerational>",
+    "A9_three_gate_at_baseline": "<exit code from `./gradlew test --tests GoldenTraceEquivalenceTest --tests GoldenTraceWithActionsTest --tests LiveEntityRegistryInvariantTest` while on c22e487 — Pass-3 Concern #21 — must be 0 for the baseline JFRs to be honoured>"
   }
 }
 EOF

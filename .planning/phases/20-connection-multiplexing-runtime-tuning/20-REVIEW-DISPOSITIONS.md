@@ -278,15 +278,106 @@ Rationale: cleaner long-term — canonical numbering, no executor-strictness ris
 **Disposition:** **resolved-on-verification** (filesystem check confirms the file exists at 576 lines).
 **Rationale:** Verified via `ls -la .planning/phases/20-connection-multiplexing-runtime-tuning/20-PATTERNS.md` — file exists. No edit required. OpenCode's pass-2 review packet did not include the file but the orchestrator's planner-prompt files_to_read block does include it; this was a review-packet completeness issue, not a plan defect.
 
+## Pass-3 dispositions (#21–#30)
+
+Pass-3 was framed for MVP-scope discipline. Three reviewers (Claude, OpenCode, Gemini) rated overall risk **LOW**; Codex rated **MEDIUM** on plan-quality bugs only. **No reviewer flagged scope-creep against MVP**, and no disposed pass-1/pass-2 concern was re-opened. Concerns below were applied as inline plan edits (not via `/gsd-plan-phase --reviews`) — diff scope matches concern scope, no replan churn at pass 3.
+
+### Accepted: codex HIGH NEW — Plan 1b three-gate runs after `git checkout -` (verifies HEAD, not c22e487)
+
+**Concern #21.** Reviewer: codex (HIGH, NEW).
+**Concern:** Task 1b.0's three-gate sanity check appeared after `git checkout -`, so it would verify HEAD rather than the c22e487 baseline the JFRs claim to be anchored to.
+**Disposition:** **accepted**. Inserted explicit step before `git checkout -` that runs the three-gate stack while still on c22e487, captures the exit code, and records it in each meta.json under `assumptions_verified.A9_three_gate_at_baseline`. The post-checkout three-gate run in Task 1b.1 is preserved (verifies HEAD-equivalence after the round-trip).
+**Plan edits:** `20-01b-PLAN.md` Task 1b.0 — added new step 7 (three-gate at baseline) before the existing kill/`git checkout -`; appended `A9_three_gate_at_baseline` field to the meta.json template.
+
+### Accepted: opencode MEDIUM NEW (corroborated by codex MEDIUM, claude LOW) — `@SpringBootTest(classes = <record>)` fails Spring context startup
+
+**Concern #22.** Reviewers: opencode (MEDIUM, NEW), codex (MEDIUM), claude (LOW).
+**Concern:** Plan 2 + Plan 3 binding round-trip tests used `@SpringBootTest(classes = JettyRuntimeConfig.class)` / `@SpringBootTest(classes = AppRuntimeConfig.class)`. A plain Java `record` is not a `@Configuration` and Spring fails to start the context with no bean definitions. The fallback to `@SpringBootTest` loading `ParalifeApplication`'s full context is heavyweight under `forkEvery=1`. Project precedent at `AdmissionConfigTest.java:15` uses a static `TestApp` `@Configuration` wrapper.
+**Disposition:** **accepted**. Adopted the `TestApp` wrapper pattern in both plans. Updated `<behavior>` test descriptions, the `<action>` block instructing test shape, the embedded code template, the import list (`org.springframework.context.annotation.Configuration`), and the fallback note (now reframed as a "why the wrapper" rationale rather than a fallback).
+**Plan edits:** `20-02-PLAN.md` lines 151, 256, 317-323, 338, imports block; `20-03-PLAN.md` lines 318-324, 340, imports block.
+
+### Accepted: codex HIGH NEW — Plan 3 javadoc-stripping grep falsely matches `@see` reference to `outboundQueueSize`
+
+**Concern #23.** Reviewer: codex (HIGH, NEW).
+**Concern:** Task 3.1 acceptance `grep -v '^[[:space:]]*//' AppRuntimeConfig.java | grep -q "outboundQueueSize"` exits 1 ⇒ would fail because the proposed javadoc includes `{@link AdmissionConfig.BackpressureConfig#outboundQueueSize()}` and the comment-stripping filter only removes `//` line comments, not `/* */` block comments. Comment-only references SHOULD be allowed (the disposition framing mentioned them) — the original grep just couldn't distinguish them.
+**Disposition:** **accepted**. Replaced the brittle grep with a record-component check: `grep -qE "[[:space:]]int[[:space:]]+outboundQueueSize\\b" src/main/java/com/paralife/runtime/AppRuntimeConfig.java` exits 1. This matches the actual D-20 invariant ("no record component named `outboundQueueSize` in `AppRuntimeConfig`") rather than approximating it via comment-stripping.
+**Plan edits:** `20-03-PLAN.md` line 349.
+
+### Accepted: codex HIGH NEW (corroborated by opencode MEDIUM) — Plan 4 §3 recipes use ambiguous `paralife-*.jar` glob
+
+**Concern #24.** Reviewers: codex (HIGH, NEW), opencode (MEDIUM, NEW).
+**Concern:** Plan 1b's capture script was hardened to `SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | head -1)` per Pass-2 Concern #15, but Plan 4 §3 recipes (which Phase 21 will copy-paste verbatim) still used the ambiguous `-jar build/libs/paralife-*.jar` form. The wildcard matches both the server jar (`paralife-*-SNAPSHOT.jar`) and the load-harness jar (`paralife-*-SNAPSHOT-load-harness.jar`).
+**Disposition:** **accepted**. Hardened §3.1 and §3.3 recipes to the same `SERVER_JAR` / `HARNESS_JAR` shell-variable pattern Plan 1b uses. §3.2 inherits via "same as §3.1 with ..." prose.
+**Plan edits:** `20-04-PLAN.md` §3.1 (lines ~299–316), §3.3 (lines ~349–366).
+
+### Accepted: codex MEDIUM NEW — Plan 4 §3.3 "may convert synchronized→ReentrantLock" conflicts with Phase 999.6 disposition
+
+**Concern #25.** Reviewer: codex (MEDIUM, NEW).
+**Concern:** §3.3 Pinning monitor said "Plan 5 may convert `synchronized(session)` → `ReentrantLock`," which conflicts with the pass-1 Concern #2 disposition that filed the conversion as Phase 999.6 backlog and the D-21 outcome 4 framing that Plan 5 documents-and-cites rather than performs the conversion.
+**Disposition:** **accepted**. Reworded the pinning-monitor paragraph to say "Plan 5 documents the finding and cites Phase 999.6 per D-21 outcome 4 — Plan 5 does NOT perform the conversion". Removes the contradiction with the settled disposition.
+**Plan edits:** `20-04-PLAN.md` line 389.
+
+### Accepted: claude MEDIUM NEW (corroborated by codex MEDIUM) — Plan 5 decision-tree precedence vs D-21 supersedes rule
+
+**Concern #26.** Reviewers: claude (MEDIUM, NEW), codex (MEDIUM).
+**Concern:** Task 5.0's decision tree listed outcomes 1→2→3→4 with "earlier outcomes supersede later ones", but the same task body said "**Pinning-dominates supersedes runtime-knob tightening**". An executor reading the tree top-to-bottom could fire outcome 2 (knob tightening) when the JFR shows BOTH a tightenable knob signal AND dominant pinning — exactly the case D-21 forbids. The supersedes rule was asserted in prose but not enforced structurally in the tree.
+**Disposition:** **accepted**. Reordered the tree so pinning-dominates (outcome 4) is evaluated immediately after outcome 1 and BEFORE outcome 2. Outcome numbering retains pass-2 labels for cross-reference (REVIEW-DISPOSITIONS, Plan 6 grep, downstream tooling) — only the **evaluation order** changed. Outcomes 2 and 3 now begin with "only reached if outcomes 1 and 4 do NOT fire" / "if outcomes 1, 4, and 2 do NOT fire" to make the structural supersedes explicit.
+**Plan edits:** `20-05-PLAN.md` lines 174–195.
+
+### Accepted: codex HIGH NEW (corroborated by opencode reviewer note) — Plan 5 outcome 2 yaml-only edit creates split-brain defaults
+
+**Concern #27.** Reviewer: codex (HIGH, NEW).
+**Concern:** Outcome 2 mandated tightening the knob's `application.yml` default but did not require updating the corresponding record `@DefaultValue("...")`, `defaults()` static factory, tests asserting the literal default, or `20-RUNTIME.md §3` recipe defaults. Result: split-brain defaults across config code, tests, and docs.
+**Disposition:** **accepted**. Expanded outcome 2's required actions to a lockstep checklist covering yaml + `@DefaultValue` + `defaults()` factories + every test asserting the literal + recipe-block defaults + binding-site javadoc (Pass-2 Concern #12 was already in the list). `20-05-TRIAGE.md` now records which sources were updated as an audit trail.
+**Plan edits:** `20-05-PLAN.md` decision-tree outcome 2 (added paragraph after the candidate-knob table) + Task 5.1 outcome-2 instructions (replaced the previous "skip steps 1-3 (no codec edit). Instead:" block).
+
+### Accepted: claude LOW NEW — outbound-queue-size detach.timeout threshold ≥1 event is statistical noise
+
+**Concern #28.** Reviewer: claude (LOW, NEW).
+**Concern:** The outcome-2 candidate-knob table justified tightening `paralife.admission.backpressure.outbound-queue-size` on "≥1 event in baseline window", which is statistical noise (a single GC blip / OS-scheduler hiccup during a 180s 1000-bot run could trigger one event). Tightening a critical backpressure default on this evidence is overshoot.
+**Disposition:** **accepted**. Raised the threshold to "≥10 events/min sustained over the steady-state window OR ≥3 events at the same harness phase" — both options give a defensible noise-floor margin.
+**Plan edits:** `20-05-PLAN.md` candidate-knob table (Pass-3 Concern #28 line in the row for `paralife.admission.backpressure.outbound-queue-size`).
+
+### Accepted: claude MEDIUM NEW — Plan 5 → Plan 6 outcome-signal coordination (literal `Plan 5 outcome:` prefix)
+
+**Concern #29.** Reviewer: claude (MEDIUM, NEW).
+**Concern:** Plan 6 Task 6.1's tiered line-count case-statement reads `OUTCOME=$(grep -E "^Plan 5 outcome:" 20-05-SUMMARY.md | head -1)`, but Plan 5's `<output>` block said only "Triage outcome from Task 5.0 (...)" — not mandating the literal `Plan 5 outcome:` start-of-line prefix. If Plan 5's executor wrote "## Outcome" or "**Outcome:**" instead, the grep would return empty, the case would fall through to default `*) [ "$LINES" -ge 250 ]`, and an outcome-1/2 plan with substantive shipped opts would get the lower (250-line) bar — an effort underclaim with no error signal.
+**Disposition:** **accepted**. Plan 5's `<output>` block now mandates that the **first non-frontmatter line of `20-05-SUMMARY.md` MUST be exactly `Plan 5 outcome: <signal>`**. `<signal>` is one of `triaged`, `runtime-knob-tightened`, `null-result`, `pinning-dominates-with-backlog-handoff`. Plan 6's grep was already correct; the gap was upstream contract enforcement.
+**Plan edits:** `20-05-PLAN.md` `<output>` block (added new first bullet).
+
+### Accepted: codex HIGH NEW — Plan 6 `files_modified` missing `20-VALIDATION.md`
+
+**Concern #30.** Reviewer: codex (HIGH, NEW).
+**Concern:** Task 6.5 modifies `20-VALIDATION.md` (flips frontmatter to `nyquist_compliant: true`), but the file was missing from Plan 6's `files_modified` frontmatter list. Execution / review tooling that uses `files_modified` for impact analysis or change-staging would skip this file.
+**Disposition:** **accepted**. Added `.planning/phases/20-connection-multiplexing-runtime-tuning/20-VALIDATION.md` to Plan 6's `files_modified` list with an inline comment citing Pass-3 Concern #30 + Task 6.5.
+**Plan edits:** `20-06-PLAN.md` frontmatter `files_modified` list.
+
+### Filed-as-followup: gemini LOW × 6, opencode/codex LOW (pass-3 minor)
+
+The following pass-3 LOW concerns were not applied as inline plan edits at this pass — they are either covered by existing wave-2/3 verification gates or are operator-notes that don't change MVP correctness:
+
+- **gemini LOW (Plan 1):** `linux-x64` async-profiler assumption. Filed-as-followup; the bootstrap doc is a manual checkpoint and the executor will hit the architecture mismatch immediately if running on ARM.
+- **gemini LOW (Plan 1b):** `curl -m 2` timeout in actuator-sample loop. Filed-as-followup; if a 1000-bot stress run hangs the actuator, the metric sidecar `jq -e '.samples | length >= 3'` gate will catch the underclaim — the only damage is a re-run, not a silent corruption.
+- **gemini LOW (Plan 2):** `JettyRequestUpgradeStrategy` signature ripple. Filed-as-followup; `./gradlew compileJava test` will surface any hidden manual instantiation. No action needed pre-execution.
+- **gemini LOW (Plan 4):** `-Xms2g -Xmx2g` hardcoded before JFR analysis. Filed-as-followup; Plan 4 already marks GC choice as "Pending — JFR-driven" and Plan 6 is empowered to re-tune the recipe heap if Plan 5 evidence justifies it. Adding a Plan 6 reminder is documentation churn at MVP scope.
+- **gemini MEDIUM (Plan 5 triage subjectivity):** "default to Outcome 3 if no >5% hot path". Already covered by D-21 outcome 3 / outcome 4 framing — the four-outcome decision tree is the explicit fallback. No edit.
+- **gemini LOW (Plan 6 awk line-count brittleness):** filed-as-followup; the executor's instruction to "manually verify if awk fails" is already documented (Plan 6 already says don't pad to pass the script).
+- **claude LOW (Plan 1):** async-profiler grep case sensitivity. Filed-as-followup; trivial executor-time fix if it ever fires (`grep -iE`).
+- **codex/opencode LOW (Plan 5 bounds):** T-20-V5 grep covers `MAX_S_ENTRIES`/`MAX_V_ENTRIES` in `PerceptionCodec.java` but not varbase64 bounds in `Base64Codec.java`. Filed-as-followup. The three-gate stack (`GoldenTraceEquivalenceTest`, `GoldenTraceWithActionsTest`, `LiveEntityRegistryInvariantTest`) plus the wire-bytes paranoia check at the end of Task 5.1 already verify wire equivalence end-to-end, which would catch a bounds drift in `Base64Codec.java` even without the grep. Adding the grep extension is defensive belt-and-braces, not load-bearing.
+- **codex MEDIUM (Plan 1):** Three-gate stack precondition isn't explicitly run/recorded. Already addressed by Concern #21 — the same three-gate run now happens at baseline (Task 1b.0) and at HEAD (Task 1b.1).
+- **claude MEDIUM (Plan 1b JSON sidecar fragility):** bash echo + variable embedding fragile under multi-line/error-body actuator responses. Filed-as-followup. Mitigated in practice by the existing `jq -e '.samples | length >= 3'` gate in Task 1b.1 (a malformed sample produces an empty array, the gate fails) and the per-sample boot-time `curl -s -o /dev/null -w "%{http_code}\n"` 200-check. Adopting `jq -n --argjson` per-sample is the right next-tier fix, but it's not load-bearing for MVP correctness.
+- **opencode reviewer note (PATTERNS.md cleanup):** `RuntimeBeansConfig.java` listed in PATTERNS.md but not declared `files_modified` in any plan. Filed-as-followup; PATTERNS.md is informational, not a planner contract.
+
 ## Idempotency contract (for future review passes)
 
-A future `/gsd-review --phase 20` (any reviewer, any model) re-flagging any of the concerns above (#1–#17 plus the rejected items) MUST be marked **resolved-by-disposition** during triage. Re-flagging is acceptable ONLY if:
+A future `/gsd-review --phase 20` (any reviewer, any model) re-flagging any of the concerns above (#1–#30 plus the rejected items) MUST be marked **resolved-by-disposition** during triage. Re-flagging is acceptable ONLY if:
 - The disposition was `accepted-as-backlog` AND the backlog item has been promoted (Phase 999.6 lifted) AND new evidence in subsequent phases (P21 benchmark) materially changes the cost/benefit calculus.
 - The disposition was `rejected-disagree` (Concern #9 codex-on-pinning is the only one in this set) AND new technical evidence contradicts the disagree rationale.
 - The disposition was `resolved-on-verification` (opencode pass-2 PATTERNS.md) AND the underlying artifact has been removed/changed.
+- The disposition was `filed-as-followup` (pass-3 LOWs above) AND the supporting safety net (existing gate / out-of-band executor protocol) materially weakens.
 
-The grep gate for review automation: `grep -lE "Concern #[0-9]+|reviewer.*(opus|gemini|codex|opencode)" .planning/phases/20-connection-multiplexing-runtime-tuning/20-REVIEW-DISPOSITIONS.md` MUST hit this file. Future review tooling reading this file should suppress already-disposed findings. (Pass-2 widens the regex from `#[1-6]` to `#[0-9]+` to cover the 17+ concerns now disposed.)
+The grep gate for review automation: `grep -lE "Concern #[0-9]+|reviewer.*(opus|gemini|codex|opencode)" .planning/phases/20-connection-multiplexing-runtime-tuning/20-REVIEW-DISPOSITIONS.md` MUST hit this file. Future review tooling reading this file should suppress already-disposed findings. (Pass-3 retains the `#[0-9]+` regex from pass-2; #21–#30 are inside the existing capture range.)
 
 ---
 
-*Phase 20 — review dispositions · planner-signed-off 2026-05-09 (pass-1 morning + pass-2 evening)*
+*Phase 20 — review dispositions · planner-signed-off 2026-05-09 (pass-1 morning + pass-2 evening + pass-3 evening, MVP-scope check)*
