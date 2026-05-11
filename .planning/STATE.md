@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
-stopped_at: Phase 20 Wave 1 complete (20-01 toolchain bootstrap — async-profiler 4.4 external, bootstrap.md + profiles/README.md, three-gate green at d7009df)
-last_updated: "2026-05-11T01:56:54Z"
-last_activity: 2026-05-11 -- Phase 20 Wave 1 (Plan 20-01) complete
+stopped_at: Phase 20 Wave 1 complete (20-01 toolchain bootstrap shipped at d7009df)
+last_updated: "2026-05-11T08:14:28.719Z"
+last_activity: 2026-05-11 -- Phase 20 execution started
 progress:
   total_phases: 15
   completed_phases: 4
@@ -21,15 +21,15 @@ progress:
 See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
-**Current focus:** Phase 19.1 complete; P22 closed (incident response, see `phases/22-integration-test-resource-leak-audit/22-SUMMARY.md`). Next: `/gsd-discuss-phase 20`. P19.5 pass-3 findings (F1/F2/F3/F4 + D-15 codec gate) verified shipped via P19.1 on 2026-05-05 — pointer retired.
+**Current focus:** Phase 20 — connection-multiplexing-runtime-tuning
 
 ## Current Position
 
 Milestone: v3.0 (Scale Engineering / M4) — active
-Phase: 20 — EXECUTING (Wave 1/5 complete; Wave 2 next: 20-01b + 20-03)
-Plan: 20-01 — COMPLETE (toolchain bootstrap)
-Status: Wave 1 done; ready for Wave 2 — `/gsd-execute-phase 20 --wave 2 --interactive` (20-01b is operator-driven JFR captures)
-Last activity: 2026-05-11 -- Phase 20 Wave 1 (Plan 20-01) complete
+Phase: 20 (connection-multiplexing-runtime-tuning) — EXECUTING
+Plan: 1 of 7
+Status: Executing Phase 20
+Last activity: 2026-05-11 -- Phase 20 execution started
 
 Progress: [████████▌░] 85%
 
