@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
-stopped_at: Phase 20 context gathered (rebuilt from 2026-05-02 superseded draft + audit; D-17..D-20 added)
-last_updated: "2026-05-09T16:22:28.530Z"
-last_activity: 2026-05-09 -- Phase 20 planning complete
+stopped_at: Phase 20 Wave 1 complete (20-01 toolchain bootstrap — async-profiler 4.4 external, bootstrap.md + profiles/README.md, three-gate green at d7009df)
+last_updated: "2026-05-11T01:56:54Z"
+last_activity: 2026-05-11 -- Phase 20 Wave 1 (Plan 20-01) complete
 progress:
   total_phases: 15
   completed_phases: 4
   total_plans: 34
-  completed_plans: 28
-  percent: 82
+  completed_plans: 29
+  percent: 85
 ---
 
 # Project State
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md
 ## Current Position
 
 Milestone: v3.0 (Scale Engineering / M4) — active
-Phase: 19.1 — COMPLETE
-Plan: n/a (next phase = 20, ready to discuss)
-Status: Ready to execute
-Last activity: 2026-05-09 -- Phase 20 planning complete
+Phase: 20 — EXECUTING (Wave 1/5 complete; Wave 2 next: 20-01b + 20-03)
+Plan: 20-01 — COMPLETE (toolchain bootstrap)
+Status: Wave 1 done; ready for Wave 2 — `/gsd-execute-phase 20 --wave 2 --interactive` (20-01b is operator-driven JFR captures)
+Last activity: 2026-05-11 -- Phase 20 Wave 1 (Plan 20-01) complete
 
-Progress: [████████░░] 81%
+Progress: [████████▌░] 85%
 
 ## Deferred Items
 
@@ -58,10 +58,10 @@ Progress: [████████░░] 81%
 
 ## Session Continuity
 
-Last session: 2026-05-09T11:55:31.755Z
-Stopped at: Phase 20 context gathered (rebuilt from 2026-05-02 superseded draft + audit; D-17..D-20 added)
-Resume file: .planning/phases/20-connection-multiplexing-runtime-tuning/20-CONTEXT.md
-Next command: `/gsd-discuss-phase 20` — fresh CONTEXT to capture post-P19.1 reality (TD-19.5-A flaky golden-trace, TD-22-B disabled encode perf gate, L1 detach-timeout, strengthened test gates)
+Last session: 2026-05-11T01:56:54Z
+Stopped at: Phase 20 Wave 1 complete (20-01 toolchain bootstrap shipped at d7009df)
+Resume file: .planning/phases/20-connection-multiplexing-runtime-tuning/.resume-state.md
+Next command: `/gsd-execute-phase 20 --wave 2 --interactive` — Wave 2 runs 20-01b (operator-driven JFR baseline captures @ c22e487, 100/500/1000 bots — see profiles/README.md ritual) and 20-03 (`AppRuntimeConfig` record, autonomous)
 
 ## Regression Alarm — fast-track P22.1 if any reappear during P20/P21
 

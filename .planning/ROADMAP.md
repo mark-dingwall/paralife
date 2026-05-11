@@ -134,7 +134,7 @@ Plans:
 - Operators have concrete configuration guidance for benchmark runs.
 
 Plans:
-- [ ] 20-01-PLAN.md — Profiling toolchain bring-up: async-profiler install + bootstrap docs + profiles/ filename convention (SCALE-09)
+- [x] 20-01-PLAN.md — Profiling toolchain bring-up: async-profiler install + bootstrap docs + profiles/ filename convention (SCALE-09)
 - [ ] 20-01b-PLAN.md — c22e487 baseline JFR + flamegraph capture (split from 20-01 per W6) (SCALE-09)
 - [ ] 20-02-PLAN.md — paralife.runtime.jetty.* @ConfigurationProperties record + Jetty wiring (SCALE-09)
 - [ ] 20-03-PLAN.md — paralife.runtime.app.* @ConfigurationProperties record (D-20 alongside-not-move) (SCALE-09)
