@@ -45,6 +45,22 @@ paralife:
     # emergence tests can raise the ceiling via @TestPropertySource without
     # relaxing the production invariant. Production MUST stay at 5.
     max-respawns-per-session: 5
+  # Phase 20 D-07 — runtime tuning surface. Layer 2 (jetty) is added by Plan 2;
+  # this block carries layer 3 (app) only. See 20-RUNTIME.md §2.
+  runtime:
+    # Phase 20 D-07 layer 3 — application-level tuning surface.
+    # D-20: paralife.admission.backpressure.outbound-queue-size is NOT moved or
+    # shadowed; this record carries SIBLING outbound knobs only.
+    # Pass-2 Concern #7: ALL fields tagged [reserved — no effect in Phase 20];
+    # the binding surface exists for future consumers (M5 admin UI, Phase 19.1
+    # parallel encode, Phase 999.4 codec API extension).
+    app:
+      outbound:
+        queue-watermark-pct: 80          # [reserved — no effect in Phase 20] slow-client watermark; consumer wiring deferred to M5 admin UI
+        frame-size-budget-bytes: 1024    # [reserved — no effect in Phase 20] codec sizing hint; PerceptionCodec.encode(Frame) takes no capacity arg, consumer wiring deferred (Pass-2 Concern #7)
+      encode:
+        parallel-encode-threshold: -1    # [reserved — no effect in Phase 20] Phase 19.1 follow-up consumer; -1 = disabled
+        encode-batch-hint: 8             # [reserved — no effect in Phase 20] tick-broadcast batch sizing hint; consumer wiring deferred
   admission:
     cap: 256
     maintenance: false
