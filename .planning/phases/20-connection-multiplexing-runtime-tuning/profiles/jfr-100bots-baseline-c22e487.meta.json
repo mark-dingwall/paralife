@@ -1,0 +1,18 @@
+{
+  "captured_at_sha": "c22e487",
+  "scenario": "100bots",
+  "duration_s": 95,
+  "harness_args": "--count 100 --duration 80 --ramp-up rate:50 --harness-id baseline-c22e487",
+  "captured_utc": "2026-05-14T23:21:00Z",
+  "jvm_flags": "-Xms2g -Xmx2g -XX:+UseG1GC -Djdk.virtualThreadScheduler.parallelism=8",
+  "metric_sidecar": "metrics-100bots-baseline-c22e487.json",
+  "assumptions_verified": {
+    "A1": "VERIFIED — Jetty 12.0.18 Configurable interface exposes setIdleTimeout, setInputBufferSize, setOutputBufferSize, setMaxBinaryMessageSize, setMaxTextMessageSize, setMaxFrameSize, setAutoFragment, setMaxOutgoingFrames (javap of jetty-websocket-jetty-api-12.0.18.jar). Plan 2 may include all 8 setters; no fields need to be dropped.",
+    "A2": "VERIFIED — Async-profiler 4.4 built on Apr 15 2026, installed at /home/mark/tools/async-profiler/bin/asprof per recommended external path in tools/async-profiler-bootstrap.md.",
+    "A6": "VERIFIED — 100-bot LoadHarness from single JVM sustained the full 80s window; harness log records 'BotFleet: 100 bots disconnected' on clean exit.",
+    "A7": "VERIFIED — JFR file size 2.0 MB at 95s × 100 bots, well under 10 MB cap.",
+    "A8": "FALSIFIED — Temurin 21.0.6 has UseZGC=false and ZGenerational=false by default. Generational ZGC requires explicit `-XX:+UseZGC -XX:+ZGenerational`. Plan 4 GC analysis must reflect: G1 is the actual default; ZGC opt-in only.",
+    "A9_three_gate_at_baseline": "PARTIAL — GoldenTraceWithActions (2/2) green + LiveEntityRegistryInvariant (6/6) green; GoldenTraceEquivalenceTest.byteIdenticalOutputAcrossTwoRuns fails deterministically (sess-9, sess-21 mismatch). Root cause: stale golden file in c22e487/src/test/resources/golden-trace-phase19.json — corrected later in f6da129 'fix(19.1): pass-1 multi-review follow-up sweep'. Same test PASSES at HEAD with HEAD's corrected golden. Simulation determinism CONFIRMED: identical digests across two consecutive runs. Baseline JFR/flamegraph/metric measurements unaffected.",
+    "perf_event_paranoid_observed": "/proc/sys/kernel/perf_event_paranoid=2 (WSL2 default). Lock flamegraph uses JVMTI MonitorContended (no kernel events needed); CPU + alloc use JFR — both unaffected. Documented for downstream plans."
+  }
+}

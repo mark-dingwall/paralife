@@ -1,0 +1,18 @@
+{
+  "captured_at_sha": "c22e487",
+  "scenario": "500bots",
+  "duration_s": 115,
+  "harness_args": "--count 500 --duration 100 --ramp-up rate:50 --harness-id baseline-c22e487",
+  "captured_utc": "2026-05-14T23:24:00Z",
+  "jvm_flags": "-Xms2g -Xmx2g -XX:+UseG1GC -Djdk.virtualThreadScheduler.parallelism=8",
+  "metric_sidecar": "metrics-500bots-baseline-c22e487.json",
+  "assumptions_verified": {
+    "A1": "VERIFIED (see jfr-100bots-baseline-c22e487.meta.json — Jetty 12.0.18 Configurable interface setter list).",
+    "A2": "VERIFIED (Async-profiler 4.4).",
+    "A6": "VERIFIED — 500-bot LoadHarness sustained from single JVM for the full 100s window; harness exit clean.",
+    "A7": "VERIFIED — JFR file size 2.4 MB at 115s × 500 bots, under 10 MB cap.",
+    "A8": "FALSIFIED (see jfr-100bots meta).",
+    "A9_three_gate_at_baseline": "PARTIAL — see jfr-100bots meta. Stale golden in c22e487 fixed in f6da129. 8/9 tests green.",
+    "perf_event_paranoid_observed": "=2 (WSL2 default); does not affect captured event types in use."
+  }
+}

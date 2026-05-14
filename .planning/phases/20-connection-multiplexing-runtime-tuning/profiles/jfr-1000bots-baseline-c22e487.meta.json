@@ -1,0 +1,24 @@
+{
+  "captured_at_sha": "c22e487",
+  "scenario": "1000bots",
+  "duration_s": 220,
+  "harness_args": "--count 1000 --duration 200 --ramp-up rate:50 --harness-id baseline-c22e487",
+  "captured_utc": "2026-05-14T23:27:00Z",
+  "jvm_flags": "-Xms2g -Xmx2g -XX:+UseG1GC -Djdk.virtualThreadScheduler.parallelism=8",
+  "metric_sidecar": "metrics-1000bots-baseline-c22e487.json",
+  "flamegraphs": {
+    "cpu":   "cpu-1000bots-baseline-c22e487.html",
+    "alloc": "alloc-1000bots-baseline-c22e487.html",
+    "lock":  "lock-1000bots-baseline-c22e487.html (follow-up run; main 1000-bot run for JFR is independent)"
+  },
+  "assumptions_verified": {
+    "A1": "VERIFIED — all 8 setters present on jetty-websocket-jetty-api-12.0.18 Configurable: setIdleTimeout, setInputBufferSize, setOutputBufferSize, setMaxBinaryMessageSize, setMaxTextMessageSize, setMaxFrameSize, setAutoFragment, setMaxOutgoingFrames. Plan 2 JettyRuntimeConfig may include all 8.",
+    "A2": "VERIFIED — Async-profiler 4.4 built on Apr 15 2026.",
+    "A6": "VERIFIED — 1000-bot LoadHarness from single JVM sustained the full 200s window; harness log records 'BotFleet: 1000 bots disconnected'. D-02 design ceiling of 5000/JVM is therefore at least 20% headroom-proved at this point.",
+    "A7": "VERIFIED — JFR file size 3.0 MB at 220s × 1000 bots, under 10 MB cap. Total profiles/ dir 7.4 MB under 50 MB cap.",
+    "A8": "FALSIFIED — Temurin 21.0.6 default GC is G1; UseZGC=false and ZGenerational=false. Generational ZGC requires explicit `-XX:+UseZGC -XX:+ZGenerational`. Plan 4 GC choice analysis must reflect this.",
+    "A9_three_gate_at_baseline": "PARTIAL (8/9 tests green) — GoldenTraceWithActionsTest (2/2) green, LiveEntityRegistryInvariantTest (6/6) green. GoldenTraceEquivalenceTest.byteIdenticalOutputAcrossTwoRuns fails deterministically on sess-9 and sess-21. Root cause: stale golden file at c22e487/src/test/resources/golden-trace-phase19.json; corrected later in commit f6da129 (`fix(19.1): pass-1 multi-review follow-up sweep`). Same test PASSES at HEAD with HEAD's golden. Simulation determinism confirmed: identical actual digests across two consecutive runs. Baseline measurements unaffected by this test infrastructure issue.",
+    "perf_event_paranoid_observed": "/proc/sys/kernel/perf_event_paranoid=2 (WSL2 default). Lock flamegraph uses JVMTI MonitorContended (no kernel-event dependency); cpu/alloc use JFR. All three capture types unaffected.",
+    "lock_flamegraph_finding": "Only 6 frame nodes vs 209 in cpu flamegraph at same 1000-bot load — indicates Phase 17/19.1 D-10 per-session VT+queue architecture successfully avoids cross-session lock contention. Confirms architectural goal; downstream plans should treat lock-contention as not-a-hot-path."
+  }
+}

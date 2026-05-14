@@ -126,7 +126,7 @@ Plans:
 **Goal:** Reduce socket/process overhead and tune the runtime for sustained high bot counts without regressing the compact protocol semantics.
 **Depends on:** Phase 19 (world execution path must be in place before tuning transport overhead)
 **Requirements:** SCALE-08, SCALE-09
-**Plans:** 2/7 plans executed
+**Plans:** 3/7 plans executed
 **Success Criteria:**
 - Connection fan-in / multiplexing or an equivalent overhead-reduction path exists for high bot counts.
 - Virtual-thread or runtime tuning guidance is grounded in measured profiles rather than guesswork.

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
-stopped_at: Phase 20 Wave 1 complete (20-01 toolchain bootstrap shipped at d7009df)
-last_updated: "2026-05-11T08:14:28.719Z"
-last_activity: 2026-05-11 -- Phase 20 execution started
+stopped_at: Phase 20 Wave 2 partial complete — 20-01b baseline JFR/flamegraph/metric capture shipped; 20-02/04/05/06 pending
+last_updated: "2026-05-14T23:38:45.439Z"
+last_activity: 2026-05-15 -- Phase 20 Plan 01b complete (baseline measurements captured at c22e487)
 progress:
   total_phases: 15
   completed_phases: 4
   total_plans: 34
-  completed_plans: 29
-  percent: 85
+  completed_plans: 31
+  percent: 91
 ---
 
 # Project State
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md
 
 Milestone: v3.0 (Scale Engineering / M4) — active
 Phase: 20 (connection-multiplexing-runtime-tuning) — EXECUTING
-Plan: 1 of 7
-Status: Executing Phase 20
-Last activity: 2026-05-11 -- Phase 20 execution started
+Plan: 2 of 7
+Status: Ready to execute
+Last activity: 2026-05-15 -- Phase 20 Plan 01b complete (baseline measurements captured at c22e487)
 
 Progress: [████████▌░] 85%
 
