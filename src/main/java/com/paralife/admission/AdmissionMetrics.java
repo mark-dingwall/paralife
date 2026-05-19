@@ -119,6 +119,9 @@ public class AdmissionMetrics {
     /** Phase 20-01c (F2 remediation): per-frame encode + sendMessage latency Timer. */
     private final Timer encodeSendTimer;
 
+    // F2/A1 remediation: strong reference so Micrometer's weak-target gauge doesn't GC the supplier.
+    private volatile java.util.function.IntSupplier outboundQueueDepthSupplier;
+
     // ── Constructor ──────────────────────────────────────────────────────────
 
     /**
@@ -475,7 +478,8 @@ public class AdmissionMetrics {
      * registering twice (e.g. test double-injection) get one gauge.
      */
     public void registerOutboundQueueDepthMaxGauge(java.util.function.IntSupplier peakSupplier) {
-        Gauge.builder(M_OUTBOUND_QUEUE_DEPTH_MAX, peakSupplier, java.util.function.IntSupplier::getAsInt)
+        this.outboundQueueDepthSupplier = peakSupplier;
+        Gauge.builder(M_OUTBOUND_QUEUE_DEPTH_MAX, this, m -> m.outboundQueueDepthSupplier.getAsInt())
                 .description("Peak per-session outbound queue depth across all attached sessions")
                 .register(registry);
     }
