@@ -2,6 +2,7 @@ package com.paralife.admission;
 
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -103,6 +104,9 @@ public class OutboundSender {
 
     public OutboundSender(AdmissionMetrics metrics) {
         this.metrics = metrics;
+        // Phase 20-01c (F2 remediation): wire the aggregate peak-queue-depth gauge.
+        // Lambda invoked by Micrometer on each scrape; queues map is final-init by this point.
+        metrics.registerOutboundQueueDepthMaxGauge(this::peakQueueDepth);
     }
 
     /**
@@ -251,6 +255,21 @@ public class OutboundSender {
         return q == null ? -1 : q.size();
     }
 
+    /**
+     * Phase 20-01c (F2 review remediation): aggregate peak queue depth across all
+     * currently-attached sessions. Returns 0 when no sessions are attached. Each scrape walks
+     * the queue map — O(N) in attached session count — and is invoked by Micrometer's
+     * gauge polling on whatever schedule the scrape interval enforces.
+     */
+    public int peakQueueDepth() {
+        int max = 0;
+        for (ArrayBlockingQueue<Frame> q : queues.values()) {
+            int d = q.size();
+            if (d > max) max = d;
+        }
+        return max;
+    }
+
     /** Returns the number of sessions currently attached. */
     public int attachedCount() {
         return queues.size();
@@ -282,6 +301,10 @@ public class OutboundSender {
             while (!Thread.currentThread().isInterrupted()) {
                 Frame frame = queue.take();
                 if (!session.isOpen()) continue;
+                // Phase 20-01c (F2 review remediation): bracket encode + synchronized send with
+                // the per-frame Timer. Records on both success and failure paths via try/finally
+                // so saturation evidence isn't lost when a slow session throws IOException.
+                Timer.Sample sample = Timer.start();
                 try {
                     String encoded = PerceptionCodec.encode(frame);
                     byte[] encodedBytes = encoded.getBytes(StandardCharsets.UTF_8);
@@ -305,6 +328,8 @@ public class OutboundSender {
                     log.warn("Send failed for session={}: {}", session.getId(), e.getMessage());
                 } catch (RuntimeException e) {
                     log.warn("Send error for session={}: {}", session.getId(), e.getMessage());
+                } finally {
+                    sample.stop(metrics.encodeSendTimer());
                 }
             }
         } catch (InterruptedException e) {

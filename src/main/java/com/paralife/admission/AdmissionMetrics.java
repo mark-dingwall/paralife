@@ -6,6 +6,7 @@ import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
+import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.config.MeterFilter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -72,6 +73,10 @@ public class AdmissionMetrics {
     public static final String M_PLACEMENT_LOST_RACE = "paralife.placement.lost-race.total";
     /** Phase 19.1 D-14: drain VT join timed out. */
     public static final String M_DETACH_TIMEOUT = "paralife.outbound.detach.timeout";
+    /** Phase 20-01c (F2 review remediation): peak per-session outbound queue depth across all attached sessions. */
+    public static final String M_OUTBOUND_QUEUE_DEPTH_MAX = "paralife.outbound.queue.depth.max";
+    /** Phase 20-01c (F2 review remediation): per-frame encode + sendMessage latency Timer. */
+    public static final String M_OUTBOUND_ENCODE_SEND_MS  = "paralife.outbound.encode.send.ms";
 
     /** Session attribute key for entity id — shared constant for callers that need it. */
     public static final String ATTR_ENTITY_ID = "entityId";
@@ -111,6 +116,8 @@ public class AdmissionMetrics {
     private final Counter lostRace;
     /** Phase 19.1 D-14: drain VT did not exit within join timeout. */
     private final Counter detachTimeout;
+    /** Phase 20-01c (F2 remediation): per-frame encode + sendMessage latency Timer. */
+    private final Timer encodeSendTimer;
 
     // ── Constructor ──────────────────────────────────────────────────────────
 
@@ -175,6 +182,13 @@ public class AdmissionMetrics {
         // Phase 19.1 D-14: detach-timeout counter.
         this.detachTimeout = Counter.builder(M_DETACH_TIMEOUT)
                 .description("OutboundSender.detachSession join timed out (drain VT did not exit within 100ms)")
+                .register(registry);
+        // Phase 20-01c (F2 remediation): per-frame encode + sendMessage latency.
+        // Tick-work gauge ends at @Order(50) frame build; this Timer surfaces the per-connection
+        // encode + sendMessage cost that lives on per-session VTs outside the tick window.
+        this.encodeSendTimer = Timer.builder(M_OUTBOUND_ENCODE_SEND_MS)
+                .description("OutboundSender.drainLoop encode + sendMessage latency (per frame)")
+                .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
     }
 
@@ -449,4 +463,26 @@ public class AdmissionMetrics {
 
     /** Phase 19.1 D-14: increment when drain VT join timed out in detachSession(String). */
     public void incDetachTimeout() { detachTimeout.increment(); }
+
+    /**
+     * Phase 20-01c (F2 remediation): register the aggregate peak-queue-depth gauge.
+     *
+     * <p>{@code peakSupplier} is invoked by Micrometer on every scrape and must return the
+     * current max queue depth across all attached sessions. {@link OutboundSender} wires this
+     * during its own construction so the gauge sees the live per-session queue map.
+     *
+     * <p>Idempotent at the registry layer: Micrometer dedupes by name + tags. Callers
+     * registering twice (e.g. test double-injection) get one gauge.
+     */
+    public void registerOutboundQueueDepthMaxGauge(java.util.function.IntSupplier peakSupplier) {
+        Gauge.builder(M_OUTBOUND_QUEUE_DEPTH_MAX, peakSupplier, java.util.function.IntSupplier::getAsInt)
+                .description("Peak per-session outbound queue depth across all attached sessions")
+                .register(registry);
+    }
+
+    /**
+     * Phase 20-01c (F2 remediation): accessor for the encode+send Timer.
+     * Used by {@link OutboundSender#drainLoop} to bracket the encode + sendMessage pair.
+     */
+    public Timer encodeSendTimer() { return encodeSendTimer; }
 }
