@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
-stopped_at: Phase 20 Wave 2 partial complete — 20-01b baseline JFR/flamegraph/metric capture shipped; 20-02/04/05/06 pending
-last_updated: "2026-05-14T23:38:45.439Z"
-last_activity: 2026-05-15 -- Phase 20 Plan 01b complete (baseline measurements captured at c22e487)
+stopped_at: Phase 20 Wave 2 partial complete — 20-01c baseline (HEAD 1818eeb, cap=1500) supersedes 20-01b; 20-02/04/05/06 pending
+last_updated: "2026-05-19T08:35:00.000Z"
+last_activity: 2026-05-19 -- Phase 20 Plan 01c complete (re-anchored baseline at HEAD 1818eeb; F1/F2/F6 remediated)
 progress:
   total_phases: 15
   completed_phases: 4
-  total_plans: 34
-  completed_plans: 31
+  total_plans: 35
+  completed_plans: 32
   percent: 91
 ---
 
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md
 
 Milestone: v3.0 (Scale Engineering / M4) — active
 Phase: 20 (connection-multiplexing-runtime-tuning) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 8 (20-01, 20-01b superseded by 20-01c, 20-01c, 20-03 done)
 Status: Ready to execute
-Last activity: 2026-05-15 -- Phase 20 Plan 01b complete (baseline measurements captured at c22e487)
+Last activity: 2026-05-19 -- Phase 20 Plan 01c complete (re-anchored baseline at HEAD 1818eeb; F1/F2/F6 remediated)
 
 Progress: [████████▌░] 85%
 
@@ -59,9 +59,9 @@ Progress: [████████▌░] 85%
 ## Session Continuity
 
 Last session: 2026-05-11T01:56:54Z
-Stopped at: Phase 20 Wave 1 complete (20-01 toolchain bootstrap shipped at d7009df)
+Stopped at: Phase 20 Wave 2 partial — 20-01 / 20-01b (superseded) / 20-01c / 20-03 done; 20-02 / 20-04 / 20-05 / 20-06 pending
 Resume file: .planning/phases/20-connection-multiplexing-runtime-tuning/.resume-state.md
-Next command: `/gsd-execute-phase 20 --wave 2 --interactive` — Wave 2 runs 20-01b (operator-driven JFR baseline captures @ c22e487, 100/500/1000 bots — see profiles/README.md ritual) and 20-03 (`AppRuntimeConfig` record, autonomous)
+Next command: `/gsd-execute-phase 20 --plan 20-02` (paralife.runtime.jetty.* @ConfigurationProperties + Jetty wiring) — citable baseline is now `profiles/*-baseline-1818eeb.*` (20-01c), not the c22e487 capture
 
 ## Regression Alarm — fast-track P22.1 if any reappear during P20/P21
 
