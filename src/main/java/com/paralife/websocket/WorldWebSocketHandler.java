@@ -917,22 +917,25 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
             admissionGate.releaseSlot();
         }
         if (wasRegistered && admissionMetrics != null) {
-            // H1 fix: prefer snapshot Tags (keyed by entityId) over session-derived tags.
-            // Snapshot is captured at incActiveBucket time and survives session-attr churn.
-            io.micrometer.core.instrument.Tags bucketTags = entityId != null
-                    ? admissionMetrics.lookupBucketTags(entityId)
-                    : null;
-            if (bucketTags != null) {
-                admissionMetrics.decActiveBucketByTags(bucketTags);
-            } else {
-                // Fallback: session tags. Hits only when no snapshot was ever captured
-                // (e.g. legacy tests calling cleanupBot without going through Allow path).
-                admissionMetrics.decActiveBucket(s);
-            }
-            // C2 fix: drop entityId snapshot from bucketTagsByEntityId — prevents unbounded growth.
             if (entityId != null) {
+                // Prefer snapshot Tags (keyed by entityId) over session-derived tags.
+                // Snapshot is captured at incActiveBucket time and survives session-attr churn.
+                io.micrometer.core.instrument.Tags bucketTags =
+                        admissionMetrics.lookupBucketTags(entityId);
+                if (bucketTags != null) {
+                    admissionMetrics.decActiveBucketByTags(bucketTags);
+                } else {
+                    // Fallback: session tags. Hits only when no snapshot was ever captured
+                    // (e.g. legacy tests calling cleanupBot without going through Allow path).
+                    admissionMetrics.decActiveBucket(s);
+                }
+                // C2 fix: drop entityId snapshot from bucketTagsByEntityId — prevents unbounded growth.
                 admissionMetrics.releaseBucketTags(entityId);
             }
+            // entityId == null: either markDead already dec'd (path C) or markStalled
+            // cleared entityId and cleanupByEntityId at grace-expire owns the dec via the
+            // bucketTagsByEntityId snapshot (path B). Either way cleanupBot must NOT dec
+            // here — would double-dec the bucket otherwise (pass-2 R1 + TD-20-01c-B).
         }
     }
 
