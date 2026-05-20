@@ -812,7 +812,17 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
 
         WebSocketSession session = sessionRegistry.getSession(sessionId);
         if (session != null) {
-            // Session still in registry — full cleanup (active dec + slot release + grid + BotRegistry).
+            // Pass-3 R-P3-1: session was stalled (entityId cleared from attrs at markStalled),
+            // so cleanupBot will hit the H1 entityId==null guard and skip active-bucket dec.
+            // Own the dec + snapshot release here BEFORE cleanupBot — otherwise the gauge
+            // and bucketTagsByEntityId both leak on the rare race where grace-expire fires
+            // before afterConnectionClosed unregisters the session.
+            if (admissionMetrics != null && bucketTags != null) {
+                admissionMetrics.decActiveBucketByTags(bucketTags);
+            }
+            if (admissionMetrics != null) admissionMetrics.releaseBucketTags(entityId);
+            // Full cleanup (slot release + grid + BotRegistry). cleanupBot's entityId==null
+            // guard is now correct: we have already dec'd+released above.
             cleanupBot(session);
         } else {
             // Session unregistered (typical stalled-close path). Manually drop active gauge,
