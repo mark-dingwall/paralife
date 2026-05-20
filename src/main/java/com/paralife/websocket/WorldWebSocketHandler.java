@@ -994,8 +994,18 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         Object eid = session.getAttributes().remove(ATTR_ENTITY_ID);
         session.getAttributes().remove(ATTR_RESUME_TOKEN);
         String entityId = eid instanceof String e ? e : null;
-        if (entityId != null && resumeTokenRegistry != null) {
-            resumeTokenRegistry.clearActive(entityId);
+        if (entityId != null) {
+            if (admissionMetrics != null) {
+                io.micrometer.core.instrument.Tags bucketTags =
+                        admissionMetrics.lookupBucketTags(entityId);
+                if (bucketTags != null) {
+                    admissionMetrics.decActiveBucketByTags(bucketTags);
+                }
+                admissionMetrics.releaseBucketTags(entityId);
+            }
+            if (resumeTokenRegistry != null) {
+                resumeTokenRegistry.clearActive(entityId);
+            }
         }
     }
 }
