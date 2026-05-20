@@ -8,6 +8,8 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.config.MeterFilter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.WebSocketSession;
@@ -56,6 +58,8 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Component
 public class AdmissionMetrics {
+
+    private static final Logger log = LoggerFactory.getLogger(AdmissionMetrics.class);
 
     // ── Metric names ─────────────────────────────────────────────────────────
 
@@ -478,6 +482,10 @@ public class AdmissionMetrics {
      * registering twice (e.g. test double-injection) get one gauge.
      */
     public void registerOutboundQueueDepthMaxGauge(java.util.function.IntSupplier peakSupplier) {
+        if (this.outboundQueueDepthSupplier != null) {
+            log.warn("registerOutboundQueueDepthMaxGauge called twice; ignoring (first supplier wins)");
+            return;
+        }
         this.outboundQueueDepthSupplier = peakSupplier;
         Gauge.builder(M_OUTBOUND_QUEUE_DEPTH_MAX, this, m -> m.outboundQueueDepthSupplier.getAsInt())
                 .description("Peak per-session outbound queue depth across all attached sessions")
