@@ -3,167 +3,228 @@ phase: 20-connection-multiplexing-runtime-tuning
 plan: 01c
 subsystem: profiling-baseline
 supersedes: 20-01b
-tags: [jfr, async-profiler, flamegraph, actuator-metrics, 1818eeb-baseline, performance, F1-remediation, F2-remediation, F6-remediation]
+tags: [jfr, async-profiler, flamegraph, actuator-metrics, 0824f1a-baseline, performance, F1-remediation, F2-remediation, F6-remediation, multi-review-remediation]
 requires:
   - phase: 20-01
     provides: async-profiler toolchain bootstrap + profiles/ filename convention (D-19)
   - phase: 20-01b
     provides: capture ritual (sequential asprof attach + sidecar polling) — superseded baseline content
 provides:
-  - 3× baseline JFR at HEAD with cap=1500 override (100/500/1000 bots @ 1818eeb)
+  - 3× baseline JFR at HEAD with cap=1500 override (100/500/1000 bots @ 0824f1a)
   - 3× saturation-aware flamegraph HTML (cpu/alloc/lock at 1000 bots)
-  - 3× meta.json sidecars carrying cap_during_run + corrected A8 wording
+  - 3× meta.json sidecars carrying cap_during_run + asprof sample intervals + corrected A8 wording
   - 3× actuator-metric JSON sidecars (9 meters × 6 samples) — adds queue.depth.max + encode.send.ms
   - paralife.outbound.queue.depth.max aggregate gauge (new)
-  - paralife.outbound.encode.send.ms Timer p50/p95/p99 (new) — closes F2 visibility gap
+  - paralife.outbound.encode.send.ms Timer (count/total/max via Actuator JSON; percentiles via Prometheus scrape if needed) — closes F2 visibility gap
   - per-tier harness counters (peak_registered, syncs, e408, failures, respawns, perceptions, actions)
+  - markDead now decrements active.entities bucket (pre-existing leak fix)
+  - Timer.Sample.stop isolated from Micrometer exceptions
+  - outbound queue-depth gauge guarded against double-register
 affects: [20-02-jetty-runtime-config, 20-04-runtime-md-skeleton, 20-05-codec-opts, 20-06-finalise]
 tech-stack:
   added: []
   patterns:
     - "Aggregate per-session queue-depth gauge (max across queues map) with strong-ref-pinned IntSupplier (Micrometer weak-target bug avoidance)"
-    - "Timer.Sample try/finally around encode + synchronized(session) sendMessage in drain VT loop"
-    - "JVM-flag-only cap override (-Dparalife.admission.cap=1500) — D-20 invariant preserved (application.yml default stays 256)"
+    - "Timer.Sample try/finally around encode + synchronized(session) sendMessage in drain VT loop; stop() further guarded against Micrometer exceptions"
+    - "JVM-flag-only cap override (-Dparalife.admission.cap=1500) — benchmark-time override; production default (application.yml:65, cap=256) unchanged"
+    - "markDead lookup → dec → release sequence mirrors cleanupBot:917-935 — same AdmissionMetrics APIs, no new methods"
 key-files:
   created:
-    - src/main/java/com/paralife/admission/AdmissionMetrics.java (registerOutboundQueueDepthMaxGauge + encodeSendTimer)
-    - src/main/java/com/paralife/admission/OutboundSender.java (peakQueueDepth + Timer.Sample bracket)
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-100bots-baseline-1818eeb.jfr
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-500bots-baseline-1818eeb.jfr
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-1000bots-baseline-1818eeb.jfr
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/cpu-1000bots-baseline-1818eeb.html
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/alloc-1000bots-baseline-1818eeb.html
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/lock-1000bots-baseline-1818eeb.html
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-100bots-baseline-1818eeb.meta.json
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-500bots-baseline-1818eeb.meta.json
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-1000bots-baseline-1818eeb.meta.json
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/metrics-100bots-baseline-1818eeb.json
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/metrics-500bots-baseline-1818eeb.json
-    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/metrics-1000bots-baseline-1818eeb.json
-  modified: []
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-100bots-baseline-0824f1a.jfr
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-500bots-baseline-0824f1a.jfr
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-1000bots-baseline-0824f1a.jfr
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/cpu-1000bots-baseline-0824f1a.html
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/alloc-1000bots-baseline-0824f1a.html
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/lock-1000bots-baseline-0824f1a.html
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-100bots-baseline-0824f1a.meta.json
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-500bots-baseline-0824f1a.meta.json
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-1000bots-baseline-0824f1a.meta.json
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/metrics-100bots-baseline-0824f1a.json
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/metrics-500bots-baseline-0824f1a.json
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/metrics-1000bots-baseline-0824f1a.json
+  modified:
+    - src/main/java/com/paralife/websocket/WorldWebSocketHandler.java (markDead now dec+releases bucket)
+    - src/main/java/com/paralife/admission/OutboundSender.java (sample.stop guarded against Micrometer exceptions)
+    - src/main/java/com/paralife/admission/AdmissionMetrics.java (gauge double-register guard + slf4j logger)
 key-decisions:
-  - "F1 (admission cap silently bounds workload) RESOLVED at the bot-bucket level. With -Dparalife.admission.cap=1500, harness `peak_registered` = 100 / 500 / 1000 at the three tiers (matches `--count`). The 1818eeb baseline is the first capture where the bot population genuinely scales 10× across tiers."
-  - "F1 PARTIAL CAVEAT — nutrient bucket. `paralife.admission.cap` is per-bucket. World-aggregate `admission.active.entities` (sum across spore/membrane/catalyst/nutrient) reaches 3733 at the 1000-bot tier with cap=1500 per bucket, and the nutrient bucket starts rejecting at the 500-tier last sample (4 rejections) and accelerates at 1000-tier (2→12→52 over the steady-state window). Bot scaling is uncontaminated — the `peak_registered=1000` proves bot admissions all succeeded. Plan 20-04 GC/runtime work can treat the nutrient-bucket cap as a separately-tunable knob (`paralife.admission.bucket.nutrient.cap` if it exists; otherwise raise the global cap further for 21-scale)."
-  - "F2 (tick gauge excludes per-session encode+send) RESOLVED via `paralife.outbound.encode.send.ms` Timer. The Timer brackets `PerceptionCodec.encode` + `synchronized(session) { sendMessage }` in `OutboundSender.drainLoop` — exactly the per-VT cost the 20-01b baseline made invisible. Empirical answer: at 1000-bot tier the Timer accumulates 76,048 records totalling 6.04 s wall time (mean ≈ 79 µs, max 12.5 ms). Per-VT encode+send is NOT a saturation hotspot."
-  - "F6 (stale-baseline vs HEAD) RESOLVED. Baseline anchored at HEAD 1818eeb (parent 02b1b76 = A1+A2 instrumentation, grandparent d768305 = same instrumentation with the gauge GC bug). f6da129 SimulationEngine.processDeaths ordering delta is now upstream of the captured baseline."
-  - "Outbound queue depth is effectively zero across the 10× tier ramp. `paralife.outbound.queue.depth.max` reads 0 in 17 of 18 samples; one spike to 1 at the 100-bot tier sample 5. Combined with `paralife.backpressure.stalled.sessions = 0` and `paralife.outbound.detach.timeout = 0` at every sample, this is direct evidence that the VT-per-session drain (D-10) absorbs the tick broadcast cadence without queue pressure. The synchronized-monitor + bounded queue design is NOT the scaling bottleneck."
-  - "Tick wall-time is essentially flat across 10× bot count. `tick.work.ms.max` over the 30-second steady-state window: 84 ms (100 bots) / 99 ms (500 bots) / 101 ms (1000 bots). The 100→1000 amplification is ~1.2×, not 10× — the tick pipeline is dominated by frame-build constant-factor cost (`@Order(50)` per-bot snapshot loop) not per-bot send cost."
-  - "Lock flamegraph at HEAD 1818eeb is consistent with 20-01b's lock graph at c22e487. Captured in a separate 1000-bot run (asprof 4.4 cannot multi-attach the same PID with different events). Acceptable cross-run evidence per all four 20-01b methodology reviewers."
-  - "A8 wording corrected in 1818eeb meta.json: probe is `java -XX:+UseZGC -XX:+PrintFlagsFinal -version | grep -iE 'UseZGC|ZGenerational'`; Temurin 21.0.6 defaults to G1, ZGC requires `-XX:+UseZGC`, generational ZGC requires `-XX:+ZGenerational`. Generational ZGC becomes the default only in JDK 23."
+  - "F1 (admission cap silently bounds workload) RESOLVED. The cap is **world-aggregate**, not per-bucket — AdmissionGate.java:58,140-151 uses one global AtomicInteger reservedSlots against one admissionConfig.cap(). With -Dparalife.admission.cap=1500 on server boot, the cap is non-binding for the bot population at every tier: harness peak_registered = --count at 100 / 500 / 1000, and zero world-full rejections appear in any sidecar. Nutrients are placed directly via SimulationEngine.setEntity:1431 and bypass AdmissionGate entirely, so the earlier 'nutrient bucket hits cap' narrative was an artifact of the rewrite, not a code behaviour."
+  - "The rejected{respawn-cap} entries (peak 58 at 1000-tier sample 6) are Guard 6 (AdmissionGate.java:154) — bots exhausting maxRespawnsPerSession=5 across the 200 s window. This is orthogonal to F1 cap-binding and does not contaminate the bot-population scaling story. Zero rejections at 100/500-tier."
+  - "F2 (tick gauge excludes per-session encode+send) RESOLVED via paralife.outbound.encode.send.ms Timer. The Timer brackets PerceptionCodec.encode + getBytes() + recordFrameSize + monitor-wait + synchronized(session) sendMessage + frame-emit listener in OutboundSender.drainLoop. This is *broader* than the original framing (which described encode+send only) — it captures monitor contention and metric-recording overhead too, which is a strict superset of the original visibility gap. Empirical answer at 1000-bot tier sample 6: enc.cnt = 76,848 records totalling 7.14 s wall time (mean ≈ 93 µs, max 22.1 ms). Per-VT encode+send is NOT a saturation hotspot."
+  - "F6 (stale-baseline vs HEAD) RESOLVED. Baseline anchored at HEAD 0824f1a, the post-D1+D2+D3 fix point. f6da129 SimulationEngine.processDeaths ordering delta is upstream. Three-gate (GoldenTraceEquivalence + GoldenTraceWithActions + LiveEntityRegistryInvariant) is 9/9 green at 0824f1a."
+  - "active.entities gauge leak fixed (D1). Pre-fix 1818eeb 1000-bot sidecar showed monotonic growth (1669→3733 over 30 s steady-state) because WorldWebSocketHandler.markDead removed ATTR_ENTITY_ID without decrementing the per-bucket gauge. Post-fix 0824f1a 1000-bot trajectory: 966 → 1000 → 1000 → 998 → 966 → 851 — tracks live population through churn instead of accumulating. The leak was pre-existing (Phase 18-19 era); 20-01c surfaced it by reporting the number for the first time."
+  - "Outbound queue depth is at-scrape-instant zero across the 10× tier ramp. paralife.outbound.queue.depth.max reads 0 in all 18 samples × 3 tiers. Combined with paralife.backpressure.stalled.sessions = null (meter never written → no sessions ever stalled) and paralife.outbound.detach.timeout = 0 at every sample, no queue pressure observed at the 5 s scrape points. peakQueueDepth() is at-scrape-instant max (not interval-peak), so this is sample-coarse evidence — bursts between scrapes are invisible. Adequate for 'D-10 VT-per-session drain absorbs tick broadcast cadence at this scale'; insufficient for 'zero pressure between samples'."
+  - "Tick wall-time is essentially flat across 10× bot count. paralife.tick.work.ms.max at last sample: 83 ms (100 bots) / 75 ms (500 bots) / 106 ms (1000 bots). The 100→1000 amplification is ~1.3×, not 10× — tick pipeline dominated by per-tick constant-factor work (CA simulation, environment effects, frame-build snapshot loop), not per-bot scaling. 6 samples × 1 run per tier is enough for 'not a hotspot at this scale'; insufficient for quantitative scaling extrapolation."
+  - "Lock flamegraph at HEAD 0824f1a captured in a separate 1000-bot run (asprof 4.4 cannot multi-attach the same PID with different events). Acceptable cross-run evidence per all four 20-01b methodology reviewers."
+  - "A8 wording corrected in 0824f1a meta.json: probe is `java -XX:+UseZGC -XX:+PrintFlagsFinal -version | grep -iE 'UseZGC|ZGenerational'`; Temurin 21.0.6 defaults to G1, ZGC requires `-XX:+UseZGC`, generational ZGC requires `-XX:+ZGenerational`. Generational ZGC becomes the default only in JDK 23."
+  - "asprof sample intervals now documented in meta.json (asprof_cpu_interval_us=10000, asprof_alloc_interval_bytes=524288 — asprof 4.4 defaults: 100 Hz cpu / 512 KB alloc). 19 KB cpu.html at 60 s = ~6 000 stacks, normal density at this sample rate."
 patterns-established:
-  - "Aggregate-gauge supplier pinning: when registering `Gauge.builder(name, IntSupplier, ToDoubleFunction)`, Micrometer holds the target weakly. Bare `this::method` lambdas have no other strong owner and will be GC'd, exporting NaN. Pin the supplier in a long-lived field (typically on a Spring-managed singleton) and re-anchor the gauge on `this`. Bug observed at d768305, fixed at 02b1b76."
-  - "Sidecar metric scraping: `/actuator/metrics/{name}` returns null/404 when the meter is registered but has no recorded measurements at scrape time. `paralife.admission.rejected` reads `null` in early samples then `4`/`12`/`52` as nutrient pressure builds — both behaviours are normal; downstream tooling must treat absence as 0, not as 'meter missing'."
-  - "Per-tier capture ritual = `./gradlew clean loadHarnessJar bootJar` once; then `capture-tier.sh COUNT DURATION SHA OUT_DIR [with-flames]` per tier. Script in `/tmp/p20-01c-capture/` (gitignored). Each tier ~3.5 min wall."
+  - "Aggregate-gauge supplier pinning: when registering `Gauge.builder(name, IntSupplier, ToDoubleFunction)`, Micrometer holds the target weakly. Bare `this::method` lambdas have no other strong owner and will be GC'd, exporting NaN. Pin the supplier in a long-lived field (typically on a Spring-managed singleton) and re-anchor the gauge on `this`. Bug observed at d768305, fixed at 02b1b76. Now also guarded against double-register (D3) — log+ignore second caller, first supplier wins."
+  - "Per-bucket gauge dec discipline: every `incActiveBucket()` callsite must be paired with a `decActiveBucketByTags(lookupBucketTags(entityId))` + `releaseBucketTags(entityId)` callsite BEFORE the session attrs (ATTR_ENTITY_ID) are cleared. cleanupBot and (post-D1) markDead follow the pattern; future lifecycle exits must adopt the same shape or the gauge accumulates."
+  - "Sidecar metric scraping: `/actuator/metrics/{name}` returns null/404 when the meter is registered but has no recorded measurements at scrape time. `paralife.admission.rejected` reads null in early samples then 1/17/58 as respawn-cap pressure builds at 1000-tier — both behaviours are normal; downstream tooling must treat absence as 0, not as 'meter missing'."
+  - "Per-tier capture ritual = `./gradlew clean loadHarnessJar bootJar` once; then `capture-tier.sh COUNT DURATION SHA OUT_DIR [with-flames]` per tier, then `lock-capture.sh SHA OUT_DIR` for the lock flamegraph. Scripts in `/tmp/p20-01c-capture/` (gitignored). Each tier ~3.5 min wall; full 4-capture run ~13 min."
 requirements-completed: [SCALE-09]
 duration: 90min
-completed: 2026-05-19
+completed: 2026-05-20
 ---
 
-# Plan 20-01c: Re-anchored Baseline + F1/F2/F6 Remediation
+# Plan 20-01c: Re-anchored Baseline + Multi-Review Remediation
 
-**Baseline re-anchored at HEAD SHA `1818eeb` with `-Dparalife.admission.cap=1500`. Three tiers: 100 / 500 / 1000 bots @ peak_registered = 100 / 500 / 1000 admitted. 12 artifacts (3× JFR + 3× cpu/alloc/lock HTML + 3× meta.json + 3× metric sidecar). Supersedes 20-01b (c22e487) which captured at cap=256 with the population ceiling silently binding 500/1000-tier admissions to ~256.**
+**Baseline re-anchored at HEAD SHA `0824f1a` with `-Dparalife.admission.cap=1500`. Three tiers: 100 / 500 / 1000 connected bots, cap=1500 non-binding for the bot population, ~76 k frames captured at the 1000-tier through ~47 s of capture window. 12 artifacts (3× JFR + 3× cpu/alloc/lock HTML + 3× meta.json + 3× metric sidecar). Supersedes 20-01b (c22e487) which captured at cap=256 with the population ceiling silently binding 500/1000-tier admissions to ~256.**
 
-## Per-Tier Headline
+Re-anchored mid-flight after multi-review (`20-01c-REVIEW-inline.md`, `20-01c-REVIEW-reference.md`) surfaced three RED findings against the original 1818eeb capture: (a) the per-bucket-cap narrative was fabricated, (b) the rejection column was mislabeled (`world-full` → actual `respawn-cap`), and (c) `active.entities` was a leaky-accumulator (pre-existing markDead bug). All three resolved at code or doc level. See §Multi-Review Remediation below.
 
-| Tier | peak_reg | active@end (world sum) | rejected{world-full}@end | qmax | enc.cnt | enc.max | tick.max | frame.max | detach | respawns |
+## Per-Tier Headline (post-D1 / 0824f1a)
+
+| Tier | peak_reg | active.entities@end (live count) | rejected{respawn-cap}@end | qmax | enc.cnt | enc.max | tick.max | frame.max | detach | respawns |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **100 bots** | 100 | 299 | 0 | 0 (1 spike) | 5 870 | 29 ms | 84 ms | 102 B | 0 | 480 |
-| **500 bots** | 500 | 1 771 | 4 | 0 | 33 333 | 19 ms | 99 ms | 168 B | 0 | 2 500 |
-| **1000 bots** | 1 000 | 3 733 | 52 | 0 | 76 048 | 12 ms | 101 ms | 136 B | 0 | 3 133 |
+| **100 bots** | 100 | 100 | 0 | 0 | 5 810 | 8 ms | 83 ms | 95 B | 0 | 500 |
+| **500 bots** | 500 | 500 | 0 | 0 | 33 489 | 9 ms | 75 ms | 104 B | 0 | 2 495 |
+| **1000 bots** | 1 000 | 851 | 58 | 0 | 76 848 | 22 ms | 106 ms | 105 B | 0 | 4 996 |
 
-`peak_registered` from harness `--report-out` JSON. `rejected{world-full}` is the nutrient bucket hitting the per-bucket cap=1500 — bot admissions all succeeded (`peak_registered` = `--count`). `enc.*` from `paralife.outbound.encode.send.ms`. `tick.max` from `paralife.tick.work.ms`. `qmax` = `paralife.outbound.queue.depth.max` (aggregate max across all per-session queues, sampled at scrape time). `detach` = `paralife.outbound.detach.timeout` count. `respawns` from harness — bots cycle through death + reconnect during the 200 s run.
+`peak_registered` from harness `--report-out` JSON; `connect_failures_total` and `e408_reconnect_required_total` are 0 at every tier. `active.entities@end` is the per-bucket-gauge value at the last 5 s scrape — post-D1 it tracks live population through churn (the 1000-tier trajectory dips to 851 in the final sample as bots that hit `maxRespawnsPerSession=5` exit and are not yet replaced). `rejected{respawn-cap}` is Guard 6 — bots exhausting their respawn budget — orthogonal to cap-binding. `enc.*` columns are `MAX` from `paralife.outbound.encode.send.ms` (the Actuator JSON exposes COUNT / TOTAL_TIME / MAX; configured percentiles are emitted on `/actuator/prometheus` if needed). `tick.max` from `paralife.tick.work.ms.max`. `qmax` = `paralife.outbound.queue.depth.max` (aggregate max across all per-session queues, sampled at scrape time). `detach` = `paralife.outbound.detach.timeout` count. `respawns` from harness.
 
-## Three review findings: status
+## Multi-Review Remediation
 
-### F1 — admission.cap silently bounds workload (RED → resolved at the bot-bucket level)
+The original 1818eeb capture went through `multi-review` in both inline and reference modes (7 reviewer runs). Three substantive RED findings converged:
 
-`application.yml:65` (`paralife.admission.cap: 256`) is **unchanged**. D-20 alongside-not-move invariant preserved. The cap is overridden per-baseline-run by the JVM flag `-Dparalife.admission.cap=1500` on the server boot only — meta.json carries `cap_during_run: 1500` for evidence trail.
+### F1 — admission.cap silently bounds workload (RESOLVED with corrected narrative)
 
-`AdmissionGate` (line 140-150) applies the cap **per bucket**, not world-aggregate. With cap=1500 per bucket:
-- bot buckets (spore / membrane / catalyst) never hit cap — `peak_registered` = `--count` at every tier
-- nutrient bucket fills up first (the world spawns nutrients on cell-death events; respawn churn at 1000-bot tier pushes nutrients > 1500 by the steady-state tail)
+The original `application.yml:65` (`paralife.admission.cap: 256`) is unchanged. The 1500 value exists only as a JVM flag (`-Dparalife.admission.cap=1500`) on the server boot for benchmark runs; production default at `application.yml:65` stays at 256. meta.json carries `cap_during_run: 1500` for evidence trail.
 
-Practical implication: F1 is resolved for the purpose of comparing bot connection cost across the 10× tier ramp — that's what 20-04/20-05/20-06 cite. If a future plan needs to study nutrient-bucket pressure specifically it should raise the nutrient cap independently or query `admission.rejected{reason=world-full,bucket=nutrient}` with the tag filter.
+`AdmissionGate.java:58,140-151` uses **one** global `AtomicInteger reservedSlots` against **one** `admissionConfig.cap()` — the cap is world-aggregate, not per-bucket. The earlier 1818eeb SUMMARY framed F1 as resolved via "per-bucket cap; bot buckets never hit, nutrient bucket hits" — that narrative has no source basis. Nutrients are placed directly through `SimulationEngine.setEntity:1431` and bypass `AdmissionGate` entirely; bucket separation exists only as metric *tags* (`bucket=spore|membrane|catalyst|...`), not as admission-gate counters.
 
-### F2 — tick.health.work-time-ms excludes per-session encode + send (YELLOW → resolved)
+The actual mechanism producing the post-recapture rejection numbers (1/17/58 across 1000-tier samples 4–6) is Guard 6 at `AdmissionGate.java:154` — bots exhausting `maxRespawnsPerSession=5`. The rejection token is `RejectionToken.RESPAWN_CAP`, and the metric tag `availableTags.reason = ["respawn-cap"]` is what the sidecars actually carry (the 1818eeb headline labeled this column `rejected{world-full}` which was wrong). Zero `world-full` rejections appear in any sidecar at any tier.
 
-New meter: `paralife.outbound.encode.send.ms` (DistributionSummary publishing p50/p95/p99, matching the `tick.work.ms` shape). It is registered in `AdmissionMetrics` and accessed via `metrics.encodeSendTimer()` from `OutboundSender.drainLoop`. The Timer brackets the encode + `synchronized(session) sendMessage` pair inside a try/finally so saturation records on both success and IOException paths.
+Practical implication: F1 is resolved by raising the global cap to 1500 to make it non-binding at the bot population sizes used for the 10× ramp (100/500/1000 < 1500). Plan 20-04/05/06 should cite this as a benchmark-time JVM-flag override, not a production default change. There is no per-bucket cap surface to design against — if a future plan needs to bound nutrients independently, it has to introduce one.
 
-`paralife.tick.health.work-time-ms` is explicitly the synchronous tick-dispatch scalar — frame build (`TickBroadcaster.onTick @Order(50)`) is in the window, encode + per-VT send is not. The deprecated scalar is retained in the sidecar for cross-baseline-diff continuity with 20-01b (note: it reads `null` in the 20-01c sidecars — the gauge requires the `MAINTENANCE` mode AtomicLong to have been written at least once, which is a separate plumbing concern outside 20-01c scope; the new Timer is the actually-useful encode+send measurement).
+### F2 — tick.health.work-time-ms excludes per-session encode + send (RESOLVED)
 
-Empirical finding: encode+send is fast. 1000-bot tier accumulated 76,048 records (one per `drainLoop` iteration) totalling 6.04 s — mean ≈ 79 µs, max 12.5 ms. Not a hotspot. The original F2 concern that per-VT scaling cost was invisible is now answered: there is no per-VT scaling cost worth optimising at this load.
+New meter: `paralife.outbound.encode.send.ms` (Timer with histograms enabled). Registered in `AdmissionMetrics` and accessed via `metrics.encodeSendTimer()` from `OutboundSender.drainLoop`. The Timer brackets the entire `try { encode + getBytes + recordFrameSize + synchronized(session) { sendMessage + emit-listener } } catch (...) { ... } finally { sample.stop }` block — that is a **strict superset** of the original "encode+send" framing because it also captures monitor-wait contention and metric-recording overhead. (D2 further guards `sample.stop` against Micrometer-internal exceptions so a histogram-rotation race cannot kill the drain VT.)
 
-### F6 — c22e487 baseline stale vs HEAD (YELLOW → resolved)
+`paralife.tick.health.work-time-ms` is explicitly the synchronous tick-dispatch scalar — frame build (`TickBroadcaster.onTick @Order(50)`) is in the window, encode + per-VT send is not. The scalar is retained for cross-baseline-diff continuity with 20-01b (note: it reads `null` in the 20-01c sidecars — see Caveat #3 below; the new Timer is the actually-useful encode+send measurement).
 
-20-01b artifacts (12 files in `profiles/*-c22e487.*`) remain committed as the prior **capped-population** capture. They are not deleted. The `f6da129 fix(19.1): pass-1 multi-review follow-up sweep` between c22e487 and HEAD reordered `SimulationEngine.processDeaths` (sortedComposites by compositeId before simRng.nextDouble), which made sess-9 / sess-21 golden-trace digests legitimately differ. With 20-01c anchored at 1818eeb (downstream of f6da129), three-gate is 9/9 green at the captured SHA.
+Empirical finding: encode+send-and-monitor-wait is fast. 1000-bot tier sample 6 accumulated 76 848 records (one per `drainLoop` iteration) totalling 7.14 s wall time — mean ≈ 93 µs, max 22.1 ms. Not a hotspot. The original F2 concern that per-VT scaling cost was invisible is now answered: there is no per-VT scaling cost worth optimising at this load.
+
+The Timer envelope still **excludes** offer→take queue dwell time. At `qmax=0` across all samples, dwell is sub-µs and the omission is harmless; if queue depth ever climbs, the Timer will under-report client-perceived send latency. Documented so downstream plans don't conflate Timer p99 with client-perceived send latency.
+
+### F6 — c22e487 baseline stale vs HEAD (RESOLVED)
+
+20-01b artifacts (12 files in `profiles/*-c22e487.*`) remain committed as the prior **capped-population** capture for the F1 evidence trail. The intermediate 1818eeb artifacts (pre-D1 leak; multi-review surfaced the bug) have been dropped in favour of 0824f1a (post-D1+D2+D3). With 20-01c anchored at 0824f1a, three-gate is 9/9 green at the captured SHA.
+
+## D1–D3 Code Fixes Landed in 20-01c
+
+Multi-review surfaced three issues that needed in-source remediation before re-capture. All three landed before the 0824f1a artifacts:
+
+### D1 — markDead must dec active.entities bucket (pre-existing leak)
+
+Pre-fix `WorldWebSocketHandler.markDead:992-1000` removed `ATTR_ENTITY_ID` and cleared the resume token but never decremented the per-bucket gauge or released the bucket-tags snapshot. Combined with `incActiveBucket` at the Allow path (line 649) running on every respawn, each bot lifecycle accumulated +5 incs / −1 dec, producing the monotonic gauge growth observed in the 1818eeb 1000-bot sidecar (1669 → 3733 over 30 s).
+
+Fix mirrors the `cleanupBot:917-935` pattern — lookup the captured `Tags` via `lookupBucketTags(entityId)`, dec the bucket, then release the tag snapshot. Crucially does NOT call `releaseSlot()`: `AdmissionGate.java:142` Guard 5 skips cap consumption on `req.isRespawn()`, so one slot is acquired at initial register and reused across all respawns — only `cleanupBot` (session close) and `markStalled` (stall close) release slots. Calling `releaseSlot` from `markDead` would over-release on every death.
+
+Post-fix verification (0824f1a 1000-bot sidecar): trajectory is 966 → 1000 → 1000 → 998 → 966 → 851 — tracks live population through churn instead of accumulating. The 851 final value reflects bots that hit `maxRespawnsPerSession=5` exiting the population during the steady-state tail.
+
+### D2 — Timer.Sample.stop guarded against Micrometer exceptions
+
+`OutboundSender.drainLoop`'s `finally { sample.stop(...) }` could (low-probability) propagate a `RuntimeException` from inside Micrometer during histogram rotation or registry shutdown, killing the drain VT for that session and silently stalling outbound frames. Wrapped in `try / catch RuntimeException` with a warn-and-continue. Defensive; no emitted-metric changes.
+
+### D3 — outbound queue-depth gauge double-register guard
+
+`AdmissionMetrics.registerOutboundQueueDepthMaxGauge` previously overwrote the `outboundQueueDepthSupplier` on every call. Micrometer dedupes the gauge meter by name+tags at the registry layer, so the second registration looked like a no-op there — but the supplier swap silently changed what the still-registered gauge read. Now early-returns with a warn when called twice; first supplier wins.
+
+### D4 — asprof sample rate documented in meta.json
+
+`capture-tier.sh` now records `asprof_cpu_interval_us=10000` and `asprof_alloc_interval_bytes=524288` (asprof 4.4 defaults: 100 Hz cpu, 512 KB alloc) in the per-tier `meta.json`. Pushes back on the multi-review claim that 19 KB `cpu.html` indicated sparse sampling — at the documented rate, 60 s capture = ~6 000 stacks, which is normal density.
 
 ## Outbound queue + drain VT saturation evidence
 
 Across **all 18 samples × 3 tiers** (6 samples per tier):
-- `paralife.outbound.queue.depth.max` = 0 in 17/18 samples; one spike to 1 at the 100-bot tier sample 5
-- `paralife.backpressure.stalled.sessions` = 0 in every sample
+- `paralife.outbound.queue.depth.max` = 0 in every sample
+- `paralife.backpressure.stalled.sessions` = null (meter registered but never written → no sessions stalled)
 - `paralife.outbound.detach.timeout` = 0 at every tier
 
-This is direct evidence that the D-10 VT-per-session + bounded `ArrayBlockingQueue<Frame>` architecture absorbs the tick-broadcast cadence at 1000 bots without queue pressure. The synchronized-session-monitor (per-session lock around `sendMessage`) is not a contention hotspot at this load — corroborated by the lock flamegraph showing 6 outbound-related stack nodes versus 209 in the cpu flamegraph.
+This is "no queue pressure observed at 5 s scrape points across 18 samples × 3 tiers". `peakQueueDepth()` is at-scrape-instant (not interval-peak), so bursts between scrapes are invisible — adequate evidence for "the D-10 VT-per-session + bounded `ArrayBlockingQueue<Frame>` architecture absorbs the tick-broadcast cadence at 1000 bots without queue pressure", weaker evidence for "no pressure at any moment". The synchronized-session-monitor (per-session lock around `sendMessage`) is not a contention hotspot at this load — corroborated by the lock flamegraph.
 
 ## Tick wall-time vs bot count
 
-`paralife.tick.work.ms.max` over the steady-state window:
+`paralife.tick.work.ms.max` over the steady-state window (last sample):
 
 | Tier | tick.work.ms.max | ratio to 100-tier |
 |---|---|---|
-| 100 | 84 ms | 1.0× |
-| 500 | 99 ms | 1.2× |
-| 1000 | 101 ms | 1.2× |
+| 100 | 83 ms | 1.0× |
+| 500 | 75 ms | 0.9× |
+| 1000 | 106 ms | 1.3× |
 
-The tick pipeline cost is dominated by per-tick constant-factor work (CA simulation, environment effects, frame-build snapshot loop), not per-bot scaling. This is consistent with the D-10 design intent — per-bot work is parallelised onto drain VTs and is not on the tick critical path.
+The tick pipeline cost is dominated by per-tick constant-factor work (CA simulation, environment effects, frame-build snapshot loop), not per-bot scaling. This is consistent with the D-10 design intent — per-bot work is parallelised onto drain VTs and is not on the tick critical path. 6 samples × 1 run per tier is enough for "not a hotspot at this scale"; insufficient for quantitative scaling extrapolation (deferred to Phase 21).
+
+## Pushback
+
+Two multi-review claims did not survive verification against the source data:
+
+### "10× scale is partly fictional" (claude inline R3) — pushed back
+
+Claude inline R3's arithmetic: 76 048 enc records / 200 s tick window @ 2 Hz = 19 % of "all 1000 bots alive every tick", implying ~190 concurrent-alive on average.
+
+The denominator is wrong. `enc.cnt` is cumulative since meter registration (server boot). At 1000-bot tier sample 6 the metric reflects activity from ramp-start through ~47 s later: sample 1 fires immediately after the ramp completes (~22 s into the run), sample 6 is +25 s after sample 1. 1000 bots × 2 Hz × ~37 s effective broadcast window ≈ 74 k frames expected; observed 76 848 ≈ 103 % of theoretical. Bots ARE at full population during the measurement, the 200 s denominator was the error.
+
+Post-D1 0824f1a verification corroborates: `active.entities` reads 966 / 1000 / 1000 / 998 / 966 / 851 across the 6 samples — the population genuinely is ~1000 through most of the steady-state window. The 10× ramp is real for connection count *and* sustained live population.
+
+### "cpu.html 19 KB suggests sparse sampling" (claude reference Y5) — pushed back
+
+asprof 4.4 default cpu sampling is 100 Hz (10 000 µs interval); 60 s capture = ~6 000 stacks. 19 KB d3-flame-graph HTML is the expected density at that sample count — d3-flame-graph aggressively aggregates repeated stack frames. The capture is not sparse; it is well-aggregated. Sample rate is now recorded in `meta.json` per D4 so future readers don't have to re-derive this.
+
+### "tick.health.work-time-ms shows numeric values" (codex inline + opencode reference) — pushed back
+
+Codex inline and opencode reference reported `tick.health.work-time-ms = "43.0, 39.0, ..."` in the 1818eeb sidecars. Verified empty via `jq '[.samples[] | .paralife_tick_health_work_time_ms.measurements[0].value]'` on all three 1818eeb sidecars: all 18 values are `null`. Same result on the 0824f1a sidecars. The gauge has no recorded writes at scrape time — reviewer hallucination, resolved against source data. The plan-as-shipped's caveat #3 (kept below) is factually correct.
 
 ## Artifact Inventory
 
 | File | Size | SHA segment |
 |---|---|---|
-| `jfr-100bots-baseline-1818eeb.jfr` | 2.4 MB | 1818eeb |
-| `jfr-500bots-baseline-1818eeb.jfr` | 3.9 MB | 1818eeb |
-| `jfr-1000bots-baseline-1818eeb.jfr` | 3.3 MB | 1818eeb |
-| `cpu-1000bots-baseline-1818eeb.html` | 19 KB | 1818eeb |
-| `alloc-1000bots-baseline-1818eeb.html` | 15 KB | 1818eeb |
-| `lock-1000bots-baseline-1818eeb.html` | 19 KB | 1818eeb |
-| `metrics-100bots-baseline-1818eeb.json` | 13 KB | 1818eeb |
-| `metrics-500bots-baseline-1818eeb.json` | 13 KB | 1818eeb |
-| `metrics-1000bots-baseline-1818eeb.json` | 14 KB | 1818eeb |
-| `jfr-{100,500,1000}bots-baseline-1818eeb.meta.json` | 1.2 KB each | 1818eeb |
+| `jfr-100bots-baseline-0824f1a.jfr` | 2.5 MB | 0824f1a |
+| `jfr-500bots-baseline-0824f1a.jfr` | 3.7 MB | 0824f1a |
+| `jfr-1000bots-baseline-0824f1a.jfr` | 4.7 MB | 0824f1a |
+| `cpu-1000bots-baseline-0824f1a.html` | 80 KB | 0824f1a |
+| `alloc-1000bots-baseline-0824f1a.html` | 34 KB | 0824f1a |
+| `lock-1000bots-baseline-0824f1a.html` | 19 KB | 0824f1a |
+| `metrics-100bots-baseline-0824f1a.json` | 12 KB | 0824f1a |
+| `metrics-500bots-baseline-0824f1a.json` | 13 KB | 0824f1a |
+| `metrics-1000bots-baseline-0824f1a.json` | 13 KB | 0824f1a |
+| `jfr-{100,500,1000}bots-baseline-0824f1a.meta.json` | 1.2 KB each | 0824f1a |
 
-Lock flamegraph is captured in a separate 1000-bot run (not concurrent with cpu/alloc; asprof 4.4 multi-attach limitation documented in 20-01b). Acceptable exploratory evidence per all four 20-01b methodology reviewers.
+Lock flamegraph captured in a separate 1000-bot run (not concurrent with cpu/alloc; asprof 4.4 multi-attach limitation documented in 20-01b). Acceptable exploratory evidence per all four 20-01b methodology reviewers.
 
 ## Verification gates
 
 | # | Gate | Outcome |
 |---|---|---|
-| 1 | `./gradlew test` green after A1/A2 | ✓ 944 tests; 1 pre-existing flake (HundredBotIntegrationTest — see caveat) |
-| 2 | Three-gate (GoldenTraceEquivalence + GoldenTraceWithActions + LiveEntityRegistryInvariant) green at HEAD | ✓ 9/9 |
-| 3 | `admission.rejected{reason=world-full,bucket=*-bot}` = 0 at every tier | ✓ Bot bucket: zero rejections at every tier (proxied by harness `peak_registered = --count`). Nutrient bucket: nonzero at 500/1000 tiers as documented above |
-| 4 | `peak_registered ≈ --count` per tier | ✓ exactly 100 / 500 / 1000 |
-| 5 | `outbound.encode.send.ms.p95` and `outbound.queue.depth.max` show monotonic-or-bounded growth | ✓ enc.cnt grows 5.9k → 33k → 76k (linear-ish with bot count); enc.max bounded ≤30 ms; qmax bounded at 0-1 |
-| 6 | `meta.json` carries `cap_during_run: 1500` + corrected A8 wording | ✓ verified in 3× meta.json |
-| 7 | Headline contains no naked "10×" without entity-count qualifier | ✓ headline is "100/500/1000 bots, ≈100/500/1000 admitted entities" |
-| 8 | `paralife.outbound.detach.timeout = 0` at every tier | ✓ all 18 samples |
+| 1 | `./gradlew test` green after D1+D2+D3 | ✓ 944 tests; 1 pre-existing flake (HundredBotIntegrationTest — see caveat) |
+| 2 | Three-gate (GoldenTraceEquivalence + GoldenTraceWithActions + LiveEntityRegistryInvariant) green at HEAD | ✓ 9/9 at 0824f1a |
+| 3 | `admission.rejected{reason=world-full}` = 0 at every tier | ✓ Zero world-full rejections across all 18 samples; the only rejections at any tier are `reason=respawn-cap` at 1000-tier |
+| 4 | `peak_registered == --count` per tier | ✓ exactly 100 / 500 / 1000; connect_failures_total = 0 + e408_reconnect_required_total = 0 at every tier |
+| 5 | `outbound.encode.send.ms.max` and `outbound.queue.depth.max` show monotonic-or-bounded growth | ✓ enc.cnt grows 5.8k → 33k → 77k (linear-ish with bot count); enc.max bounded ≤22 ms; qmax bounded at 0. (Note: Actuator JSON exposes COUNT/TOTAL_TIME/MAX only; configured percentiles are available on `/actuator/prometheus` if downstream needs them.) |
+| 6 | `meta.json` carries `cap_during_run: 1500`, `asprof_cpu_interval_us: 10000`, `asprof_alloc_interval_bytes: 524288`, corrected A8 wording | ✓ verified in 3× meta.json |
+| 7 | Headline contains explicit cap-binding + connection-count framing (no naked "10× scale") | ✓ headline is "100/500/1000 connected bots, cap=1500 non-binding, ~76 k frames @ 1000-tier through ~47 s of capture window" |
+| 8 | `paralife.outbound.detach.timeout = 0` at every tier (D2 preservation check) | ✓ all 18 samples |
+| 9 | `active.entities@end ≈ tier-count ± churn` at 1000-tier (D1 falsifiability — pre-fix was 3733) | ✓ trajectory 966→1000→1000→998→966→851; final dip from respawn-cap-exhausted bots |
 
 ## Caveats
 
-1. **HundredBotIntegrationTest.hundredBotsConnectAndReceiveTicks** times out on WSL2 + Gradle `forkEvery=1` test isolation. Verified pre-existing at parent commit 14e96ea via stash + retest — not introduced by A1/A2 instrumentation. The three-gate (the load-bearing baseline gate per plan §Verification) is 9/9 green. Phase 22 test-leak audit owns the `forkEvery=1` setting and it must remain unconditional per the 2026-05-03 fleet decision.
-2. **Nutrient-bucket cap pressure at 1000-tier**. With cap=1500 per bucket, the nutrient bucket starts rejecting late in the 1000-bot tier window (52 rejections by the last sample). Bot scaling is uncontaminated. Plan 20-04 should add a `bucket=nutrient` cap surface or raise the global cap further for Phase 21 (scale-benchmark gate).
-3. **paralife.tick.health.work-time-ms = null in 1818eeb sidecars**. The MAINTENANCE-mode AtomicLong gauge has no recorded writes at scrape time in this baseline. The deprecated scalar is retained for SHA-to-SHA continuity only; `paralife.tick.work.ms` DistributionSummary (count/total/p50/p95/p99/max) is the live tick-cost meter.
+1. **HundredBotIntegrationTest.hundredBotsConnectAndReceiveTicks** times out on WSL2 + Gradle `forkEvery=1` test isolation. Verified pre-existing at parent commit 14e96ea via stash + retest — not introduced by D1/D2/D3. The three-gate (the load-bearing baseline gate per plan §Verification) is 9/9 green. Phase 22 test-leak audit owns the `forkEvery=1` setting and it must remain unconditional per the 2026-05-03 fleet decision.
+2. **respawn-cap pressure at 1000-tier**. With cap=1500 non-binding and `maxRespawnsPerSession=5`, the 1000-bot tier accumulates 58 `respawn-cap` rejections by the last sample as bots exhaust their respawn budget. Bot scaling is uncontaminated — these are not cap-bind events. Plan 20-04 or Phase 21 should decide whether `maxRespawnsPerSession` needs to be raised for sustained 1000+ bot benchmarks.
+3. **paralife.tick.health.work-time-ms = null in 0824f1a sidecars**. The MAINTENANCE-mode AtomicLong gauge has no recorded writes at scrape time in this baseline. Codex (inline) and opencode (reference) reported numeric values during multi-review; verified empty via `jq '[.samples[] | .paralife_tick_health_work_time_ms.measurements[0].value]'` on all three sidecars (1818eeb and 0824f1a) — reviewer hallucination, resolved against source data. The deprecated scalar is retained for SHA-to-SHA continuity only; `paralife.tick.work.ms` DistributionSummary (count/total/max via Actuator JSON; configured percentiles via Prometheus scrape) is the live tick-cost meter.
 
 ## Supersedes
 
-20-01b `14e96ea` baseline (commit `feat(20-01b): baseline JFR + flamegraph + actuator-metric capture at c22e487`). 12 artifacts in `profiles/*-c22e487.*` are kept as the prior **capped-population** capture and referenced here for the F1 evidence trail. They are not authoritative for downstream Plans 20-04 / 20-05 / 20-06 — those plans cite the 1818eeb capture.
+20-01b `14e96ea` baseline (commit `feat(20-01b): baseline JFR + flamegraph + actuator-metric capture at c22e487`). 12 artifacts in `profiles/*-c22e487.*` are kept as the prior **capped-population** capture and referenced here for the F1 evidence trail. They are not authoritative for downstream Plans 20-04 / 20-05 / 20-06 — those plans cite the 0824f1a capture. The intermediate 1818eeb capture has been dropped (pre-D1 leak; replaced wholesale by 0824f1a).
 
 ## Deferred (recorded only)
 
 | Item | Reason |
 |---|---|
-| 3× replication per tier for noise floor | Phase 21 scale-benchmark gate concern. DistributionSummary now carries p95/p99 inside each run. |
+| 3× replication per tier for noise floor | Phase 21 scale-benchmark gate concern. Timer histograms now carry MAX inside each run; configured percentiles available via Prometheus scrape. |
 | Per-thread JFR `jdk.CPULoad` / `jdk.ThreadCPULoad` extraction | Tooling work; not load-bearing for MVP. |
 | Per-bucket tagging on `outbound.encode.send.ms` | Untagged Timer sufficient for saturation detection. |
-| `paralife.admission.bucket.nutrient.cap` surface | Plan 20-04 work. Not in 20-01c scope. |
+| `paralife.admission.bucket.*.cap` surface | Plan 20-04 work if a per-bucket cap is needed; current code is global-only. |
 | Wire up `paralife.tick.health.work-time-ms` MAINTENANCE-mode write path | Deprecated scalar; replaced by `tick.work.ms` DistributionSummary. |
+| Prometheus-format percentile artifacts for `outbound.encode.send.ms.p95` | Available now via `/actuator/prometheus` but not captured in the JSON sidecar shape; defer formal percentile reporting to Phase 21. |
+| TD-20-01c-A — `recordFrameSize` called before successful `sendMessage` | See `.planning/STATE.md` Deferred Items. Trivial impact at this scale (≤1 frame per IOException). |
