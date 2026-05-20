@@ -50,6 +50,9 @@ Progress: [████████▌░] 85%
 | tech-debt | TD-22-D — `HundredBotIntegrationTest` `connectLatch.await(30s)` race against 100 sequential `WebSocketClient.start()` cold-starts. Bump to 60s or share single client. Defer to P22.1. | open | 2026-05-04 |
 | tech-debt | TD-22-E — `forkEvery=1` masks leaks rather than fixing them. Final exit gate (`forkEvery=0` + <100 live threads) deferred to P22.1. | open | 2026-05-04 |
 | tech-debt | TD-20-01c-A — `OutboundSender.drainLoop` records `frame.size.bytes` BEFORE the synchronized `sendMessage` block; on `IOException` the metric counts a frame that was never sent. Trivial impact on saturation gauge; real impact only if downstream tooling reads `frame.size.bytes` for precise egress accounting. Move `recordFrameSize` after successful `sendMessage` (~5 lines). | open | 2026-05-20 |
+| tech-debt | TD-20-01c-B — Pre-existing `markStalled→cleanupBot→cleanupByEntityId` double-dec on path B (stalled-then-close-without-reconnect-before-grace-expire). Same `cleanupBot` fallback root cause as the D1-introduced path-C bug; closed incidentally by Plan 20-01c pass-2 H1 (cleanupBot skips active-bucket dec when `entityId == null`). | closed | 2026-05-21 |
+| tech-debt | TD-20-01c-C — D2 `OutboundSender.drainLoop` swallows `sample.stop(...)` RuntimeException with `log.warn` only; no counter tracks frequency. Add `paralife.outbound.encode.send.stop.failures` counter (~3 LOC) if the warn ever fires in steady-state. Observability nice-to-have. | open | 2026-05-21 |
+| tech-debt | TD-20-01c-D — D3 `registerOutboundQueueDepthMaxGauge` check-then-set is non-atomic. Theoretical only (production single-threaded `@PostConstruct`). Consider `AtomicReference.compareAndSet` OR a one-line invariant comment. | open | 2026-05-21 |
 
 ### Quick Tasks Completed
 
