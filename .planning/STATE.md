@@ -53,6 +53,7 @@ Progress: [████████▌░] 85%
 | tech-debt | TD-20-01c-B — Pre-existing `markStalled→cleanupBot→cleanupByEntityId` double-dec on path B (stalled-then-close-without-reconnect-before-grace-expire). Same `cleanupBot` fallback root cause as the D1-introduced path-C bug; closed incidentally by Plan 20-01c pass-2 H1 (cleanupBot skips active-bucket dec when `entityId == null`). | closed | 2026-05-21 |
 | tech-debt | TD-20-01c-C — D2 `OutboundSender.drainLoop` swallows `sample.stop(...)` RuntimeException with `log.warn` only; no counter tracks frequency. Add `paralife.outbound.encode.send.stop.failures` counter (~3 LOC) if the warn ever fires in steady-state. Observability nice-to-have. | open | 2026-05-21 |
 | tech-debt | TD-20-01c-D — D3 `registerOutboundQueueDepthMaxGauge` check-then-set is non-atomic. Theoretical only (production single-threaded `@PostConstruct`). Consider `AtomicReference.compareAndSet` OR a one-line invariant comment. | open | 2026-05-21 |
+| tech-debt | TD-20-01c-E — `WorldWebSocketHandler.handleTransportError:293-298` calls `cleanupBot(session)` unconditionally — even for stalled sessions, which violates the Phase 17 D-12 "entity held on grid for grace-expiry sweep" invariant (the cell is freed at transport-error time, so client cannot rebind to the original position on reconnect). Pre-existing; surfaced by pass-3 H1 analysis (counter math stays correct via grace-expire dec, but grid state is wrong). Fix: skip cleanupBot if `wasStalled`, mirroring `afterConnectionClosed:388-397`. | open | 2026-05-21 |
 
 ### Quick Tasks Completed
 
