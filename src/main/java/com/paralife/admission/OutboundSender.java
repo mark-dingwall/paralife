@@ -329,7 +329,12 @@ public class OutboundSender {
                 } catch (RuntimeException e) {
                     log.warn("Send error for session={}: {}", session.getId(), e.getMessage());
                 } finally {
-                    sample.stop(metrics.encodeSendTimer());
+                    try {
+                        sample.stop(metrics.encodeSendTimer());
+                    } catch (RuntimeException metricEx) {
+                        log.warn("encode.send timer stop failed (drain VT continues): {}",
+                                metricEx.toString());
+                    }
                 }
             }
         } catch (InterruptedException e) {
