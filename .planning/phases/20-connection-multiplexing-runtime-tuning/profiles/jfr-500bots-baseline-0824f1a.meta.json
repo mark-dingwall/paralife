@@ -1,0 +1,20 @@
+{
+  "captured_at_sha": "0824f1a",
+  "scenario": "500bots",
+  "duration_s": 200,
+  "harness_args": "--count 500 --duration 200 --ramp-up rate:50 --harness-id baseline-0824f1a-t500",
+  "captured_utc": "2026-05-20T06:28:17Z",
+  "captured_utc_end": "2026-05-20T06:31:54Z",
+  "jvm_flags": "-Xms2g -Xmx2g -XX:+UseG1GC -Djdk.virtualThreadScheduler.parallelism=8 -Dparalife.admission.cap=1500",
+  "cap_during_run": 1500,
+  "asprof_cpu_interval_us": 10000,
+  "asprof_alloc_interval_bytes": 524288,
+  "metric_sidecar": "metrics-500bots-baseline-0824f1a.json",
+  "harness_report": "harness-500-report.json (captured under /tmp/p20-01c-capture/tier-500/)",
+  "jfr_size_mb": "3.7",
+  "supersedes": "jfr-500bots-baseline-c22e487.jfr (Plan 20-01b — superseded by 20-01c for F1/F2/F6 review remediation)",
+  "assumptions_verified": {
+    "A8": "Probe: java -XX:+UseZGC -XX:+PrintFlagsFinal -version | grep -iE 'UseZGC|ZGenerational'. On Temurin 21.0.6, default GC is G1; ZGC requires -XX:+UseZGC; generational ZGC requires -XX:+ZGenerational. Generational ZGC becomes the default in JDK 23 only.",
+    "F1_cap_override": "Server boot includes -Dparalife.admission.cap=1500 (alongside-not-move per D-20). application.yml default stays at 256."
+  }
+}
