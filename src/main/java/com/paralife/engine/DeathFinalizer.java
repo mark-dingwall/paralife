@@ -78,6 +78,14 @@ public class DeathFinalizer {
         this.liveEntityRegistry = liveEntityRegistry;
     }
 
+    /** Optional death-cause diagnostic (flag-gated). Null when the bean is absent. */
+    private com.paralife.diagnostics.DeathDiagnostics deathDiagnostics;
+
+    @Autowired(required = false)
+    public void setDeathDiagnostics(com.paralife.diagnostics.DeathDiagnostics deathDiagnostics) {
+        this.deathDiagnostics = deathDiagnostics;
+    }
+
     /**
      * Plan 14-06 Task 1: monotonic counter of death-finalize events. Increments
      * at the TOP of each finalize* method BEFORE collaborator calls, so the
@@ -109,6 +117,8 @@ public class DeathFinalizer {
     public void finalizeParticleDeath(int x, int y, Particle p) {
         deathEventCount++;
         String id = p.id();
+        // TEMPORARY P20 diagnostic: attribute cause + lifespan before cleanup wipes state.
+        if (deathDiagnostics != null) deathDiagnostics.recordDeath(id, p.type().name());
         botRegistry.unregisterByEntity(id);
         // Phase 19 SCALE-07 (REVIEWS H3): unregister from LiveEntityRegistry immediately after BotRegistry.
         if (liveEntityRegistry != null) liveEntityRegistry.unregister(id);
@@ -130,6 +140,9 @@ public class DeathFinalizer {
         deathEventCount++;
         String primaryId = bp.primaryEntityId();
         String secondaryId = bp.secondaryEntityId();
+
+        // TEMPORARY P20 diagnostic: bonded pairs occupy the grid under bp.id().
+        if (deathDiagnostics != null) deathDiagnostics.recordDeath(bp.id(), "BONDED");
 
         botRegistry.unregisterByEntity(primaryId);
         // Phase 19 SCALE-07 (REVIEWS H3): symmetry unregister for child ids (idempotent if absent).

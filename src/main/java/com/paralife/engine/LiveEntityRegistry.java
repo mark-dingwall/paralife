@@ -1,9 +1,11 @@
 package com.paralife.engine;
 
+import com.paralife.diagnostics.DeathDiagnostics;
 import com.paralife.world.GridConfig;
 import com.paralife.world.Position;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -84,6 +86,14 @@ public class LiveEntityRegistry {
         this.rowMajorComparator = Comparator.comparingInt(this::rowMajorIndex);
     }
 
+    /** Optional death-cause diagnostic (flag-gated). Null when the bean is absent. */
+    private DeathDiagnostics deathDiagnostics;
+
+    @Autowired(required = false)
+    public void setDeathDiagnostics(DeathDiagnostics deathDiagnostics) {
+        this.deathDiagnostics = deathDiagnostics;
+    }
+
     /**
      * Register an entity. Idempotent on identical inputs; throws
      * {@link IllegalStateException} on conflict. REVIEWS MEDIUM-3.
@@ -116,6 +126,8 @@ public class LiveEntityRegistry {
         }
         indexById.put(entityId, dense.size());
         dense.add(new EntityEntry(entityId, position));
+        // TEMPORARY P20 diagnostic: single birth chokepoint (register + reproduce + bud).
+        if (deathDiagnostics != null) deathDiagnostics.recordBirth(entityId);
     }
 
     /** Row-major linear index: position().x() * height + position().y(). REVIEWS HIGH-1. */

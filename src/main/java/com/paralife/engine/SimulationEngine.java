@@ -294,6 +294,14 @@ public class SimulationEngine {
         this.entityLifecycleListener = entityLifecycleListener;
     }
 
+    /** Optional death-cause diagnostic (flag-gated). Null when the bean is absent. */
+    private com.paralife.diagnostics.DeathDiagnostics deathDiagnostics;
+
+    @Autowired(required = false)
+    public void setDeathDiagnostics(com.paralife.diagnostics.DeathDiagnostics deathDiagnostics) {
+        this.deathDiagnostics = deathDiagnostics;
+    }
+
     /**
      * Phase 19 SCALE-07: returns a row-major-sorted entity snapshot for per-entity
      * iteration. When {@link #liveEntityRegistry} is injected (Spring production path),
@@ -872,9 +880,14 @@ public class SimulationEngine {
     private void applyDeltaToOccupant(Position pos, int energyDelta) {
         Cell c = worldGrid.getCell(pos.x(), pos.y());
         if (c.occupant() instanceof Particle p) {
+            // TEMPORARY P20 diagnostic: negative delta crossing to 0 = combat/splash kill.
+            if (deathDiagnostics != null && energyDelta < 0 && p.energy() + energyDelta <= 0)
+                deathDiagnostics.hintLethal(p.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.COMBAT, p.energy());
             worldGrid.setEntity(pos.x(), pos.y(),
                     p.withEnergy(p.energy() + energyDelta));
         } else if (c.occupant() instanceof Entity.BondedPair bp) {
+            if (deathDiagnostics != null && energyDelta < 0 && bp.energy() + energyDelta <= 0)
+                deathDiagnostics.hintLethal(bp.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.COMBAT, bp.energy());
             worldGrid.setEntity(pos.x(), pos.y(),
                     bp.withEnergy(bp.energy() + energyDelta));
         } else if (c.occupant() instanceof Entity.CompositeMember cm) {
@@ -1071,10 +1084,16 @@ public class SimulationEngine {
             }
 
             if (neighborCount >= config.overcrowdingThreshold()) {
+                int penalty = config.overcrowdingEnergyPenalty();
                 if (occupant instanceof Particle p) {
-                    worldGrid.setEntity(x, y, p.withEnergy(p.energy() - config.overcrowdingEnergyPenalty()));
+                    // TEMPORARY P20 diagnostic: overcrowding penalty crossing to 0.
+                    if (deathDiagnostics != null && p.energy() - penalty <= 0)
+                        deathDiagnostics.hintLethal(p.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.OVERCROWDING, p.energy());
+                    worldGrid.setEntity(x, y, p.withEnergy(p.energy() - penalty));
                 } else if (occupant instanceof Entity.BondedPair bp) {
-                    worldGrid.setEntity(x, y, bp.withEnergy(bp.energy() - config.overcrowdingEnergyPenalty()));
+                    if (deathDiagnostics != null && bp.energy() - penalty <= 0)
+                        deathDiagnostics.hintLethal(bp.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.OVERCROWDING, bp.energy());
+                    worldGrid.setEntity(x, y, bp.withEnergy(bp.energy() - penalty));
                 }
                 if (!cell.hasFlag(Cell.FLAG_OVERCROWDED)) {
                     worldGrid.setCell(x, y, worldGrid.getCell(x, y).withAddedFlag(Cell.FLAG_OVERCROWDED));

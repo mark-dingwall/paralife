@@ -1269,6 +1269,21 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         envDamageAppliedThisTick = true;
     }
 
+    /** TEMPORARY P20 diagnostic: best-effort env sub-cause from persistent shadow grids. */
+    private com.paralife.diagnostics.DeathDiagnostics.Cause envCauseAt(int x, int y) {
+        if ((toxinGrid[x][y] & 0xFF) > 0) return com.paralife.diagnostics.DeathDiagnostics.Cause.TOXIN;
+        if ((mutagenGrid[x][y] & 0xFF) > 0) return com.paralife.diagnostics.DeathDiagnostics.Cause.MUTAGEN;
+        return com.paralife.diagnostics.DeathDiagnostics.Cause.LIGHTNING; // transient strike — no persistent grid
+    }
+
+    /** Optional death-cause diagnostic (flag-gated). Null when the bean is absent. */
+    private com.paralife.diagnostics.DeathDiagnostics deathDiagnostics;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDeathDiagnostics(com.paralife.diagnostics.DeathDiagnostics deathDiagnostics) {
+        this.deathDiagnostics = deathDiagnostics;
+    }
+
     public void processEnvDeaths() {
         if (!envDamageAppliedThisTick) return;
 
@@ -1282,8 +1297,12 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 Entity occupant = cell.occupant();
                 if (occupant == null) continue;
                 if (occupant instanceof Particle p && !p.isAlive()) {
+                    // TEMPORARY P20 diagnostic: env sweep runs @Order(14) AFTER the
+                    // @Order(10) decay/combat sweep, so anything here died from env damage.
+                    if (deathDiagnostics != null) deathDiagnostics.hintLethal(p.id(), envCauseAt(x, y), 0);
                     deathFinalizer.finalizeParticleDeath(x, y, p);
                 } else if (occupant instanceof BondedPair bp && !bp.isAlive()) {
+                    if (deathDiagnostics != null) deathDiagnostics.hintLethal(bp.id(), envCauseAt(x, y), 0);
                     deathFinalizer.finalizeBondedPairDeath(x, y, bp);
                 } else if (occupant instanceof CompositeMember cm && !cm.isAlive()) {
                     deathFinalizer.finalizeCompositeMemberDeath(x, y, cm, processedComposites);
