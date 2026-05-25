@@ -87,6 +87,66 @@ Re-anchored mid-flight after multi-review (`20-01c-REVIEW-inline.md`, `20-01c-RE
 
 `peak_registered` from harness `--report-out` JSON; `connect_failures_total` and `e408_reconnect_required_total` are 0 at every tier. `active.entities@end` is the per-bucket-gauge value at the last 5 s scrape — post-D1+H1 it tracks live population through churn (the 1000-tier trajectory dips to 901 in the final sample as bots that hit `maxRespawnsPerSession=5` exit and are not yet replaced). `rejected{respawn-cap}` is Guard 6 — bots exhausting their respawn budget — orthogonal to cap-binding. `enc.*` columns are `MAX` from `paralife.outbound.encode.send.ms` (the Actuator JSON exposes COUNT / TOTAL_TIME / MAX; configured percentiles are emitted on `/actuator/prometheus` if needed). `enc.cnt` is the Timer COUNT (drainLoop iterations reaching `Timer.start()`); `frame.size.cnt` increments only after successful `PerceptionCodec.encode()` returns. Gap (0.005-0.6 % across tiers) reflects encode-failure frames caught at `OutboundSender.java:329` — benign at observed scale. `tick.max` from `paralife.tick.work.ms.max`. `qmax` = `paralife.outbound.queue.depth.max` (aggregate max across all per-session queues, sampled at scrape time). `detach` = `paralife.outbound.detach.timeout` count. `respawns` from harness `respawns_total`.
 
+## Active-Population Workload (50× food scenario / `103a615`)
+
+**Why a second workload.** The `62c1b44` churn baseline above runs production defaults
+(`nutrient-spawn-probability: 0.001`). A death-cause investigation at that config (temporary
+`DeathDiagnostics` instrumentation, ~2 900 deaths/120 s at 500 bots) found the population is a
+**death treadmill**: 77.9 % of deaths are starvation, 62 % of entities die within 10 s, and the
+food supply (~65 nutrients/tick on a 256² grid) is ~10–15× short of what 1000 entities need to
+offset energy decay. Starvation share tracks per-type metabolics exactly — Catalyst (decay 3,
+break-even 1.0 nutrient/tick) starves in 96 % of its deaths; Membrane (decay 1) only 41 %.
+Consequence for profiling: the churn CPU profile is dominated by **environment CA diffusion**
+(toxin/mutagen), not the transport path P20 exists to tune, because bots churn through
+register→spawn→die→respawn faster than they sustain a perceive-act loop.
+
+To profile a representative *active* population, the scenario re-runs with
+`-Dparalife.simulation.nutrient-spawn-probability=0.05` (50×). **This is a profiling-scenario knob,
+not a balance change** — the production default at `application.yml:79` stays `0.001`. At 50× food
+the regime flips: starvation collapses (2262→604 deaths at 500 bots), combat (emergent RPS predation)
+becomes the dominant cause, mean lifespan ~doubles, and the population self-sustains. The underlying
+survival deficit is a simulation-balance / M002 (`population stability over 500+ ticks`) concern,
+**out of Phase 20 scope** — logged as a separate balance/viability phase. 50× is the knob that yields
+an active workload, not a recommended balance value.
+
+Active-population transport health (18 samples/tier, 90 s profile window after 20 s ramp,
+cap=1500 non-binding):
+
+| Tier | peak_reg | active.entities | qmax | tick.work max | tick.health max | enc max | detach | rejected | actions_sent |
+|---|---|---|---|---|---|---|---|---|---|
+| **100 bots** | 100 | 96–100 | 0 | 127 ms¹ | 32 ms | 20 ms | 0 | respawn-cap | 24 680 |
+| **500 bots** | 500 | 461–500 | 0 | 92 ms | 49 ms | 18 ms | 0 | respawn-cap | 119 852 |
+| **1000 bots** | 1 000 | 889–1 000 | 0 | 116 ms | 84 ms | 34 ms | 0 | respawn-cap | 227 828 |
+
+¹ `tick.work.ms` MAX is single-tick outlier-sensitive (GC / lightning strike); 100-tier load is light.
+All tiers sit well under the 500 ms tick interval. `connect_failures_total` and
+`e408_reconnect_required_total` are 0 at every tier. `actions_sent_total` (harness report) confirms
+the action path is genuinely exercised — 0.6–0.66 actions/bot/tick — versus the churn run where bots
+barely complete an act-loop before dying.
+
+**Transport scales under active load.** Zero backpressure (`qmax=0`) at every sample even at 1000 bots ×
+227 k actions; no `world-full` rejections (only Guard-6 `respawn-cap`); clean detach. Active load pushes
+`tick.work.ms` MAX to 116 ms (churn 98 ms) and `encode.send.ms` MAX to 34 ms (churn 16 ms) — denser
+per-bot vision frames, as expected — without saturating the outbound path.
+
+**CPU hot path flips to the transport layer — the reason the workload matters.** 1000-tier
+`jdk.ExecutionSample` attribution, churn vs active:
+
+| Subsystem | Churn `62c1b44` (samples) | Active `103a615` (samples) |
+|---|---|---|
+| EnvironmentEngine CA (onTick + advanceToxin + diffuseStep) | ~1 044 (**dominant**) | ~553 (secondary) |
+| TickBroadcaster build (onTick + buildTickFrame + buildCellEntries + kindCodeFor + …) | ~150 | **~876 (dominant)** |
+| PerceptionCodec encode | minimal | 107 |
+| OutboundSender.drainLoop (per-session send VTs) | 12 | 138 |
+| SimulationEngine.processInteractions (combat) | 50 | 50 |
+| Inbound (handleRegister / queueAction) | 56 / 1 (register-churn) | 23 (less churn) |
+
+The churn baseline would have misdirected runtime tuning toward environment CA. The active profile
+correctly surfaces **TickBroadcaster + PerceptionCodec + OutboundSender** as the hot path — precisely
+Phase 20's transport-overhead remit. Plans 20-04/05 should tune against the active profile, citing the
+churn baseline only for the env-CA fixed-cost floor. Artifacts: `profiles/*-active-50xfood-103a615.*`
+(18 files; metric sidecar + JFR + meta + cpu/alloc/lock flamegraph × 3 tiers).
+
 ## Multi-Review Remediation
 
 The original 1818eeb capture went through `multi-review` in both inline and reference modes (7 reviewer runs). Three substantive RED findings converged:
@@ -220,8 +280,14 @@ The scalar is kept alongside the `tick.work.ms` `DistributionSummary` for SHA-co
 | `metrics-500bots-baseline-62c1b44.json` | 13 KB | 62c1b44 |
 | `metrics-1000bots-baseline-62c1b44.json` | 14 KB | 62c1b44 |
 | `jfr-{100,500,1000}bots-baseline-62c1b44.meta.json` | 1.2 KB each | 62c1b44 |
+| `jfr-{100,500,1000}bots-active-50xfood-103a615.jfr` | 0.8–1.2 MB | 103a615 (active scenario) |
+| `{cpu,alloc,lock}-{100,500,1000}bots-active-50xfood-103a615.html` | 17–157 KB | 103a615 (active scenario) |
+| `metrics-{100,500,1000}bots-active-50xfood-103a615.json` | 18 samples each | 103a615 (active scenario) |
+| `jfr-{100,500,1000}bots-active-50xfood-103a615.meta.json` | 0.7 KB each | 103a615 (active scenario) |
 
 Lock flamegraph captured in a separate 1000-bot run (not concurrent with cpu/alloc; asprof 4.4 multi-attach limitation documented in 20-01b). Acceptable exploratory evidence per all four 20-01b methodology reviewers.
+
+The `*-active-50xfood-103a615.*` set (18 files) is the active-population scenario (§Active-Population Workload); the `*-baseline-62c1b44.*` set is the production-defaults churn baseline. Both retained — the contrast is the evidence. The active set captured cpu/alloc/lock at all three tiers (single asprof JFR session per tier, post-converted via `jfrconv`), unlike the 20-01b-era single-tier lock capture.
 
 ## Verification gates
 
