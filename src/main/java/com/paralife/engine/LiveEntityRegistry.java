@@ -141,6 +141,11 @@ public class LiveEntityRegistry {
     public synchronized void unregister(String entityId) {
         Integer idx = indexById.remove(entityId);
         if (idx == null) return;
+        // Flag-gated lifespan diagnostic: reap lifecycle maps at the single unregister
+        // chokepoint, mirroring recordBirth on register. recordDeath (true deaths) runs
+        // before this and logs+counts; here it is a no-op. For non-death exits (transitions,
+        // disconnect/stall, rollback) this is the sole reaper that prevents unbounded growth.
+        if (deathDiagnostics != null) deathDiagnostics.forget(entityId);
         int last = dense.size() - 1;
         if (idx == last) {
             dense.remove(last);

@@ -79,6 +79,11 @@ public class DeathDiagnostics {
     /**
      * Death finalised — emit the lifecycle record and bump the cause counter.
      * Default cause is STARVATION (no site claimed it → energy decay outran food).
+     *
+     * <p>{@code lifespanTicks} is the lifetime of this <em>grid id</em>, not a
+     * biological lineage: each identity transition (particle→bond→composite→revert
+     * →dissolve) re-{@code register}s a fresh id, so a predecessor's lifespan is
+     * reaped silently by {@link #forget} and not summed into the successor.
      */
     public void recordDeath(String entityId, String type) {
         Cause cause = lethalHint.getOrDefault(entityId, Cause.STARVATION);
@@ -101,7 +106,29 @@ public class DeathDiagnostics {
                 entityId, type, cause, lifespan, preHit, now);
     }
 
-    /** Snapshot of cumulative cause histogram — for the periodic/final summary. */
+    /**
+     * Silent reaper for non-death identity transitions and disconnects. Removes
+     * this id's lifecycle state from all three maps WITHOUT logging or counting.
+     *
+     * <p>Mirrors {@link #recordBirth}'s single chokepoint: every {@code
+     * LiveEntityRegistry.unregister} reaps here, so the maps cannot grow unbounded
+     * when an id leaves the grid by any route other than a finalised death (bond/
+     * composite formation source ids, revert/dissolve transitions, disconnect/stall,
+     * register-first rollback). On a true death, {@link #recordDeath} runs first
+     * (it logs + counts + removes), so this call is a harmless no-op there.
+     */
+    public void forget(String entityId) {
+        birthTick.remove(entityId);
+        lethalHint.remove(entityId);
+        preHitEnergy.remove(entityId);
+    }
+
+    /**
+     * Snapshot of cumulative cause histogram. Not currently wired to a caller —
+     * an intentional hook for a future periodic/shutdown cause summary (the data
+     * also lives in the {@code paralife.diag.deaths} Micrometer counter). See the
+     * deferred Population Viability work.
+     */
     public Map<Cause, Long> histogram() {
         Map<Cause, Long> out = new ConcurrentHashMap<>();
         causeCounts.forEach((c, adder) -> out.put(c, adder.sum()));
