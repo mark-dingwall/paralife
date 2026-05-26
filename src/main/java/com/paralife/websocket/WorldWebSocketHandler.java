@@ -812,7 +812,24 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
 
         WebSocketSession session = sessionRegistry.getSession(sessionId);
         if (session != null) {
-            // Session still in registry — full cleanup (active dec + slot release + grid + BotRegistry).
+            // Pass-3 R-P3-1: session was stalled (entityId cleared from attrs at markStalled),
+            // so cleanupBot will hit the H1 entityId==null guard and skip active-bucket dec.
+            // Own the dec + snapshot release here BEFORE cleanupBot — otherwise the gauge
+            // and bucketTagsByEntityId both leak on the rare race where grace-expire fires
+            // before afterConnectionClosed unregisters the session.
+            if (admissionMetrics != null && bucketTags != null) {
+                admissionMetrics.decActiveBucketByTags(bucketTags);
+            }
+            if (admissionMetrics != null) admissionMetrics.releaseBucketTags(entityId);
+            // Pass-4 M2 (codex): cleanupBot unregisters LiveEntityRegistry only when its
+            // session-attr entityId is non-null — but markStalled cleared ATTR_ENTITY_ID, so
+            // the delegated cleanupBot below skips it (the entityId!=null guard at ~:929 is
+            // false). Unregister here with the method-param entityId (mirrors the
+            // session-unregistered branch below), else this rare still-registered grace-expiry
+            // leaks a stale entry into LiveEntityRegistry while cleanupBot clears the grid cell.
+            if (liveEntityRegistry != null) liveEntityRegistry.unregister(entityId);
+            // Full cleanup (slot release + grid + BotRegistry). cleanupBot's entityId==null
+            // guard is now correct: we have already dec'd+released+unregistered above.
             cleanupBot(session);
         } else {
             // Session unregistered (typical stalled-close path). Manually drop active gauge,
@@ -917,22 +934,25 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
             admissionGate.releaseSlot();
         }
         if (wasRegistered && admissionMetrics != null) {
-            // H1 fix: prefer snapshot Tags (keyed by entityId) over session-derived tags.
-            // Snapshot is captured at incActiveBucket time and survives session-attr churn.
-            io.micrometer.core.instrument.Tags bucketTags = entityId != null
-                    ? admissionMetrics.lookupBucketTags(entityId)
-                    : null;
-            if (bucketTags != null) {
-                admissionMetrics.decActiveBucketByTags(bucketTags);
-            } else {
-                // Fallback: session tags. Hits only when no snapshot was ever captured
-                // (e.g. legacy tests calling cleanupBot without going through Allow path).
-                admissionMetrics.decActiveBucket(s);
-            }
-            // C2 fix: drop entityId snapshot from bucketTagsByEntityId — prevents unbounded growth.
             if (entityId != null) {
+                // Prefer snapshot Tags (keyed by entityId) over session-derived tags.
+                // Snapshot is captured at incActiveBucket time and survives session-attr churn.
+                io.micrometer.core.instrument.Tags bucketTags =
+                        admissionMetrics.lookupBucketTags(entityId);
+                if (bucketTags != null) {
+                    admissionMetrics.decActiveBucketByTags(bucketTags);
+                } else {
+                    // Fallback: session tags. Hits only when no snapshot was ever captured
+                    // (e.g. legacy tests calling cleanupBot without going through Allow path).
+                    admissionMetrics.decActiveBucket(s);
+                }
+                // C2 fix: drop entityId snapshot from bucketTagsByEntityId — prevents unbounded growth.
                 admissionMetrics.releaseBucketTags(entityId);
             }
+            // entityId == null: either markDead already dec'd (path C) or markStalled
+            // cleared entityId and cleanupByEntityId at grace-expire owns the dec via the
+            // bucketTagsByEntityId snapshot (path B). Either way cleanupBot must NOT dec
+            // here — would double-dec the bucket otherwise (pass-2 R1 + TD-20-01c-B).
         }
     }
 
@@ -994,8 +1014,18 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         Object eid = session.getAttributes().remove(ATTR_ENTITY_ID);
         session.getAttributes().remove(ATTR_RESUME_TOKEN);
         String entityId = eid instanceof String e ? e : null;
-        if (entityId != null && resumeTokenRegistry != null) {
-            resumeTokenRegistry.clearActive(entityId);
+        if (entityId != null) {
+            if (admissionMetrics != null) {
+                io.micrometer.core.instrument.Tags bucketTags =
+                        admissionMetrics.lookupBucketTags(entityId);
+                if (bucketTags != null) {
+                    admissionMetrics.decActiveBucketByTags(bucketTags);
+                }
+                admissionMetrics.releaseBucketTags(entityId);
+            }
+            if (resumeTokenRegistry != null) {
+                resumeTokenRegistry.clearActive(entityId);
+            }
         }
     }
 }

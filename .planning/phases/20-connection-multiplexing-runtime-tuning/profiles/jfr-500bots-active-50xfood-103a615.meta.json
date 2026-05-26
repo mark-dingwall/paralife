@@ -1,0 +1,14 @@
+{
+  "captured_at_sha": "103a615",
+  "scenario": "500bots-active-50xfood",
+  "profile_window_s": 90,
+  "ramp_s": 20,
+  "harness_args": "--count 500 --duration 130 --ramp-up rate:50 --harness-id active-50xfood-103a615-t500",
+  "jvm_flags": "-Xms2g -Xmx2g -XX:+UseG1GC -Djdk.virtualThreadScheduler.parallelism=8 -Dparalife.admission.cap=1500 -Dparalife.simulation.nutrient-spawn-probability=0.05",
+  "cap_during_run": 1500,
+  "food_spawn_prob": 0.05,
+  "asprof_cpu_interval_us": 10000,
+  "asprof_alloc_interval_bytes": 524288,
+  "jfr_size_mb": "1",
+  "note": "Active-population scenario (50x food). Contrast with churn baseline *-62c1b44.* (production defaults)."
+}
