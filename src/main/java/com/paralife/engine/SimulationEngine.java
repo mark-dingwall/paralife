@@ -881,6 +881,9 @@ public class SimulationEngine {
         Cell c = worldGrid.getCell(pos.x(), pos.y());
         if (c.occupant() instanceof Particle p) {
             // Flag-gated death diagnostic: negative delta crossing to 0 = combat/splash kill.
+            // applyDeltaToOccupant carries both CombatDelta and toxin SplashDelta, so a toxin
+            // splash kill is coarsely labeled COMBAT here (multi-review M3). Carrying the true
+            // Cause through the delta type is backlogged — see STATE.md Deferred Items.
             if (deathDiagnostics != null && p.energy() > 0 && energyDelta < 0 && p.energy() + energyDelta <= 0)
                 deathDiagnostics.hintLethal(p.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.COMBAT, p.energy());
             worldGrid.setEntity(pos.x(), pos.y(),

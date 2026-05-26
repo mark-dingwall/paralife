@@ -1269,7 +1269,25 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         envDamageAppliedThisTick = true;
     }
 
-    /** Flag-gated death diagnostic: best-effort env sub-cause from persistent shadow grids. */
+    /**
+     * Flag-gated death diagnostic: best-effort env sub-cause inferred from the
+     * persistent shadow grids at the death cell, end-of-tick. INTENTIONALLY coarse —
+     * the cause is read from grid state, not tagged at the damage site, so three
+     * misattributions are known and accepted for this diagnostic (multi-review M3;
+     * the precise rework is out of scope for this PR — see below):
+     * <ul>
+     *   <li>mutagen/infection DoT that kills after the entity left the strain cell
+     *       (or the zone decayed) reads clean grids → falls through to LIGHTNING;</li>
+     *   <li>lightning that kills an entity standing on a toxin/mutagen cell reads
+     *       that grid → reported TOXIN/MUTAGEN;</li>
+     *   <li>the LIGHTNING fall-through asserts a cause that leaves no grid trace, so
+     *       it also absorbs "env death, cause unknown".</li>
+     * </ul>
+     * These only shuffle attribution WITHIN the env bucket; they do not move the
+     * headline starvation share. The precise fix (hintLethal at each env damage site
+     * in resolveToxinCollisions / tickBuffsAndInfections / lightning, plus an UNKNOWN
+     * fallback) is backlogged — see STATE.md Deferred Items.
+     */
     private com.paralife.diagnostics.DeathDiagnostics.Cause envCauseAt(int x, int y) {
         if ((toxinGrid[x][y] & 0xFF) > 0) return com.paralife.diagnostics.DeathDiagnostics.Cause.TOXIN;
         if ((mutagenGrid[x][y] & 0xFF) > 0) return com.paralife.diagnostics.DeathDiagnostics.Cause.MUTAGEN;
