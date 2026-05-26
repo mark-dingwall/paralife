@@ -1188,6 +1188,13 @@ public class SimulationEngine {
      */
     void cleanupCompositeMemberCellViaFinalizer(Entity.CompositeMember cm, Position pos) {
         String id = cm.id();
+        // Flag-gated death diagnostic: this is the single member-death chokepoint (member
+        // death + panic-zone total death) and is NOT on the revert/dissolve transition paths
+        // (those unregister directly), so recording here counts true deaths without counting
+        // transitions. Must run before the LiveEntityRegistry.unregister below, which would
+        // otherwise silently forget the id (H1) and lose the lifespan. Closes the census gap
+        // where CompositeMember deaths never hit the counter/DEATH-TRACE (M1).
+        if (deathDiagnostics != null) deathDiagnostics.recordDeath(id, cm.type().name());
         botRegistry.unregisterByEntity(id);
         // Phase 19 SCALE-07 (REVIEWS H3): unregister from LiveEntityRegistry immediately after BotRegistry.
         if (liveEntityRegistry != null) liveEntityRegistry.unregister(id);

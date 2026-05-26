@@ -1305,6 +1305,11 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                     if (deathDiagnostics != null) deathDiagnostics.hintLethal(bp.id(), envCauseAt(x, y), 0);
                     deathFinalizer.finalizeBondedPairDeath(x, y, bp);
                 } else if (occupant instanceof CompositeMember cm && !cm.isAlive()) {
+                    // Flag-gated death diagnostic: hint the env cause so the member's
+                    // recordDeath (now on the composite cleanup path, M1) attributes to
+                    // env rather than defaulting STARVATION. Same best-effort grid heuristic
+                    // as the Particle/BondedPair branches above.
+                    if (deathDiagnostics != null) deathDiagnostics.hintLethal(cm.id(), envCauseAt(x, y), 0);
                     deathFinalizer.finalizeCompositeMemberDeath(x, y, cm, processedComposites);
                 }
             }
