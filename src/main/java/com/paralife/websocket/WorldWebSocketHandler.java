@@ -821,8 +821,15 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
                 admissionMetrics.decActiveBucketByTags(bucketTags);
             }
             if (admissionMetrics != null) admissionMetrics.releaseBucketTags(entityId);
+            // Pass-4 M2 (codex): cleanupBot unregisters LiveEntityRegistry only when its
+            // session-attr entityId is non-null — but markStalled cleared ATTR_ENTITY_ID, so
+            // the delegated cleanupBot below skips it (the entityId!=null guard at ~:929 is
+            // false). Unregister here with the method-param entityId (mirrors the
+            // session-unregistered branch below), else this rare still-registered grace-expiry
+            // leaks a stale entry into LiveEntityRegistry while cleanupBot clears the grid cell.
+            if (liveEntityRegistry != null) liveEntityRegistry.unregister(entityId);
             // Full cleanup (slot release + grid + BotRegistry). cleanupBot's entityId==null
-            // guard is now correct: we have already dec'd+released above.
+            // guard is now correct: we have already dec'd+released+unregistered above.
             cleanupBot(session);
         } else {
             // Session unregistered (typical stalled-close path). Manually drop active gauge,
