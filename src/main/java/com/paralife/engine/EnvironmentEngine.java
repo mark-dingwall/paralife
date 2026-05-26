@@ -1269,6 +1269,39 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         envDamageAppliedThisTick = true;
     }
 
+    /**
+     * Flag-gated death diagnostic: best-effort env sub-cause inferred from the
+     * persistent shadow grids at the death cell, end-of-tick. INTENTIONALLY coarse —
+     * the cause is read from grid state, not tagged at the damage site, so three
+     * misattributions are known and accepted for this diagnostic (multi-review M3;
+     * the precise rework is out of scope for this PR — see below):
+     * <ul>
+     *   <li>mutagen/infection DoT that kills after the entity left the strain cell
+     *       (or the zone decayed) reads clean grids → falls through to LIGHTNING;</li>
+     *   <li>lightning that kills an entity standing on a toxin/mutagen cell reads
+     *       that grid → reported TOXIN/MUTAGEN;</li>
+     *   <li>the LIGHTNING fall-through asserts a cause that leaves no grid trace, so
+     *       it also absorbs "env death, cause unknown".</li>
+     * </ul>
+     * These only shuffle attribution WITHIN the env bucket; they do not move the
+     * headline starvation share. The precise fix (hintLethal at each env damage site
+     * in resolveToxinCollisions / tickBuffsAndInfections / lightning, plus an UNKNOWN
+     * fallback) is backlogged — see STATE.md Deferred Items.
+     */
+    private com.paralife.diagnostics.DeathDiagnostics.Cause envCauseAt(int x, int y) {
+        if ((toxinGrid[x][y] & 0xFF) > 0) return com.paralife.diagnostics.DeathDiagnostics.Cause.TOXIN;
+        if ((mutagenGrid[x][y] & 0xFF) > 0) return com.paralife.diagnostics.DeathDiagnostics.Cause.MUTAGEN;
+        return com.paralife.diagnostics.DeathDiagnostics.Cause.LIGHTNING; // transient strike — no persistent grid
+    }
+
+    /** Optional death-cause diagnostic (flag-gated). Null when the bean is absent. */
+    private com.paralife.diagnostics.DeathDiagnostics deathDiagnostics;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDeathDiagnostics(com.paralife.diagnostics.DeathDiagnostics deathDiagnostics) {
+        this.deathDiagnostics = deathDiagnostics;
+    }
+
     public void processEnvDeaths() {
         if (!envDamageAppliedThisTick) return;
 
@@ -1282,10 +1315,19 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 Entity occupant = cell.occupant();
                 if (occupant == null) continue;
                 if (occupant instanceof Particle p && !p.isAlive()) {
+                    // Flag-gated death diagnostic: env sweep runs @Order(14) AFTER the
+                    // @Order(10) decay/combat sweep, so anything here died from env damage.
+                    if (deathDiagnostics != null) deathDiagnostics.hintLethal(p.id(), envCauseAt(x, y), 0);
                     deathFinalizer.finalizeParticleDeath(x, y, p);
                 } else if (occupant instanceof BondedPair bp && !bp.isAlive()) {
+                    if (deathDiagnostics != null) deathDiagnostics.hintLethal(bp.id(), envCauseAt(x, y), 0);
                     deathFinalizer.finalizeBondedPairDeath(x, y, bp);
                 } else if (occupant instanceof CompositeMember cm && !cm.isAlive()) {
+                    // Flag-gated death diagnostic: hint the env cause so the member's
+                    // recordDeath (now on the composite cleanup path, M1) attributes to
+                    // env rather than defaulting STARVATION. Same best-effort grid heuristic
+                    // as the Particle/BondedPair branches above.
+                    if (deathDiagnostics != null) deathDiagnostics.hintLethal(cm.id(), envCauseAt(x, y), 0);
                     deathFinalizer.finalizeCompositeMemberDeath(x, y, cm, processedComposites);
                 }
             }

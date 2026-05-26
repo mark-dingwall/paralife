@@ -294,6 +294,14 @@ public class SimulationEngine {
         this.entityLifecycleListener = entityLifecycleListener;
     }
 
+    /** Optional death-cause diagnostic (flag-gated). Null when the bean is absent. */
+    private com.paralife.diagnostics.DeathDiagnostics deathDiagnostics;
+
+    @Autowired(required = false)
+    public void setDeathDiagnostics(com.paralife.diagnostics.DeathDiagnostics deathDiagnostics) {
+        this.deathDiagnostics = deathDiagnostics;
+    }
+
     /**
      * Phase 19 SCALE-07: returns a row-major-sorted entity snapshot for per-entity
      * iteration. When {@link #liveEntityRegistry} is injected (Spring production path),
@@ -872,9 +880,17 @@ public class SimulationEngine {
     private void applyDeltaToOccupant(Position pos, int energyDelta) {
         Cell c = worldGrid.getCell(pos.x(), pos.y());
         if (c.occupant() instanceof Particle p) {
+            // Flag-gated death diagnostic: negative delta crossing to 0 = combat/splash kill.
+            // applyDeltaToOccupant carries both CombatDelta and toxin SplashDelta, so a toxin
+            // splash kill is coarsely labeled COMBAT here (multi-review M3). Carrying the true
+            // Cause through the delta type is backlogged — see STATE.md Deferred Items.
+            if (deathDiagnostics != null && p.energy() > 0 && energyDelta < 0 && p.energy() + energyDelta <= 0)
+                deathDiagnostics.hintLethal(p.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.COMBAT, p.energy());
             worldGrid.setEntity(pos.x(), pos.y(),
                     p.withEnergy(p.energy() + energyDelta));
         } else if (c.occupant() instanceof Entity.BondedPair bp) {
+            if (deathDiagnostics != null && bp.energy() > 0 && energyDelta < 0 && bp.energy() + energyDelta <= 0)
+                deathDiagnostics.hintLethal(bp.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.COMBAT, bp.energy());
             worldGrid.setEntity(pos.x(), pos.y(),
                     bp.withEnergy(bp.energy() + energyDelta));
         } else if (c.occupant() instanceof Entity.CompositeMember cm) {
@@ -1071,10 +1087,16 @@ public class SimulationEngine {
             }
 
             if (neighborCount >= config.overcrowdingThreshold()) {
+                int penalty = config.overcrowdingEnergyPenalty();
                 if (occupant instanceof Particle p) {
-                    worldGrid.setEntity(x, y, p.withEnergy(p.energy() - config.overcrowdingEnergyPenalty()));
+                    // Flag-gated death diagnostic: overcrowding penalty crossing to 0.
+                    if (deathDiagnostics != null && p.energy() > 0 && p.energy() - penalty <= 0)
+                        deathDiagnostics.hintLethal(p.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.OVERCROWDING, p.energy());
+                    worldGrid.setEntity(x, y, p.withEnergy(p.energy() - penalty));
                 } else if (occupant instanceof Entity.BondedPair bp) {
-                    worldGrid.setEntity(x, y, bp.withEnergy(bp.energy() - config.overcrowdingEnergyPenalty()));
+                    if (deathDiagnostics != null && bp.energy() > 0 && bp.energy() - penalty <= 0)
+                        deathDiagnostics.hintLethal(bp.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.OVERCROWDING, bp.energy());
+                    worldGrid.setEntity(x, y, bp.withEnergy(bp.energy() - penalty));
                 }
                 if (!cell.hasFlag(Cell.FLAG_OVERCROWDED)) {
                     worldGrid.setCell(x, y, worldGrid.getCell(x, y).withAddedFlag(Cell.FLAG_OVERCROWDED));
@@ -1169,6 +1191,13 @@ public class SimulationEngine {
      */
     void cleanupCompositeMemberCellViaFinalizer(Entity.CompositeMember cm, Position pos) {
         String id = cm.id();
+        // Flag-gated death diagnostic: this is the single member-death chokepoint (member
+        // death + panic-zone total death) and is NOT on the revert/dissolve transition paths
+        // (those unregister directly), so recording here counts true deaths without counting
+        // transitions. Must run before the LiveEntityRegistry.unregister below, which would
+        // otherwise silently forget the id (H1) and lose the lifespan. Closes the census gap
+        // where CompositeMember deaths never hit the counter/DEATH-TRACE (M1).
+        if (deathDiagnostics != null) deathDiagnostics.recordDeath(id, cm.type().name());
         botRegistry.unregisterByEntity(id);
         // Phase 19 SCALE-07 (REVIEWS H3): unregister from LiveEntityRegistry immediately after BotRegistry.
         if (liveEntityRegistry != null) liveEntityRegistry.unregister(id);
