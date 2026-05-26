@@ -881,12 +881,12 @@ public class SimulationEngine {
         Cell c = worldGrid.getCell(pos.x(), pos.y());
         if (c.occupant() instanceof Particle p) {
             // Flag-gated death diagnostic: negative delta crossing to 0 = combat/splash kill.
-            if (deathDiagnostics != null && energyDelta < 0 && p.energy() + energyDelta <= 0)
+            if (deathDiagnostics != null && p.energy() > 0 && energyDelta < 0 && p.energy() + energyDelta <= 0)
                 deathDiagnostics.hintLethal(p.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.COMBAT, p.energy());
             worldGrid.setEntity(pos.x(), pos.y(),
                     p.withEnergy(p.energy() + energyDelta));
         } else if (c.occupant() instanceof Entity.BondedPair bp) {
-            if (deathDiagnostics != null && energyDelta < 0 && bp.energy() + energyDelta <= 0)
+            if (deathDiagnostics != null && bp.energy() > 0 && energyDelta < 0 && bp.energy() + energyDelta <= 0)
                 deathDiagnostics.hintLethal(bp.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.COMBAT, bp.energy());
             worldGrid.setEntity(pos.x(), pos.y(),
                     bp.withEnergy(bp.energy() + energyDelta));
@@ -1087,11 +1087,11 @@ public class SimulationEngine {
                 int penalty = config.overcrowdingEnergyPenalty();
                 if (occupant instanceof Particle p) {
                     // Flag-gated death diagnostic: overcrowding penalty crossing to 0.
-                    if (deathDiagnostics != null && p.energy() - penalty <= 0)
+                    if (deathDiagnostics != null && p.energy() > 0 && p.energy() - penalty <= 0)
                         deathDiagnostics.hintLethal(p.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.OVERCROWDING, p.energy());
                     worldGrid.setEntity(x, y, p.withEnergy(p.energy() - penalty));
                 } else if (occupant instanceof Entity.BondedPair bp) {
-                    if (deathDiagnostics != null && bp.energy() - penalty <= 0)
+                    if (deathDiagnostics != null && bp.energy() > 0 && bp.energy() - penalty <= 0)
                         deathDiagnostics.hintLethal(bp.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.OVERCROWDING, bp.energy());
                     worldGrid.setEntity(x, y, bp.withEnergy(bp.energy() - penalty));
                 }
