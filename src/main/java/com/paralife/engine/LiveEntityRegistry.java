@@ -126,7 +126,7 @@ public class LiveEntityRegistry {
         }
         indexById.put(entityId, dense.size());
         dense.add(new EntityEntry(entityId, position));
-        // TEMPORARY P20 diagnostic: single birth chokepoint (register + reproduce + bud).
+        // Flag-gated lifespan diagnostic: single birth chokepoint (register + reproduce + bud).
         if (deathDiagnostics != null) deathDiagnostics.recordBirth(entityId);
     }
 

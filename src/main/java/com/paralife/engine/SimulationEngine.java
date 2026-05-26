@@ -880,7 +880,7 @@ public class SimulationEngine {
     private void applyDeltaToOccupant(Position pos, int energyDelta) {
         Cell c = worldGrid.getCell(pos.x(), pos.y());
         if (c.occupant() instanceof Particle p) {
-            // TEMPORARY P20 diagnostic: negative delta crossing to 0 = combat/splash kill.
+            // Flag-gated death diagnostic: negative delta crossing to 0 = combat/splash kill.
             if (deathDiagnostics != null && energyDelta < 0 && p.energy() + energyDelta <= 0)
                 deathDiagnostics.hintLethal(p.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.COMBAT, p.energy());
             worldGrid.setEntity(pos.x(), pos.y(),
@@ -1086,7 +1086,7 @@ public class SimulationEngine {
             if (neighborCount >= config.overcrowdingThreshold()) {
                 int penalty = config.overcrowdingEnergyPenalty();
                 if (occupant instanceof Particle p) {
-                    // TEMPORARY P20 diagnostic: overcrowding penalty crossing to 0.
+                    // Flag-gated death diagnostic: overcrowding penalty crossing to 0.
                     if (deathDiagnostics != null && p.energy() - penalty <= 0)
                         deathDiagnostics.hintLethal(p.id(), com.paralife.diagnostics.DeathDiagnostics.Cause.OVERCROWDING, p.energy());
                     worldGrid.setEntity(x, y, p.withEnergy(p.energy() - penalty));

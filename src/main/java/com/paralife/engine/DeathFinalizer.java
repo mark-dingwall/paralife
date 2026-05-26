@@ -117,7 +117,7 @@ public class DeathFinalizer {
     public void finalizeParticleDeath(int x, int y, Particle p) {
         deathEventCount++;
         String id = p.id();
-        // TEMPORARY P20 diagnostic: attribute cause + lifespan before cleanup wipes state.
+        // Flag-gated death diagnostic: attribute cause + lifespan before cleanup wipes state.
         if (deathDiagnostics != null) deathDiagnostics.recordDeath(id, p.type().name());
         botRegistry.unregisterByEntity(id);
         // Phase 19 SCALE-07 (REVIEWS H3): unregister from LiveEntityRegistry immediately after BotRegistry.
@@ -141,7 +141,7 @@ public class DeathFinalizer {
         String primaryId = bp.primaryEntityId();
         String secondaryId = bp.secondaryEntityId();
 
-        // TEMPORARY P20 diagnostic: bonded pairs occupy the grid under bp.id().
+        // Flag-gated death diagnostic: bonded pairs occupy the grid under bp.id().
         if (deathDiagnostics != null) deathDiagnostics.recordDeath(bp.id(), "BONDED");
 
         botRegistry.unregisterByEntity(primaryId);

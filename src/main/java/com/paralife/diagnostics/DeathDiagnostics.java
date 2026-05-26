@@ -55,7 +55,7 @@ public class DeathDiagnostics {
     public DeathDiagnostics(TickEngine tickEngine, MeterRegistry meterRegistry) {
         this.tickEngine = tickEngine;
         this.meterRegistry = meterRegistry;
-        log.warn("DeathDiagnostics ENABLED — temporary death-cause/lifespan trace active. "
+        log.warn("DeathDiagnostics ENABLED — flag-gated death-cause/lifespan trace ACTIVE. "
                 + "Disable in production (paralife.diagnostics.death-trace.enabled).");
     }
 

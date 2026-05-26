@@ -1269,7 +1269,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         envDamageAppliedThisTick = true;
     }
 
-    /** TEMPORARY P20 diagnostic: best-effort env sub-cause from persistent shadow grids. */
+    /** Flag-gated death diagnostic: best-effort env sub-cause from persistent shadow grids. */
     private com.paralife.diagnostics.DeathDiagnostics.Cause envCauseAt(int x, int y) {
         if ((toxinGrid[x][y] & 0xFF) > 0) return com.paralife.diagnostics.DeathDiagnostics.Cause.TOXIN;
         if ((mutagenGrid[x][y] & 0xFF) > 0) return com.paralife.diagnostics.DeathDiagnostics.Cause.MUTAGEN;
@@ -1297,7 +1297,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 Entity occupant = cell.occupant();
                 if (occupant == null) continue;
                 if (occupant instanceof Particle p && !p.isAlive()) {
-                    // TEMPORARY P20 diagnostic: env sweep runs @Order(14) AFTER the
+                    // Flag-gated death diagnostic: env sweep runs @Order(14) AFTER the
                     // @Order(10) decay/combat sweep, so anything here died from env damage.
                     if (deathDiagnostics != null) deathDiagnostics.hintLethal(p.id(), envCauseAt(x, y), 0);
                     deathFinalizer.finalizeParticleDeath(x, y, p);
