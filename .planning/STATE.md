@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
-stopped_at: Phase 20 Wave 2 partial complete — 20-01b baseline JFR/flamegraph/metric capture shipped; 20-02/04/05/06 pending
-last_updated: "2026-05-14T23:38:45.439Z"
-last_activity: 2026-05-15 -- Phase 20 Plan 01b complete (baseline measurements captured at c22e487)
+stopped_at: Phase 20 Wave 2 partial complete — 20-01c baseline (HEAD 1818eeb, cap=1500) supersedes 20-01b; 20-02/04/05/06 pending
+last_updated: "2026-05-19T08:35:00.000Z"
+last_activity: 2026-05-19 -- Phase 20 Plan 01c complete (re-anchored baseline at HEAD 1818eeb; F1/F2/F6 remediated)
 progress:
   total_phases: 15
   completed_phases: 4
-  total_plans: 34
-  completed_plans: 31
+  total_plans: 35
+  completed_plans: 32
   percent: 91
 ---
 
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md
 
 Milestone: v3.0 (Scale Engineering / M4) — active
 Phase: 20 (connection-multiplexing-runtime-tuning) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 8 (20-01, 20-01b superseded by 20-01c, 20-01c, 20-03 done)
 Status: Ready to execute
-Last activity: 2026-05-15 -- Phase 20 Plan 01b complete (baseline measurements captured at c22e487)
+Last activity: 2026-05-19 -- Phase 20 Plan 01c complete (re-anchored baseline at HEAD 1818eeb; F1/F2/F6 remediated)
 
 Progress: [████████▌░] 85%
 
@@ -49,6 +49,12 @@ Progress: [████████▌░] 85%
 | tech-debt | TD-22-C — `PopulationDynamicsTest.allThreeTypesSurvive500Ticks` `@Disabled`; probabilistic flat-line. Pin RNG seed or widen tolerance — backlog Phase 999.x. | open | 2026-05-04 |
 | tech-debt | TD-22-D — `HundredBotIntegrationTest` `connectLatch.await(30s)` race against 100 sequential `WebSocketClient.start()` cold-starts. Bump to 60s or share single client. Defer to P22.1. | open | 2026-05-04 |
 | tech-debt | TD-22-E — `forkEvery=1` masks leaks rather than fixing them. Final exit gate (`forkEvery=0` + <100 live threads) deferred to P22.1. | open | 2026-05-04 |
+| tech-debt | TD-20-01c-A — `OutboundSender.drainLoop` records `frame.size.bytes` BEFORE the synchronized `sendMessage` block; on `IOException` the metric counts a frame that was never sent. Trivial impact on saturation gauge; real impact only if downstream tooling reads `frame.size.bytes` for precise egress accounting. Move `recordFrameSize` after successful `sendMessage` (~5 lines). | open | 2026-05-20 |
+| tech-debt | TD-20-01c-B — Pre-existing `markStalled→cleanupBot→cleanupByEntityId` double-dec on path B (stalled-then-close-without-reconnect-before-grace-expire). Same `cleanupBot` fallback root cause as the D1-introduced path-C bug; closed incidentally by Plan 20-01c pass-2 H1 (cleanupBot skips active-bucket dec when `entityId == null`). | closed | 2026-05-21 |
+| tech-debt | TD-20-01c-C — D2 `OutboundSender.drainLoop` swallows `sample.stop(...)` RuntimeException with `log.warn` only; no counter tracks frequency. Add `paralife.outbound.encode.send.stop.failures` counter (~3 LOC) if the warn ever fires in steady-state. Observability nice-to-have. | open | 2026-05-21 |
+| tech-debt | TD-20-01c-D — D3 `registerOutboundQueueDepthMaxGauge` check-then-set is non-atomic. Theoretical only (production single-threaded `@PostConstruct`). Consider `AtomicReference.compareAndSet` OR a one-line invariant comment. | open | 2026-05-21 |
+| tech-debt | TD-20-01c-E — `WorldWebSocketHandler.handleTransportError:293-298` calls `cleanupBot(session)` unconditionally — even for stalled sessions, which violates the Phase 17 D-12 "entity held on grid for grace-expiry sweep" invariant (the cell is freed at transport-error time, so client cannot rebind to the original position on reconnect). Pre-existing; surfaced by pass-3 H1 analysis (counter math stays correct via grace-expire dec, but grid state is wrong). Fix: skip cleanupBot if `wasStalled`, mirroring `afterConnectionClosed:388-397`. | open | 2026-05-21 |
+| tech-debt | TD-20-01c-F — 20-01c-SUMMARY §Active-Population prose accuracy (pass-4 triage, MVP-prose; transport-health table + R-P3-1 fix are verified-correct, this is doc-only). (a) `actions/bot/tick = 0.6–0.66` (SUMMARY:124) doesn't reconcile with the section's own `actions_sent` ÷ (bots × ~180 ticks) ≈ 1.3 — figure or its denominator is wrong; show the arithmetic or recompute. (b) `actions_sent`, `jdk.ExecutionSample` CPU-attribution table, death-diagnostics, connect/e408 counts are sourced from harness `--report-out` + committed `cpu-*.html`/`jfr-*.jfr` flamegraphs but not cited inline — add provenance pointers. (c) MAX columns floor values (`127.33→127`, `20.58→20`, `34.86→34`) — understates maxima; use one decimal or round-to-nearest. Also re-confirm pass-3 doc-consistency items (tick.health null/deprecated wording) weren't reintroduced. | open | 2026-05-27 |
 
 ### Quick Tasks Completed
 
@@ -59,9 +65,9 @@ Progress: [████████▌░] 85%
 ## Session Continuity
 
 Last session: 2026-05-11T01:56:54Z
-Stopped at: Phase 20 Wave 1 complete (20-01 toolchain bootstrap shipped at d7009df)
+Stopped at: Phase 20 Wave 2 partial — 20-01 / 20-01b (superseded) / 20-01c / 20-03 done; 20-02 / 20-04 / 20-05 / 20-06 pending
 Resume file: .planning/phases/20-connection-multiplexing-runtime-tuning/.resume-state.md
-Next command: `/gsd-execute-phase 20 --wave 2 --interactive` — Wave 2 runs 20-01b (operator-driven JFR baseline captures @ c22e487, 100/500/1000 bots — see profiles/README.md ritual) and 20-03 (`AppRuntimeConfig` record, autonomous)
+Next command: `/gsd-execute-phase 20 --plan 20-02` (paralife.runtime.jetty.* @ConfigurationProperties + Jetty wiring) — citable baseline is now `profiles/*-baseline-1818eeb.*` (20-01c), not the c22e487 capture
 
 ## Regression Alarm — fast-track P22.1 if any reappear during P20/P21
 
