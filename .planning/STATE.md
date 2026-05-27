@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
-stopped_at: Phase 20 Wave 2 partial complete — 20-01c baseline (HEAD 1818eeb, cap=1500) supersedes 20-01b; 20-02/04/05/06 pending
-last_updated: "2026-05-19T08:35:00.000Z"
-last_activity: 2026-05-19 -- Phase 20 Plan 01c complete (re-anchored baseline at HEAD 1818eeb; F1/F2/F6 remediated)
+stopped_at: Phase 20 plan-by-plan — 20-01/20-01c/20-03 done (20-01b superseded); 20-01c hardened through pass-4 (PR#1 merged) + out-of-band diagnostics instrumentation shipped (PR#2 merged); 20-02/04/05/06 pending
+last_updated: "2026-05-27T15:02:24.000Z"
+last_activity: 2026-05-27 -- Session-drift reconciliation: STATE/resume-state refreshed to post-PR#1/#2 reality; ready to resume at 20-02
 progress:
   total_phases: 15
   completed_phases: 4
@@ -27,11 +27,11 @@ See: .planning/PROJECT.md
 
 Milestone: v3.0 (Scale Engineering / M4) — active
 Phase: 20 (connection-multiplexing-runtime-tuning) — EXECUTING
-Plan: 3 of 8 (20-01, 20-01b superseded by 20-01c, 20-01c, 20-03 done)
-Status: Ready to execute
-Last activity: 2026-05-19 -- Phase 20 Plan 01c complete (re-anchored baseline at HEAD 1818eeb; F1/F2/F6 remediated)
+Plan: 3 of 7 executed (20-01, 20-01c, 20-03 done; 20-01b superseded by 20-01c)
+Status: Ready to execute — next is 20-02 (paralife.runtime.jetty.* @ConfigurationProperties + Jetty wiring)
+Last activity: 2026-05-27 -- Session-drift reconciliation; 20-01c hardened pass-2..4 + PR#1/#2 merged
 
-Progress: [████████▌░] 85%
+Progress: [█████████░] 91% (32/35 plans)
 
 ## Deferred Items
 
@@ -69,9 +69,9 @@ Progress: [████████▌░] 85%
 
 ## Session Continuity
 
-Last session: 2026-05-11T01:56:54Z
-Stopped at: Phase 20 Wave 2 partial — 20-01 / 20-01b (superseded) / 20-01c / 20-03 done; 20-02 / 20-04 / 20-05 / 20-06 pending
-Resume file: .planning/phases/20-connection-multiplexing-runtime-tuning/.resume-state.md
+Last session: 2026-05-27 (session-drift reconciliation)
+Stopped at: Phase 20 plan-by-plan — 20-01 / 20-01c / 20-03 done (20-01b superseded); 20-01c hardened pass-2..4 (PR#1) + out-of-band diagnostics shipped (PR#2); 20-02 / 20-04 / 20-05 / 20-06 pending
+Resume file: .planning/phases/20-connection-multiplexing-runtime-tuning/.resume-state.md (refreshed 2026-05-27 — wave model retired, plan-by-plan now)
 Next command: `/gsd-execute-phase 20 --plan 20-02` (paralife.runtime.jetty.* @ConfigurationProperties + Jetty wiring) — citable baseline is now `profiles/*-baseline-1818eeb.*` (20-01c), not the c22e487 capture
 
 ## Regression Alarm — fast-track P22.1 if any reappear during P20/P21
@@ -89,3 +89,5 @@ Next command: `/gsd-execute-phase 20 --plan 20-02` (paralife.runtime.jetty.* @Co
 - Phase 22 added: Integration test resource leak audit (2026-05-03; trigger — `WorldGridTest.concurrentReadsDontBlock` 2h hang from carrier starvation, 497 leaked threads in shared test JVM. Quick fixes shipped: bounded join, global JUnit timeout, unconditional forkEvery=1. SEED.md in phase dir.)
 - Phase 22 closing 2026-05-04: ran out-of-order as incident response. A1 (OutboundSender close-then-interrupt detach) shipped `42e9251`. 3 perf tests (Metabolism / EncodeDeflate / PopulationDynamics) `@Disabled` with TD pointers; HundredBot connect-race deferred to P22.1. Restored sequence: P19.5 rework → P20 → P21 → P22.1 (revalidation). Phase 22.1 stub + Phase 999.x backlog added.
 - Phase 19.1 inserted after Phase 19: Address P19 multi-review pass-4 findings (F1/F2/F3 unshipped, F4 RNG determinism, MS markStalled deadlock) plus residual phase items per 19-MULTI-REVIEW-pass4-TRIAGE.md (URGENT)
+- 20-01c hardening close (2026-05-20 → 2026-05-27): the 20-01c baseline plan (counted done 2026-05-19) underwent multi-review passes 2/3/4 — code fixes for outbound-queue gauge double-register, markDead/cleanupBot active-bucket dec leaks (commits ef26da2..f42abe6), SUMMARY rewrites, and 3-tier re-captures. Landed via **PR #1** (worktree `worktree-phase-20-01c-baseline-rebuild`, merged `ddf0dfa`). No new GSD plan — all under the 20-01c plan umbrella. Residual doc/observability nits parked as TD-20-01c-A..F.
+- **Out-of-band feature — diagnostics instrumentation (2026-05-25 → 2026-05-27, NOT a planned phase):** `com.paralife.diagnostics.DeathDiagnostics` (flag-gated death-cause + lifespan census) shipped to `main` via `feat(diagnostics)` 40cc5b7 then **PR #2** (`feat/diagnostics-instrumentation`, merged `464594e`, multi-reviewed, 4/4 H1/M1/M2/M3 fixed). **Gated `@ConditionalOnProperty(paralife.diagnostics.death-trace.enabled, havingValue=true)` — OFF by default, no yaml key, zero default-behaviour change.** Wired (no-op unless enabled) into SimulationEngine / EnvironmentEngine / DeathFinalizer / OutboundSender / LiveEntityRegistry. Provenance for the new package lives here + commits + `20-PR2-REVIEW-*` artifacts; follow-ups parked as TD-PR2-A..E. Not assigned a SCALE-* requirement; relates to the visualiser-gated Population Viability work (balance tuning deferred). Promote to a formal phase only if it needs further build-out.
