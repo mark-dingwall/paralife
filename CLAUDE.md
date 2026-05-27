@@ -25,7 +25,7 @@ Paralife is a distributed living simulation — a toroidal 2D world populated by
 <!-- GSD:conventions-start -->
 ## Conventions
 
-**Package structure:** `com.paralife.{world,engine,websocket,bot}` — flat single-level per layer.
+**Package structure:** `com.paralife.{world,engine,websocket,bot}` — flat single-level per layer. Plus `com.paralife.diagnostics` — `DeathDiagnostics` (flag-gated death-cause + lifespan census). **OFF by default** (`@ConditionalOnProperty paralife.diagnostics.death-trace.enabled=true`, no yaml key); a no-op unless enabled. Shipped out-of-band (not a GSD phase) via PR #2 `464594e` 2026-05-27; wired into the tick pipeline (SimulationEngine / EnvironmentEngine / DeathFinalizer / OutboundSender / LiveEntityRegistry). Provenance + follow-ups (TD-PR2-A..E): `.planning/STATE.md` §Roadmap Evolution.
 
 **Data modeling:** Immutable records throughout. Sealed interfaces for polymorphism (`Entity`, `Messages`). Mutations produce new instances (`Cell.withOccupant()`, `Particle.withEnergy()`).
 
