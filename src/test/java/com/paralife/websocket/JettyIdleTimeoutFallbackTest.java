@@ -26,7 +26,7 @@ class JettyIdleTimeoutFallbackTest {
         @Test
         void bothAtDefault_usesNewKeyDefault() {
             JettyRuntimeConfig cfg = JettyRuntimeConfig.defaults(); // idleTimeoutMs=60000
-            long legacy = 60000L; // legacy @Value default
+            long legacy = JettyDeflateCustomizer.LEGACY_IDLE_TIMEOUT_DEFAULT_MS; // legacy @Value default
             assertThat(JettyDeflateCustomizer.resolveEffectiveIdleMs(cfg, legacy)).isEqualTo(60000L);
         }
     }
@@ -36,7 +36,7 @@ class JettyIdleTimeoutFallbackTest {
         @Test
         void newKeyOverridesDefault_legacyAtDefault() {
             JettyRuntimeConfig cfg = new JettyRuntimeConfig(4096, 4096, 65536L, 65536L, 65536L, 30000L, true, -1);
-            long legacy = 60000L; // legacy @Value default (unset by operator)
+            long legacy = JettyDeflateCustomizer.LEGACY_IDLE_TIMEOUT_DEFAULT_MS; // unset by operator
             assertThat(JettyDeflateCustomizer.resolveEffectiveIdleMs(cfg, legacy)).isEqualTo(30000L);
         }
     }

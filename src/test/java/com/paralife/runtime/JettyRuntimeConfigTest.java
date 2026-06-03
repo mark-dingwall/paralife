@@ -107,6 +107,9 @@ class JettyRuntimeConfigTest {
             assertThat(cfg.inputBufferSize()).isEqualTo(8192);
             assertThat(cfg.idleTimeoutMs()).isEqualTo(30000L);
             assertThat(cfg.outputBufferSize()).isEqualTo(4096); // default preserved
+            assertThat(cfg.maxFrameSize()).isEqualTo(65536L); // default preserved
+            assertThat(cfg.maxBinaryMessageSize()).isEqualTo(65536L); // default preserved
+            assertThat(cfg.maxTextMessageSize()).isEqualTo(65536L); // default preserved
             assertThat(cfg.autoFragment()).isTrue();
             assertThat(cfg.maxOutgoingFrames()).isEqualTo(-1); // default preserved
         }

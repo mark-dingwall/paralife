@@ -165,3 +165,7 @@ git log --oneline -4
 ## Deviations from Plan
 
 None — plan executed exactly as written. All acceptance criteria green (verified by inline grep checks); no Rule 1/2/3 auto-fixes triggered; no Rule 4 architectural pauses.
+
+## Post-Hoc Verification Note (post-multi-review 2026-06-03)
+
+The PLAN's acceptance criterion `./gradlew test --tests "*JettyDeflate*"` is **non-reproducible** — no class matches the glob (deflate behaviour lives in `ServerRefusesUpgradeWithoutDeflateTest`, `WebSocketDeflateHandshakeIntegrationTest`, `BotClientClosesOnMissingServerDeflateTest`, `EncodeDeflatePerformanceGateTest`). Gradle exits 1 with `No tests found for given includes: [*JettyDeflate*]`. The Task-2.2 wiring is nevertheless genuinely covered: the three named full-context tests boot `ParalifeApplication`, instantiate `jettyRequestUpgradeStrategy` with `JettyRuntimeConfig` injected, and exercise the deflate path end-to-end. Reproducible gate: `./gradlew test --tests ServerRefusesUpgradeWithoutDeflateTest --tests WebSocketDeflateHandshakeIntegrationTest --tests BotClientClosesOnMissingServerDeflateTest`. Raised by multi-review pass 1, claude HIGH. See `20-02-MULTIREVIEW-pass1.md`.

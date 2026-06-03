@@ -27,7 +27,7 @@ import org.springframework.web.socket.server.jetty.JettyRequestUpgradeStrategy;
  * <p>Two co-operating beans:
  *
  * <ul>
- *   <li>{@link #jettyRequestUpgradeStrategy()} — the {@link JettyRequestUpgradeStrategy}
+ *   <li>{@code jettyRequestUpgradeStrategy} — the {@link JettyRequestUpgradeStrategy}
  *       that Spring's {@code DefaultHandshakeHandler} in {@link WebSocketConfig} uses
  *       to drive Jetty's native upgrade. The strategy is left at Jetty defaults for
  *       extension registration — Jetty 12's built-in {@code PerMessageDeflateExtension}
@@ -58,6 +58,13 @@ public class JettyDeflateCustomizer {
     static final String EXTENSIONS_HEADER = "Sec-WebSocket-Extensions";
     static final String UPGRADE_HEADER = "Upgrade";
     static final String WEBSOCKET = "websocket";
+    /**
+     * Sentinel matching {@link JettyRuntimeConfig#idleTimeoutMs()}'s {@code @DefaultValue("60000")}.
+     * Used by {@link #resolveEffectiveIdleMs} to detect "new key at default" (post-review #3:
+     * single source of truth so silent drift cannot reintroduce the case-E footgun). Phase 999.x
+     * removes the legacy fallback (and this constant) entirely.
+     */
+    static final long LEGACY_IDLE_TIMEOUT_DEFAULT_MS = 60000L;
 
     /**
      * The {@link JettyRequestUpgradeStrategy} Spring uses to drive Jetty's native
@@ -110,7 +117,8 @@ public class JettyDeflateCustomizer {
     /** Package-private for test access (Phase 20 — review concern #4 — see 20-REVIEW-DISPOSITIONS.md). */
     static long resolveEffectiveIdleMs(JettyRuntimeConfig runtimeConfig, long legacyIdleTimeoutMs) {
         long effectiveIdleMs = runtimeConfig.idleTimeoutMs();
-        if (legacyIdleTimeoutMs != 60000L && runtimeConfig.idleTimeoutMs() == 60000L) {
+        if (legacyIdleTimeoutMs != LEGACY_IDLE_TIMEOUT_DEFAULT_MS
+                && runtimeConfig.idleTimeoutMs() == LEGACY_IDLE_TIMEOUT_DEFAULT_MS) {
             // Legacy key was overridden but new key is at default — honour legacy for one phase.
             effectiveIdleMs = legacyIdleTimeoutMs;
         }

@@ -48,7 +48,13 @@ public record JettyRuntimeConfig(
         @DefaultValue("65536") long maxBinaryMessageSize,
         /** [launch-only] Max accumulated text message (bytes). Jetty default: 65536. */
         @DefaultValue("65536") long maxTextMessageSize,
-        /** [launch-only] Server-side idle close timeout (ms). Jetty default: 30000; project: 60000. */
+        /**
+         * [launch-only] Server-side idle close timeout (ms). Jetty default: 30000; project: 60000.
+         * Validation floor is 1000ms (Jetty-API minimum); the keepalive-safe minimum is
+         * &gt; 2 &times; (keepaliveTicks &times; tick.interval-ms) — see
+         * {@code application.yml#paralife.runtime.jetty.idle-timeout-ms} comment.
+         * Operator-tuning knob (T-20-DOS-1); not attacker-controllable.
+         */
         @DefaultValue("60000") long idleTimeoutMs,
         /** [launch-only] Auto-fragment outgoing frames > maxFrameSize. Jetty default: true. */
         @DefaultValue("true") boolean autoFragment,
