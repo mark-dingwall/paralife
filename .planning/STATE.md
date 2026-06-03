@@ -4,8 +4,8 @@ milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
 stopped_at: "Phase 20 plan-by-plan — 20-01 / 20-01c / 20-02 / 20-03 / 20-04 done (20-01b superseded); 20-05 / 20-06 pending"
-last_updated: "2026-06-04T00:00:00.000Z"
-last_activity: 2026-06-04 -- Plan 20-04 executed (20-RUNTIME.md skeleton + §3 per-tier recipes for 100/500/1000 bots; human boot-verify PASSED all three tiers, JFRs 1.9-4.6 MB)
+last_updated: "2026-06-04T18:45:00.000Z"
+last_activity: 2026-06-04 -- Plan 20-04 polish loop closed (caveman + R4 + R5 + R6 multi-review; 14 substantive findings across 4 polish commits 9b9ac5a/c0ff625/344c175/8f183cf; R6 convergence at 3 PASS + 1 NIT-as-FLAG; ship-gate boot-verify PASSED 3 baseline tiers + 1 active-variant smoke at HEAD 8f183cf)
 progress:
   total_phases: 15
   completed_phases: 4
