@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
-stopped_at: Phase 20 plan-by-plan — 20-01/20-01c/20-03 done (20-01b superseded); 20-01c hardened through pass-4 (PR#1 merged) + out-of-band diagnostics instrumentation shipped (PR#2 merged); 20-02/04/05/06 pending
-last_updated: "2026-05-27T15:02:24.000Z"
-last_activity: 2026-05-27 -- Session-drift reconciliation: STATE/resume-state refreshed to post-PR#1/#2 reality; ready to resume at 20-02
+stopped_at: "Phase 20 plan-by-plan — 20-01 / 20-01c / 20-02 / 20-03 done (20-01b superseded); 20-04 / 20-05 / 20-06 pending"
+last_updated: "2026-06-03T07:55:00.000Z"
+last_activity: 2026-06-03 -- Plan 20-02 executed (JettyRuntimeConfig record + Jetty Configurable wiring + yaml block + tests); three-gate stack green; zero-behaviour-change defaults preserved
 progress:
   total_phases: 15
   completed_phases: 4
   total_plans: 35
-  completed_plans: 32
-  percent: 91
+  completed_plans: 33
+  percent: 94
 ---
 
 # Project State
@@ -27,11 +27,11 @@ See: .planning/PROJECT.md
 
 Milestone: v3.0 (Scale Engineering / M4) — active
 Phase: 20 (connection-multiplexing-runtime-tuning) — EXECUTING
-Plan: 3 of 7 executed (20-01, 20-01c, 20-03 done; 20-01b superseded by 20-01c)
-Status: Ready to execute — next is 20-02 (paralife.runtime.jetty.* @ConfigurationProperties + Jetty wiring)
-Last activity: 2026-05-27 -- Session-drift reconciliation; 20-01c hardened pass-2..4 + PR#1/#2 merged
+Plan: 4 of 7 executed (20-01, 20-01c, 20-02, 20-03 done; 20-01b superseded by 20-01c)
+Status: Ready to execute — next is 20-04 (JVM-flag presets + per-tier recipes in 20-RUNTIME.md)
+Last activity: 2026-06-03 -- Plan 20-02 executed (JettyRuntimeConfig + Jetty wiring + yaml + tests)
 
-Progress: [█████████░] 91% (32/35 plans)
+Progress: [█████████░] 94% (33/35 plans)
 
 ## Deferred Items
 
