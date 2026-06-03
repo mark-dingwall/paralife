@@ -89,11 +89,161 @@ LOCKED).
 
 ## §3 Per-Scale-Tier Recipes
 
-> Plan 4 ships these recipes with **placeholder GC choices** marked `Pending —
-> JFR-driven; tuned in Plan 5`. Plan 5 (codec opts) and Plan 6 (final docs)
-> upgrade them with measured-justified choices once the tuned-state JFRs land.
+> Each recipe is intentionally copy-pasteable. Phase 21 benchmark scripts
+> consume these as-is. JVM flags are documented presets (D-08 — no wrapper
+> script). GC choice is **JFR-driven**: the Plan 1c baseline JFR (SHA
+> `62c1b44`, post-F6 re-anchor) is cited in each recipe; Plan 5 / Plan 6
+> will replace `Pending — JFR-driven` markers with measured-justified
+> choices.
+>
+> **Admission cap (`-Dparalife.admission.cap=1500`)** is a **benchmark-time JVM-flag
+> override** present in every recipe. Production default at `application.yml` is
+> `cap=256` (unchanged). The 1500 value matches the Plan 1c baseline capture
+> conditions (20-01c F1 resolution: cap is world-aggregate; cap=1500 is
+> non-binding for the 100/500/1000-bot tiers). Without this override, 500/1000-tier
+> recipes hit `world-full` rejections (~244 / ~744 bots dropped) AND do not
+> reproduce the cited baseline JFRs — re-introducing the exact F1 defect 20-01c
+> fixed. Per 20-01c-SUMMARY §F1: "Plan 20-04/05/06 should cite this as a
+> benchmark-time JVM-flag override, not a production default change."
+>
+> **Active vs churn profile (20-01c §Active-Population Workload).** The
+> `62c1b44`-anchored series is the **churn baseline** (default `nutrient-spawn-probability`);
+> 20-01c also captured an **active-population** scenario at SHA `103a615` with
+> `-Dparalife.simulation.nutrient-spawn-probability=0.05` (50× food) which
+> sustains a steady live population and is the correct transport-overhead
+> evidence for Phase 20's remit per 20-01c-SUMMARY:144-147. Plan 5 tunes against
+> the active profile; Plan 6 finalises §4 numbers. §6 indexes both sets.
+>
+> **Pass-2 Concern #8:** `paralife.runtime.app.outbound.queue-watermark-pct` is
+> `[reserved — no effect in Phase 20]` per §2.2 — it has no Phase 20 consumer
+> and overriding it produces no measurable effect. Recipe override examples
+> deliberately omit it; the only live-tunable backpressure knob in Phase 20 is
+> `paralife.admission.backpressure.outbound-queue-size` (default 128, see Phase
+> 17 17-ADMISSION.md §3 for tuning guidance).
 
-[Per-tier recipes go here — Task 4.2 populates.]
+### §3.1 100-bot tier (operator-friendly, BotRunner-class)
+
+**Server launch:** (Pass-3 Concern #24 — `paralife-*.jar` is ambiguous; the wildcard matches both `paralife-*-SNAPSHOT.jar` and `paralife-*-load-harness.jar`. Pin the server jar via the same shell-variable pattern Plan 1c uses.)
+```bash
+SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | grep -v -- '-plain' | head -1)
+java \
+  -Xms1g -Xmx1g \
+  -XX:+UseG1GC \
+  -XX:StartFlightRecording=duration=180s,filename=jfr-100bots.jfr,settings=profile,name=p20-100 \
+  -Djdk.virtualThreadScheduler.parallelism=4 \
+  -Dparalife.admission.cap=1500 \
+  -jar "$SERVER_JAR" \
+  --paralife.simulation.spawn.seed=20251205
+```
+
+(100 bots fits the default cap=256, but cap=1500 is included for parity with the §3.2/§3.3 recipes and the baseline JFR capture conditions — see §3 intro.)
+
+**Harness:**
+```bash
+HARNESS_JAR=$(ls build/libs/paralife-*-load-harness.jar | head -1)
+java -jar "$HARNESS_JAR" \
+  --server-uri ws://localhost:8080/ws/world \
+  --count 100 --duration 60 --ramp-up rate:20 \
+  --harness-id bench-100
+```
+
+**Yaml overrides:** none required at default tier.
+
+**Baseline JFR:** `profiles/jfr-100bots-baseline-62c1b44.jfr` (Plan 1c).
+
+**GC choice rationale:** _Pending — JFR-driven; G1 is the conservative default._
+
+### §3.2 500-bot tier (single-harness)
+
+**Server launch:**
+```bash
+SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | grep -v -- '-plain' | head -1)
+java \
+  -Xms1g -Xmx2g \
+  -XX:+UseG1GC \
+  -XX:StartFlightRecording=duration=180s,filename=jfr-500bots.jfr,settings=profile,name=p20-500 \
+  -Djdk.virtualThreadScheduler.parallelism=6 \
+  -Dparalife.admission.cap=1500 \
+  -jar "$SERVER_JAR" \
+  --paralife.simulation.spawn.seed=20251205
+```
+
+**Harness:**
+```bash
+HARNESS_JAR=$(ls build/libs/paralife-*-load-harness.jar | head -1)
+java -jar "$HARNESS_JAR" \
+  --server-uri ws://localhost:8080/ws/world \
+  --count 500 --duration 90 --ramp-up rate:50 \
+  --harness-id bench-500
+```
+
+**Yaml overrides (optional):**
+```yaml
+# Pass-2 Concern #8: paralife.runtime.app.outbound.queue-watermark-pct is
+# [reserved — no effect in Phase 20] per §2.2 — see "Pass-2 Concern #8" note
+# at the top of §3 for rationale.
+# The live-tunable backpressure knob is paralife.admission.backpressure.outbound-queue-size
+# (default 128); tighten cautiously per 17-ADMISSION.md §3.
+paralife:
+  admission:
+    backpressure:
+      outbound-queue-size: 128   # default; reduce only with measured slow-client evidence
+```
+
+**Baseline JFR:** `profiles/jfr-500bots-baseline-62c1b44.jfr` (Plan 1c).
+
+**GC choice rationale:** _Pending — JFR-driven; G1 default; ZGC candidate at this tier if JFR shows >2% GC pause time._
+
+### §3.3 1000-bot tier (M4 target)
+
+**Server launch:** (Pass-3 Concern #24 — same `SERVER_JAR` / `HARNESS_JAR` shell-variable pattern as §3.1.)
+```bash
+SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | grep -v -- '-plain' | head -1)
+java \
+  -Xms2g -Xmx2g \
+  -XX:+UseG1GC \
+  -XX:StartFlightRecording=duration=180s,filename=jfr-1000bots.jfr,settings=profile,name=p20-1000 \
+  -Djdk.virtualThreadScheduler.parallelism=8 \
+  -Dparalife.admission.cap=1500 \
+  -jar "$SERVER_JAR" \
+  --paralife.simulation.spawn.seed=20251205
+```
+
+**Harness:**
+```bash
+HARNESS_JAR=$(ls build/libs/paralife-*-load-harness.jar | head -1)
+java -jar "$HARNESS_JAR" \
+  --server-uri ws://localhost:8080/ws/world \
+  --count 1000 --duration 180 --ramp-up rate:50 \
+  --harness-id bench-1000
+```
+
+**Respawn-cap caveat (20-01c-SUMMARY Caveat #2 + Per-Tier Headline table):** at default `maxRespawnsPerSession=5`, the 1000-tier accumulates ~99 `respawn-cap` rejections by the last sample (live population tails to ~901 over 180s). Bot scaling evidence is uncontaminated (these are not admission-cap binds), but for **sustained** 1000+ bot benchmarks (Phase 21) the operator may need `-Dparalife.websocket.max-respawns-per-session=10` (or higher). Decision deferred to Phase 21 evidence. (Key matches `RespawnConfig.java:31` `@ConfigurationProperties(prefix = "paralife.websocket")` — `paralife.simulation.spawn.*` is the spawn config, not respawn config; an unknown `-D` key would be silently ignored.)
+
+**Yaml overrides (optional, JFR-driven):**
+```yaml
+# Pass-2 Concern #8: paralife.runtime.app.outbound.queue-watermark-pct is
+# [reserved — no effect in Phase 20] per §2.2 — see "Pass-2 Concern #8" note
+# at the top of §3 for rationale.
+paralife:
+  runtime:
+    jetty:
+      input-buffer-size: 1024     # only if JFR shows TLAB pressure on Jetty buffers (Pitfall 5)
+      output-buffer-size: 1024
+  admission:
+    backpressure:
+      outbound-queue-size: 128    # default; tighten only with measured slow-client evidence per 17-ADMISSION.md §3
+```
+
+**Baseline JFR:** `profiles/jfr-1000bots-baseline-62c1b44.jfr` + flamegraphs (Plan 1c).
+
+**Tuned JFR target:** `profiles/jfr-1000bots-tuned-<HEAD>.jfr` (Plan 5 produces).
+
+**GC choice rationale:** _Pending — JFR-driven; G1 baseline; ZGC switch IFF baseline JFR shows GC mean pause >5ms or `jdk.VirtualThreadPinned` correlates with stop-the-world events. Plan 5 replaces this paragraph with the chosen GC and the JFR finding that justified it._
+
+**VT scheduler parallelism rationale:** _Pending — JFR-driven; `parallelism=8` is a placeholder default (commodity host, ~8 cores). The Plan 1c baseline lock flamegraph (`profiles/lock-1000bots-baseline-62c1b44.html`) shows no carrier-thread saturation at the default JVM setting; the explicit flag is included so operators see the knob and Phase 21 evidence can revisit it. Plan 5 / Plan 6 replace this paragraph with measured-justified choice (or remove the flag entirely if JFR shows no benefit over JVM default)._
+
+**Pinning monitor:** `jdk.VirtualThreadPinned` event count from the baseline JFR is the headline. If count is dominant, Plan 5 **documents the finding and cites Phase 999.6 (`vt-pinning-reentrantlock-conversion`) per D-21 outcome 4** — Plan 5 does NOT perform the `synchronized(session)` → `ReentrantLock` conversion (Pass-3 Concern #25; the conversion was already deferred to 999.6 per pass-1 Concern #2 disposition; the previous wording "may convert" conflicted with that disposition).
 
 ***
 
