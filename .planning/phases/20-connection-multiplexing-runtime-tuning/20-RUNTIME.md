@@ -5,7 +5,7 @@
 **Requirements:** SCALE-08 (overhead reduction, equivalent-strategy escape hatch), SCALE-09 (measured tuning, not guesswork)
 **Profile baseline:** Commit SHA `62c1b44` (Plan 1c F1/F2/F6 re-anchor, post-Phase 19.1 close)
 
-See also: `17-ADMISSION.md` §3 (STALLED FSM, the path Phase 20 tunes for stability under), `18-HARNESS.md` §1 (5000-conn/JVM design ceiling), `15-SCHEMA.md` §12 (codec validation bounds — Phase 20 D-10 codec opts MUST NOT relax).
+See also: `17-ADMISSION.md` §3 (STALLED FSM, the path Phase 20 tunes for stability under), `18-HARNESS.md` §1 (5000-conn/JVM design ceiling), `15-SCHEMA.md` §6 / §8 / §10 (Frame Grammars, Block Grammars, Round-trip Test Vectors — wire format LOCKED; Phase 20 D-10 codec opts MUST preserve byte-exact output).
 
 ***
 
@@ -114,6 +114,27 @@ LOCKED).
 > evidence for Phase 20's remit per 20-01c-SUMMARY:144-147. Plan 5 tunes against
 > the active profile; Plan 6 finalises §4 numbers. §6 indexes both sets.
 >
+> **Active-scenario recipe variant (applies to §3.1 / §3.2 / §3.3).** Each
+> recipe below defaults to the **churn baseline** (no scenario flag). To run
+> the **active-50xfood** scenario that Plan 5/6 actually tune against, append:
+>
+> ```
+>   -Dparalife.simulation.nutrient-spawn-probability=0.05 \
+> ```
+>
+> to the server JVM args block, and change the JFR `filename=` to
+> `jfr-Nbots-active-50xfood.jfr` (where N is the tier). The harness block is
+> unchanged. Phase 21 benchmark scripts run **both** profiles per tier; the
+> active profile is the headline. (Cite: `profiles/jfr-Nbots-active-50xfood-103a615.jfr`
+> per §6.)
+>
+> **JFR duration / SIGTERM timing.** Each recipe pins the JFR `duration=` to the
+> harness `--duration` so the recording window covers exactly the load period.
+> JFR auto-stops and dumps the file at `duration` elapsed; operators should
+> SIGTERM the server **after** the harness exits (the recording is already on
+> disk by then). If you SIGTERM mid-recording, JFR flushes a partial dump on
+> JVM shutdown — usable but truncated.
+>
 > **Pass-2 Concern #8:** `paralife.runtime.app.outbound.queue-watermark-pct` is
 > `[reserved — no effect in Phase 20]` per §2.2 — it has no Phase 20 consumer
 > and overriding it produces no measurable effect. Recipe override examples
@@ -129,7 +150,7 @@ SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | grep -v -- '-
 java \
   -Xms1g -Xmx1g \
   -XX:+UseG1GC \
-  -XX:StartFlightRecording=duration=180s,filename=jfr-100bots.jfr,settings=profile,name=p20-100 \
+  -XX:StartFlightRecording=duration=60s,filename=jfr-100bots.jfr,settings=profile,name=p20-100 \
   -Djdk.virtualThreadScheduler.parallelism=4 \
   -Dparalife.admission.cap=1500 \
   -jar "$SERVER_JAR" \
@@ -161,7 +182,7 @@ SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | grep -v -- '-
 java \
   -Xms1g -Xmx2g \
   -XX:+UseG1GC \
-  -XX:StartFlightRecording=duration=180s,filename=jfr-500bots.jfr,settings=profile,name=p20-500 \
+  -XX:StartFlightRecording=duration=90s,filename=jfr-500bots.jfr,settings=profile,name=p20-500 \
   -Djdk.virtualThreadScheduler.parallelism=6 \
   -Dparalife.admission.cap=1500 \
   -jar "$SERVER_JAR" \
