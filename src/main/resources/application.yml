@@ -61,7 +61,7 @@ paralife:
       max-frame-size: 65536             # [launch-only] default preserves Jetty's 65536 cap (T-20-DOS-1)
       max-binary-message-size: 65536    # [launch-only]
       max-text-message-size: 65536      # [launch-only]
-      idle-timeout-ms: 60000            # [launch-only] project-current default (Jetty's own is 30000); also bound via legacy paralife.websocket.idle-timeout-ms
+      idle-timeout-ms: 60000            # [launch-only] project-current default (Jetty's own is 30000). Must be > 2 × (paralife.websocket.keepalive-ticks × paralife.tick.interval-ms) — defaults satisfy this. Legacy key paralife.websocket.idle-timeout-ms is honoured as one-phase fallback (case-E precedence: explicit-60000 here loses to any legacy override; see JettyDeflateCustomizer#resolveEffectiveIdleMs).
       auto-fragment: true               # [launch-only]
       max-outgoing-frames: -1           # [launch-only] -1 = unlimited (Jetty default); outbound backpressure delegated to D-10 OutboundSender queue
     # Phase 20 D-07 layer 3 — application-level tuning surface.

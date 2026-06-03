@@ -87,6 +87,28 @@ class JettyRuntimeConfigTest {
                 .isEqualTo(8);
     }
 
+    @Test
+    void rejectsMaxOutgoingFramesNegativeOtherThanSentinel() {
+        // Carve-out is -1 ONLY; any other negative must be rejected (post-multi-review pass 2 — claude LOW).
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> new JettyRuntimeConfig(4096, 4096, 65536L, 65536L, 65536L, 60000L, true, -2));
+        assertThat(ex.getMessage()).contains("paralife.runtime.jetty.max-outgoing-frames");
+    }
+
+    @Test
+    void acceptsAllValidationBoundaries() {
+        // Pin boundary-accepting values for every bounded field so an off-by-one
+        // (`<=` where `<` is intended) would fail loudly (post-multi-review pass 2 — opencode MED).
+        JettyRuntimeConfig c = new JettyRuntimeConfig(256, 256, 1024L, 1024L, 1024L, 1000L, true, 1);
+        assertThat(c.inputBufferSize()).isEqualTo(256);
+        assertThat(c.outputBufferSize()).isEqualTo(256);
+        assertThat(c.maxFrameSize()).isEqualTo(1024L);
+        assertThat(c.maxBinaryMessageSize()).isEqualTo(1024L);
+        assertThat(c.maxTextMessageSize()).isEqualTo(1024L);
+        assertThat(c.idleTimeoutMs()).isEqualTo(1000L);
+        assertThat(c.maxOutgoingFrames()).isEqualTo(1);
+    }
+
     @Configuration
     @EnableConfigurationProperties(JettyRuntimeConfig.class)
     static class TestApp {
@@ -112,6 +134,34 @@ class JettyRuntimeConfigTest {
             assertThat(cfg.maxTextMessageSize()).isEqualTo(65536L); // default preserved
             assertThat(cfg.autoFragment()).isTrue();
             assertThat(cfg.maxOutgoingFrames()).isEqualTo(-1); // default preserved
+        }
+    }
+
+    /**
+     * Post-multi-review pass 2 (claude LOW): pin the production Spring binding path
+     * with no overrides. {@link BindingRoundTripTest} overrides input-buffer-size +
+     * idle-timeout-ms — the two fields whose {@code @DefaultValue} path is the
+     * literal zero-behaviour-change linchpin — so a lone edit to
+     * {@code @DefaultValue("60000")} would otherwise pass every test
+     * ({@code defaults()} is not on the production path; {@code JettyDeflateCustomizer}
+     * never calls it).
+     */
+    @SpringBootTest(classes = JettyRuntimeConfigTest.TestApp.class,
+            webEnvironment = SpringBootTest.WebEnvironment.NONE)
+    static class DefaultsViaSpringBindingTest {
+        @Autowired
+        JettyRuntimeConfig cfg;
+
+        @Test
+        void allEightDefaultsBindAtTheirAtDefaultValueLiterals() {
+            assertThat(cfg.inputBufferSize()).isEqualTo(4096);
+            assertThat(cfg.outputBufferSize()).isEqualTo(4096);
+            assertThat(cfg.maxFrameSize()).isEqualTo(65536L);
+            assertThat(cfg.maxBinaryMessageSize()).isEqualTo(65536L);
+            assertThat(cfg.maxTextMessageSize()).isEqualTo(65536L);
+            assertThat(cfg.idleTimeoutMs()).isEqualTo(60000L);
+            assertThat(cfg.autoFragment()).isTrue();
+            assertThat(cfg.maxOutgoingFrames()).isEqualTo(-1);
         }
     }
 }

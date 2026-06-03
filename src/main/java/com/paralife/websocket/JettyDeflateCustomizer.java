@@ -59,12 +59,18 @@ public class JettyDeflateCustomizer {
     static final String UPGRADE_HEADER = "Upgrade";
     static final String WEBSOCKET = "websocket";
     /**
-     * Sentinel matching {@link JettyRuntimeConfig#idleTimeoutMs()}'s {@code @DefaultValue("60000")}.
-     * Used by {@link #resolveEffectiveIdleMs} to detect "new key at default" (post-review #3:
-     * single source of truth so silent drift cannot reintroduce the case-E footgun). Phase 999.x
-     * removes the legacy fallback (and this constant) entirely.
+     * Sentinel for "idle-timeout key is at default", used by
+     * {@link #resolveEffectiveIdleMs} for both keys. Three 60000s must stay in lockstep:
+     * <ul>
+     *   <li>this constant,</li>
+     *   <li>{@link JettyRuntimeConfig#idleTimeoutMs()}'s {@code @DefaultValue("60000")}, and</li>
+     *   <li>the {@code @Value("${paralife.websocket.idle-timeout-ms:60000}")} default on
+     *       {@link #jettyRequestUpgradeStrategy} below.</li>
+     * </ul>
+     * Phase 999.x removes the legacy key + this constant entirely. Until then,
+     * any change here MUST be mirrored in the other two literals.
      */
-    static final long LEGACY_IDLE_TIMEOUT_DEFAULT_MS = 60000L;
+    static final long IDLE_TIMEOUT_DEFAULT_MS = 60000L;
 
     /**
      * The {@link JettyRequestUpgradeStrategy} Spring uses to drive Jetty's native
@@ -117,8 +123,8 @@ public class JettyDeflateCustomizer {
     /** Package-private for test access (Phase 20 — review concern #4 — see 20-REVIEW-DISPOSITIONS.md). */
     static long resolveEffectiveIdleMs(JettyRuntimeConfig runtimeConfig, long legacyIdleTimeoutMs) {
         long effectiveIdleMs = runtimeConfig.idleTimeoutMs();
-        if (legacyIdleTimeoutMs != LEGACY_IDLE_TIMEOUT_DEFAULT_MS
-                && runtimeConfig.idleTimeoutMs() == LEGACY_IDLE_TIMEOUT_DEFAULT_MS) {
+        if (legacyIdleTimeoutMs != IDLE_TIMEOUT_DEFAULT_MS
+                && runtimeConfig.idleTimeoutMs() == IDLE_TIMEOUT_DEFAULT_MS) {
             // Legacy key was overridden but new key is at default — honour legacy for one phase.
             effectiveIdleMs = legacyIdleTimeoutMs;
         }

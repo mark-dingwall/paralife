@@ -50,9 +50,9 @@ public record JettyRuntimeConfig(
         @DefaultValue("65536") long maxTextMessageSize,
         /**
          * [launch-only] Server-side idle close timeout (ms). Jetty default: 30000; project: 60000.
-         * Validation floor is 1000ms (Jetty-API minimum); the keepalive-safe minimum is
-         * &gt; 2 &times; (keepaliveTicks &times; tick.interval-ms) — see
-         * {@code application.yml#paralife.runtime.jetty.idle-timeout-ms} comment.
+         * Validation floor is 1000ms (Jetty-API minimum). Operational floor: must be
+         * &gt; 2 &times; ({@code paralife.websocket.keepalive-ticks} &times;
+         * {@code paralife.tick.interval-ms}) — defaults satisfy this (2 &times; 30 &times; 500 = 30000 &lt; 60000).
          * Operator-tuning knob (T-20-DOS-1); not attacker-controllable.
          */
         @DefaultValue("60000") long idleTimeoutMs,
