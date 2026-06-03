@@ -176,12 +176,15 @@ LOCKED).
 > at `duration` elapsed; operators should SIGTERM the server **after** the
 > harness exits AND after JFR is on disk. If you SIGTERM mid-recording,
 > JFR flushes a partial dump on JVM shutdown — usable but truncated.
-> Tradeoff: this template's 15 s boot cushion gives the harness tail
-> ~15 s of un-recorded load (the recording stops `delay+duration` after
-> launch, so anything past that point isn't captured). For comparable
-> tail capture Plan 5 / Phase 21 can either bump `duration=` past the
-> harness end, or switch to `jcmd JFR.start` invoked after the server
-> reports ready.
+> Tradeoff: this template's 15 s boot cushion drops roughly the first
+> ~10 s of harness load (the ramp/connect window) from the JFR. With
+> server boot at ~5 s and the harness starting then, JFR starts at t=15 s
+> and ends at `15s + duration`, so the recording catches steady-state +
+> ~10 s of post-harness idle, but misses the ramp at the front. For
+> comparable full-load capture **including the ramp**, Plan 5 / Phase 21
+> can reduce `delay=` (and accept boot noise in the recording front), or
+> switch to `jcmd JFR.start` invoked immediately after the server reports
+> ready (precise alignment, no fixed delay placeholder).
 >
 > **Pass-2 Concern #8:** `paralife.runtime.app.outbound.queue-watermark-pct` is
 > `[reserved — no effect in Phase 20]` per §2.2 — it has no Phase 20 consumer
