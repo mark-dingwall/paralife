@@ -42,7 +42,7 @@ per-connection overhead path is the binding constraint at 5000 conns/JVM (the
 |-------|---------------|-------------|----------------|
 | 1. JVM/runtime | `java -jar` launch flags, documented in §3 per-tier recipes | launch only | doc-only presets (D-08 — no wrapper script) |
 | 2. Jetty/network | `paralife.runtime.jetty.*` `@ConfigurationProperties` (`JettyRuntimeConfig`) | launch (per Jetty `Configurable` API contract) | record + bindings + project-current defaults (Jetty defaults except `idleTimeoutMs=60000`) |
-| 3. Application | `paralife.runtime.app.*` `@ConfigurationProperties` (`AppRuntimeConfig` with nested `OutboundConfig`, `EncodeConfig`) | mixed (live-tunable seams reserved for M5 admin UI) | record + bindings + defaults |
+| 3. Application | `paralife.runtime.app.*` `@ConfigurationProperties` (`AppRuntimeConfig` with nested `OutboundConfig`, `EncodeConfig`) | launch-only (live-tunable seams reserved for M5 admin UI) | record + bindings + defaults |
 | 4. Codec impl | internal constants in `PerceptionCodec` and `Base64Codec` — JFR-validated | code change only | hot-path opts, no public surface |
 
 ### §2.1 Layer 2 — Jetty knobs (`JettyRuntimeConfig`)
@@ -74,9 +74,13 @@ All eight are launch-only per Jetty 12's `Configurable` contract.
 **D-20:** the existing `paralife.admission.backpressure.outbound-queue-size`
 (default 128) is **NOT** moved into `paralife.runtime.app.*`. It stays in
 `AdmissionConfig` for Phase 20; namespace consolidation is Phase 999.4. **The 128
-queue depth remains the single most important live-tunable runtime knob in Phase
-20** (consumed by `OutboundSender` per Phase 17 D-10); see Phase 17
-17-ADMISSION.md §3 for tuning guidance.
+queue depth remains the most important attach-time-tunable runtime knob in Phase
+20** (consumed by `OutboundSender.attachSession` per Phase 17 D-10); see Phase 17
+17-ADMISSION.md §3 for tuning guidance. **Lifecycle:** the value is read at
+session-attach time (`WorldWebSocketHandler.afterConnectionEstablished` →
+`OutboundSender.attachSession` → fixed `ArrayBlockingQueue` capacity); changes
+apply to **new sessions only**, existing session queues stay at their
+creation-time depth. No mid-benchmark live-resize today (M5 admin UI follow-up).
 
 ### §2.3 Layer 4 — Codec impl (D-10, JFR-driven only)
 
@@ -114,33 +118,57 @@ LOCKED).
 > evidence for Phase 20's remit per 20-01c-SUMMARY:144-147. Plan 5 tunes against
 > the active profile; Plan 6 finalises §4 numbers. §6 indexes both sets.
 >
-> **Active-scenario recipe variant (applies to §3.1 / §3.2 / §3.3).** Each
-> recipe below defaults to the **churn baseline** (no scenario flag). To run
-> the **active-50xfood** scenario that Plan 5/6 actually tune against, append:
+> **Active-scenario recipe variant — smoke-only template.** Each recipe
+> below defaults to the **churn baseline** (no scenario flag). For a
+> **smoke** of the active-50xfood scenario at the doc'd tier durations,
+> change the JFR `filename=` to `jfr-Nbots-active-50xfood.jfr` (where N
+> is the tier) and append as a **Spring app-arg** (after `-jar "$SERVER_JAR"`,
+> alongside `--paralife.simulation.spawn.seed`):
 >
 > ```
->   -Dparalife.simulation.nutrient-spawn-probability=0.05 \
+>   --paralife.simulation.nutrient-spawn-probability=0.05
 > ```
 >
-> to the server JVM args block, and change the JFR `filename=` to
-> `jfr-Nbots-active-50xfood.jfr` (where N is the tier). The harness block is
-> unchanged. Phase 21 benchmark scripts run **both** profiles per tier; the
-> active profile is the headline. (Cite: `profiles/jfr-Nbots-active-50xfood-103a615.jfr`
-> per §6.)
+> The **`--app-arg` form** is mandatory: passing the same value as a JVM
+> `-D` property after `-jar` is a silently-ignored application argument
+> (gemini R4 finding). The `-D` form works only if placed **before** `-jar`.
+>
+> **Not baseline-reproducible.** This template will NOT byte-for-byte
+> reproduce the cited `profiles/jfr-Nbots-active-50xfood-103a615.jfr`
+> artifacts. The captured active profile used distinct per-tier parameters
+> (heap `-Xms2g -Xmx2g`, `parallelism=8`, `--duration 130s`, uniform 90s JFR
+> window after a 20s ramp). See `profiles/jfr-Nbots-active-50xfood-103a615.meta.json`
+> for the exact deltas. Phase 21 benchmark scripts needing baseline-comparable
+> active evidence MUST read the meta sidecars and override these template
+> values per tier; Plan 5/6 wires the reproducible per-tier active recipe
+> into §3 once the tuning-rig form factor is decided.
+>
+> **Heap presets (`-Xms/-Xmx`) — `Pending — JFR-driven`.** Per-tier heap
+> values in §3.1 / §3.2 / §3.3 (`1g/1g`, `1g/2g`, `2g/2g`) are
+> **commodity-host placeholders**, not measured choices. The Plan 1c
+> baseline capture used `-Xms2g -Xmx2g` for all three tiers per
+> `profiles/jfr-Nbots-baseline-62c1b44.meta.json`; the lower-tier presets
+> here are operator-friendly minimal-footprint defaults included only so
+> the recipe boots on small machines. Plan 5/6 replaces these with
+> JFR-driven choices (heap row joins §4.2 if measured).
 >
 > **JFR duration / SIGTERM timing.** Each recipe pins the JFR `duration=` to the
-> harness `--duration` so the recording window covers exactly the load period.
-> JFR auto-stops and dumps the file at `duration` elapsed; operators should
-> SIGTERM the server **after** the harness exits (the recording is already on
-> disk by then). If you SIGTERM mid-recording, JFR flushes a partial dump on
-> JVM shutdown — usable but truncated.
+> harness `--duration` so the recording window covers the load period. JFR
+> begins at JVM boot (`-XX:StartFlightRecording`), so the first few seconds of
+> the recording capture server startup + harness connect/ramp rather than
+> steady-state load — relevant when interpreting the early window at the 60s
+> tier. JFR auto-stops and dumps the file at `duration` elapsed; operators
+> should SIGTERM the server **after** the harness exits (the recording is
+> already on disk by then). If you SIGTERM mid-recording, JFR flushes a partial
+> dump on JVM shutdown — usable but truncated.
 >
 > **Pass-2 Concern #8:** `paralife.runtime.app.outbound.queue-watermark-pct` is
 > `[reserved — no effect in Phase 20]` per §2.2 — it has no Phase 20 consumer
 > and overriding it produces no measurable effect. Recipe override examples
-> deliberately omit it; the only live-tunable backpressure knob in Phase 20 is
-> `paralife.admission.backpressure.outbound-queue-size` (default 128, see Phase
-> 17 17-ADMISSION.md §3 for tuning guidance).
+> deliberately omit it; the only attach-time-tunable backpressure knob in
+> Phase 20 (new sessions only — see §2.2 lifecycle note) is
+> `paralife.admission.backpressure.outbound-queue-size` (default 128, see
+> Phase 17 17-ADMISSION.md §3 for tuning guidance).
 
 ### §3.1 100-bot tier (operator-friendly, BotRunner-class)
 
@@ -203,8 +231,9 @@ java -jar "$HARNESS_JAR" \
 # Pass-2 Concern #8: paralife.runtime.app.outbound.queue-watermark-pct is
 # [reserved — no effect in Phase 20] per §2.2 — see "Pass-2 Concern #8" note
 # at the top of §3 for rationale.
-# The live-tunable backpressure knob is paralife.admission.backpressure.outbound-queue-size
-# (default 128); tighten cautiously per 17-ADMISSION.md §3.
+# The attach-time-tunable backpressure knob (new sessions only — see §2.2 lifecycle note)
+# is paralife.admission.backpressure.outbound-queue-size (default 128); tighten cautiously
+# per 17-ADMISSION.md §3.
 paralife:
   admission:
     backpressure:
@@ -305,7 +334,7 @@ stack run record, tuned-state JFR delta) — OR a single "(null-result)" / "(dom
 
 ## §5 Forward Notes
 
-- **Admin-UI live-tune (M5):** `AppRuntimeConfig` fields ship as `[reserved — no effect in Phase 20]` and are pre-shaped for `@RefreshScope`-compatible live-tune in M5; `JettyRuntimeConfig` is launch-only by Jetty 12's `Configurable` contract and is not a live-tune candidate. The live-tunable backpressure knob in Phase 20 is `paralife.admission.backpressure.outbound-queue-size` (Phase 17 D-10).
+- **Admin-UI live-tune (M5):** `AppRuntimeConfig` fields ship as `[reserved — no effect in Phase 20]` and are pre-shaped for `@RefreshScope`-compatible live-tune in M5; `JettyRuntimeConfig` is launch-only by Jetty 12's `Configurable` contract and is not a live-tune candidate. The attach-time-tunable backpressure knob in Phase 20 is `paralife.admission.backpressure.outbound-queue-size` (Phase 17 D-10); true mid-benchmark live-resize of existing session queues is M5 admin-UI scope.
 - **Automated config search:** The CLI override surface (`-Dparalife.runtime.x=y` / env / `@TestPropertySource`) enables future ILP/grid/Bayesian sweeps over the `paralife.runtime.*` knobs without record redesign. Search algorithm itself is deferred (post-MVP).
 - **Revisit-multiplex trigger (D-03):** Only if Phase 21 evidence shows per-connection overhead at 5000 conns/JVM is the binding constraint AND §3 tuning has been exhausted.
 - **Namespace consolidation (Phase 999.4):** Future fold of `paralife.admission.backpressure.outbound-queue-size` → `paralife.runtime.app.outbound.queue-size` with deprecate-and-alias migration. D-20 deferred this to keep P20 MVP-direct.
