@@ -45,9 +45,25 @@ paralife:
     # emergence tests can raise the ceiling via @TestPropertySource without
     # relaxing the production invariant. Production MUST stay at 5.
     max-respawns-per-session: 5
-  # Phase 20 D-07 — runtime tuning surface. Layer 2 (jetty) is added by Plan 2;
-  # this block carries layer 3 (app) only. See 20-RUNTIME.md §2.
+  # Phase 20 D-07 — runtime tuning surface. Layer 2 (jetty) and layer 3 (app).
+  # See 20-RUNTIME.md §2.
   runtime:
+    # Phase 20 D-07 layer 2 — Jetty 12 WebSocket runtime tuning surface.
+    # Defaults match project-current defaults — Jetty 12.0.18 defaults except
+    # `idle-timeout-ms: 60000` which inherits the legacy paralife.websocket.idle-timeout-ms
+    # value (Jetty's own default is 30000; Pass-2 Concern #16). Overriding any value
+    # tunes that specific knob. All eight fields are [launch-only]: applied by
+    # JettyRequestUpgradeStrategy.addWebSocketConfigurer at WS upgrade.
+    # See .planning/phases/20-connection-multiplexing-runtime-tuning/20-RUNTIME.md §2.
+    jetty:
+      input-buffer-size: 4096           # [launch-only] Jetty default
+      output-buffer-size: 4096          # [launch-only] Jetty default
+      max-frame-size: 65536             # [launch-only] default preserves Jetty's 65536 cap (T-20-DOS-1)
+      max-binary-message-size: 65536    # [launch-only]
+      max-text-message-size: 65536      # [launch-only]
+      idle-timeout-ms: 60000            # [launch-only] project-current default (Jetty's own is 30000); also bound via legacy paralife.websocket.idle-timeout-ms
+      auto-fragment: true               # [launch-only]
+      max-outgoing-frames: -1           # [launch-only] -1 = unlimited (Jetty default); outbound backpressure delegated to D-10 OutboundSender queue
     # Phase 20 D-07 layer 3 — application-level tuning surface.
     # D-20: paralife.admission.backpressure.outbound-queue-size is NOT moved or
     # shadowed; this record carries SIBLING outbound knobs only.
