@@ -139,7 +139,7 @@ Plans:
 - [x] 20-01c-PLAN.md — Re-anchor baseline at HEAD 1818eeb with cap=1500 + saturation metrics (F1/F2/F6 remediation) (SCALE-09)
 - [x] 20-02-PLAN.md — paralife.runtime.jetty.* @ConfigurationProperties record + Jetty wiring (SCALE-09)
 - [x] 20-03-PLAN.md — paralife.runtime.app.* @ConfigurationProperties record (D-20 alongside-not-move) (SCALE-09)
-- [ ] 20-04-PLAN.md — JVM-flag presets + per-tier recipes in 20-RUNTIME.md (SCALE-09)
+- [x] 20-04-PLAN.md — JVM-flag presets + per-tier recipes in 20-RUNTIME.md (SCALE-09)
 - [ ] 20-05-PLAN.md — JFR-driven codec hot-path opts (or forced-fallback runtime knob tightening per B2) + tuned-state JFR (SCALE-08, SCALE-09)
 - [ ] 20-06-PLAN.md — 20-RUNTIME.md finalisation + D-02 three-place rationale (README/CLAUDE/inline) + 20-VALIDATION.md flip (SCALE-08, SCALE-09)
 
