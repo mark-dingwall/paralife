@@ -1,5 +1,6 @@
 package com.paralife.websocket;
 
+import com.paralife.runtime.JettyRuntimeConfig;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -66,19 +67,54 @@ public class JettyDeflateCustomizer {
      * {@code server_no_context_takeover}) is applied earlier in the pipeline by
      * {@link #deflateEnforcementFilter()}.
      *
-     * <p>Idle timeout is raised from Jetty's 30s default to {@code idleTimeoutMs}
-     * (default 60s) via {@link JettyRequestUpgradeStrategy#addWebSocketConfigurer}.
-     * This is the defensive belt to the keepaliveservice's braces — if server-side
-     * pings somehow fail (peer vanishes, socket stuck), the connection still closes
-     * within the configured window. Keepalive ping cadence must stay well under this.
+     * <p>Phase 20 D-07 layer 2: all eight Jetty {@link
+     * org.eclipse.jetty.websocket.api.Configurable} setters are wired through
+     * {@link JettyRuntimeConfig}. Defaults match project-current defaults (Jetty
+     * 12.0.18 defaults except {@code idleTimeoutMs=60000} which inherits the
+     * project's pre-existing legacy {@code paralife.websocket.idle-timeout-ms} value
+     * — Jetty's own default is 30000; Pass-2 Concern #16). A fresh boot with no
+     * overrides exhibits zero behavioural change vs c22e487.
+     *
+     * <p>The legacy {@code paralife.websocket.idle-timeout-ms} key remains live for
+     * back-compat. Precedence: {@code paralife.runtime.jetty.idle-timeout-ms} (the
+     * primary surface) wins when both keys are set — <strong>except</strong> when the
+     * new key is left at (or explicitly set to) its default {@code 60000}, which the
+     * primitive {@code long} field cannot distinguish from "unset". In that one case
+     * the legacy key wins (see {@link #resolveEffectiveIdleMs} and the Task 2.3
+     * truth table, case E). Operators who must pin {@code 60000} while a legacy key
+     * is also present should clear the legacy key. Phase 999.x removes the legacy
+     * key and this carve-out entirely. (Concern #4 — full nullable/{@code Binder}
+     * explicit-set detection deferred as out-of-scope MVP cleanup.)
      */
     @Bean
     public JettyRequestUpgradeStrategy jettyRequestUpgradeStrategy(
-            @Value("${paralife.websocket.idle-timeout-ms:60000}") long idleTimeoutMs) {
+            JettyRuntimeConfig runtimeConfig,
+            @Value("${paralife.websocket.idle-timeout-ms:60000}") long legacyIdleTimeoutMs) {
         JettyRequestUpgradeStrategy strategy = new JettyRequestUpgradeStrategy();
-        Duration idleTimeout = Duration.ofMillis(idleTimeoutMs);
-        strategy.addWebSocketConfigurer(c -> c.setIdleTimeout(idleTimeout));
+        // Phase 20 — review concern #4: extract resolution into a package-private helper so
+        // JettyIdleTimeoutFallbackTest (Task 2.3) can drive all five yaml combinations.
+        final long idleMs = resolveEffectiveIdleMs(runtimeConfig, legacyIdleTimeoutMs);
+        strategy.addWebSocketConfigurer(c -> {
+            c.setIdleTimeout(Duration.ofMillis(idleMs));
+            c.setInputBufferSize(runtimeConfig.inputBufferSize());
+            c.setOutputBufferSize(runtimeConfig.outputBufferSize());
+            c.setMaxFrameSize(runtimeConfig.maxFrameSize());
+            c.setMaxBinaryMessageSize(runtimeConfig.maxBinaryMessageSize());
+            c.setMaxTextMessageSize(runtimeConfig.maxTextMessageSize());
+            c.setAutoFragment(runtimeConfig.autoFragment());
+            c.setMaxOutgoingFrames(runtimeConfig.maxOutgoingFrames());
+        });
         return strategy;
+    }
+
+    /** Package-private for test access (Phase 20 — review concern #4 — see 20-REVIEW-DISPOSITIONS.md). */
+    static long resolveEffectiveIdleMs(JettyRuntimeConfig runtimeConfig, long legacyIdleTimeoutMs) {
+        long effectiveIdleMs = runtimeConfig.idleTimeoutMs();
+        if (legacyIdleTimeoutMs != 60000L && runtimeConfig.idleTimeoutMs() == 60000L) {
+            // Legacy key was overridden but new key is at default — honour legacy for one phase.
+            effectiveIdleMs = legacyIdleTimeoutMs;
+        }
+        return effectiveIdleMs;
     }
 
     @Bean
