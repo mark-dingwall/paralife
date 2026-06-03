@@ -76,7 +76,7 @@ All eight are launch-only per Jetty 12's `Configurable` contract.
 `AdmissionConfig` for Phase 20; namespace consolidation is Phase 999.4. **The 128
 queue depth remains the most important attach-time-tunable runtime knob in Phase
 20** (consumed by `OutboundSender.attachSession` per Phase 17 D-10); see Phase 17
-17-ADMISSION.md §3 for tuning guidance. **Lifecycle:** the value is read at
+17-ADMISSION.md §6 Backpressure for the queue-depth sizing math. **Lifecycle:** the value is read at
 session-attach time (`WorldWebSocketHandler.afterConnectionEstablished` →
 `OutboundSender.attachSession` → fixed `ArrayBlockingQueue` capacity); changes
 apply to **new sessions only**, existing session queues stay at their
@@ -143,6 +143,19 @@ LOCKED).
 > values per tier; Plan 5/6 wires the reproducible per-tier active recipe
 > into §3 once the tuning-rig form factor is decided.
 >
+> **Churn-baseline recipes — not byte-for-byte reproducible against the
+> `62c1b44` capture.** The §3.1 / §3.2 / §3.3 recipes are smoke-template
+> shapes (operator-friendly, run on a commodity host). They do NOT
+> reproduce the cited `profiles/jfr-Nbots-baseline-62c1b44.jfr` artifacts
+> bit-for-bit — the Plan 1c capture used `--duration 200`, harness
+> `rate:50`, `-Xms2g -Xmx2g`, and `-Djdk.virtualThreadScheduler.parallelism=8`
+> across all three tiers per `profiles/jfr-Nbots-baseline-62c1b44.meta.json`.
+> Phase 21 benchmark scripts that need baseline-comparable rerun evidence
+> MUST read the meta sidecars and override the recipe's `--duration` /
+> `--ramp-up` / `-Xms/-Xmx` / `parallelism=N` per tier. Plan 5/6 wires
+> the reproducible per-tier baseline recipe into §3 once the tuning-rig
+> form factor is decided.
+>
 > **Heap presets (`-Xms/-Xmx`) — `Pending — JFR-driven`.** Per-tier heap
 > values in §3.1 / §3.2 / §3.3 (`1g/1g`, `1g/2g`, `2g/2g`) are
 > **commodity-host placeholders**, not measured choices. The Plan 1c
@@ -152,15 +165,23 @@ LOCKED).
 > the recipe boots on small machines. Plan 5/6 replaces these with
 > JFR-driven choices (heap row joins §4.2 if measured).
 >
-> **JFR duration / SIGTERM timing.** Each recipe pins the JFR `duration=` to the
-> harness `--duration` so the recording window covers the load period. JFR
-> begins at JVM boot (`-XX:StartFlightRecording`), so the first few seconds of
-> the recording capture server startup + harness connect/ramp rather than
-> steady-state load — relevant when interpreting the early window at the 60s
-> tier. JFR auto-stops and dumps the file at `duration` elapsed; operators
-> should SIGTERM the server **after** the harness exits (the recording is
-> already on disk by then). If you SIGTERM mid-recording, JFR flushes a partial
-> dump on JVM shutdown — usable but truncated.
+> **JFR start delay / duration / SIGTERM timing.** Each recipe pins the JFR
+> `duration=` to the harness `--duration` and adds `delay=15s` so the
+> recording starts ~15 s after `-jar` launch — past Spring Boot startup and
+> aligned with the harness connect/ramp window. The JFR window therefore
+> covers the harness load period rather than the boot tail. The 15 s
+> cushion is a conservative placeholder; if Spring startup runs longer on
+> a given host the operator should bump `delay=` until JFR start lands
+> after `Started ParalifeApplication`. JFR auto-stops and dumps the file
+> at `duration` elapsed; operators should SIGTERM the server **after** the
+> harness exits AND after JFR is on disk. If you SIGTERM mid-recording,
+> JFR flushes a partial dump on JVM shutdown — usable but truncated.
+> Tradeoff: this template's 15 s boot cushion gives the harness tail
+> ~15 s of un-recorded load (the recording stops `delay+duration` after
+> launch, so anything past that point isn't captured). For comparable
+> tail capture Plan 5 / Phase 21 can either bump `duration=` past the
+> harness end, or switch to `jcmd JFR.start` invoked after the server
+> reports ready.
 >
 > **Pass-2 Concern #8:** `paralife.runtime.app.outbound.queue-watermark-pct` is
 > `[reserved — no effect in Phase 20]` per §2.2 — it has no Phase 20 consumer
@@ -168,7 +189,7 @@ LOCKED).
 > deliberately omit it; the only attach-time-tunable backpressure knob in
 > Phase 20 (new sessions only — see §2.2 lifecycle note) is
 > `paralife.admission.backpressure.outbound-queue-size` (default 128, see
-> Phase 17 17-ADMISSION.md §3 for tuning guidance).
+> Phase 17 17-ADMISSION.md §6 Backpressure for queue-depth sizing math).
 
 ### §3.1 100-bot tier (operator-friendly, BotRunner-class)
 
@@ -178,7 +199,7 @@ SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | grep -v -- '-
 java \
   -Xms1g -Xmx1g \
   -XX:+UseG1GC \
-  -XX:StartFlightRecording=duration=60s,filename=jfr-100bots.jfr,settings=profile,name=p20-100 \
+  -XX:StartFlightRecording=delay=15s,duration=60s,filename=jfr-100bots.jfr,settings=profile,name=p20-100 \
   -Djdk.virtualThreadScheduler.parallelism=4 \
   -Dparalife.admission.cap=1500 \
   -jar "$SERVER_JAR" \
@@ -210,7 +231,7 @@ SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | grep -v -- '-
 java \
   -Xms1g -Xmx2g \
   -XX:+UseG1GC \
-  -XX:StartFlightRecording=duration=90s,filename=jfr-500bots.jfr,settings=profile,name=p20-500 \
+  -XX:StartFlightRecording=delay=15s,duration=90s,filename=jfr-500bots.jfr,settings=profile,name=p20-500 \
   -Djdk.virtualThreadScheduler.parallelism=6 \
   -Dparalife.admission.cap=1500 \
   -jar "$SERVER_JAR" \
@@ -233,7 +254,7 @@ java -jar "$HARNESS_JAR" \
 # at the top of §3 for rationale.
 # The attach-time-tunable backpressure knob (new sessions only — see §2.2 lifecycle note)
 # is paralife.admission.backpressure.outbound-queue-size (default 128); tighten cautiously
-# per 17-ADMISSION.md §3.
+# per 17-ADMISSION.md §6 Backpressure.
 paralife:
   admission:
     backpressure:
@@ -252,7 +273,7 @@ SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | grep -v -- '-
 java \
   -Xms2g -Xmx2g \
   -XX:+UseG1GC \
-  -XX:StartFlightRecording=duration=180s,filename=jfr-1000bots.jfr,settings=profile,name=p20-1000 \
+  -XX:StartFlightRecording=delay=15s,duration=180s,filename=jfr-1000bots.jfr,settings=profile,name=p20-1000 \
   -Djdk.virtualThreadScheduler.parallelism=8 \
   -Dparalife.admission.cap=1500 \
   -jar "$SERVER_JAR" \
@@ -282,7 +303,7 @@ paralife:
       output-buffer-size: 1024
   admission:
     backpressure:
-      outbound-queue-size: 128    # default; tighten only with measured slow-client evidence per 17-ADMISSION.md §3
+      outbound-queue-size: 128    # default; tighten only with measured slow-client evidence per 17-ADMISSION.md §6 Backpressure (new sessions only — see §2.2 lifecycle note)
 ```
 
 **Baseline JFR:** `profiles/jfr-1000bots-baseline-62c1b44.jfr` + flamegraphs (Plan 1c).
