@@ -44,7 +44,7 @@ key-files:
 key-decisions:
   - "D-14 + D-15 + D-16 delivered: 20-RUNTIME.md FINAL, CLAUDE.md §Runtime tuning, README.md operator paragraph"
   - "D-02 three-place codification complete: 4 files contain WS:entity 1:1 literal (grep-verified)"
-  - "Plan 5 null-result (D-21 outcome 3) inherited by Plan 6 §4.3 narrative — 558 lines (548 at execution; +10 from EXEC-R1 GC re-attribution) exceeds ≥250 null-result floor"
+  - "Plan 5 null-result (D-21 outcome 3) inherited by Plan 6 §4.3 narrative — ≥250 null-result floor comfortably exceeded (548 lines at execution; grew slightly through EXEC review rounds)"
   - "100/500-tier baseline cells sourced from metric sidecars: 9.0 ms (σ=3.22, n=6) and 30.2 ms (σ=2.71, n=6)"
   - "0 jdk.VirtualThreadPinned events at all three tiers; G1 confirmed for GC; Phase 999.6 (ReentrantLock conversion) remains backlog"
 
@@ -67,7 +67,7 @@ Phase 20 Plan 6 completes the phase: 20-RUNTIME.md fully populated with JFR-driv
 
 ### Task 6.1 — Finalise 20-RUNTIME.md (commit `6be125e`)
 
-**20-RUNTIME.md** is now 558 lines (548 at execution; +10 from EXEC-R1 GC re-attribution) — exceeds the ≥250 null-result floor (Pass-2 Concern #13).
+**20-RUNTIME.md** comfortably exceeds the ≥250 null-result floor (548 lines at execution; grew slightly through EXEC review rounds — Pass-2 Concern #13).
 
 Key changes:
 - **§3 intro**: stale forward-refs rewritten to past tense; heap honesty note updated (all captures used 2g/2g; lower-tier presets are operator smoke sizing, not JFR-validated)
@@ -137,7 +137,7 @@ Sign-off: `planner-signed-off (d37d281 on 2026-06-05)`.
 
 ## 20-RUNTIME.md Final State
 
-- **Line count:** 558 post EXEC-R1 (548 at execution; ≥250 null-result floor — Pass-2 Concern #13 satisfied)
+- **Line count:** ≥250 null-result floor satisfied (548 at execution; grew slightly through EXEC review rounds — Pass-2 Concern #13)
 - **Plan 5 outcome:** null-result (D-21 outcome 3)
 - **Sections:** §1 WS:entity 1:1, §2 Tuning Surface, §3 Per-Scale-Tier Recipes (3 tiers), §4 Profile Findings (§4.1 Methodology, §4.2 Headline Numbers, §4.3 Per-tier Narrative, §4.4 Codec Hot-path Opts), §5 Forward Notes, §6 Profile Index
 - **Pending markers:** 0 (zero-pending audit passes)
@@ -176,7 +176,7 @@ Lines 141–171 (after the `### Connection model` block, before `<!-- GSD:archit
 ## Pass-2 Concerns Confirmation
 
 - **Concern #9:** SCALE-08 inheritance truth enumerates all four D-21 outcomes in §4.3.3: outcome 1 (codec opts check), outcome 4 (VT pinning check), outcome 2 (runtime-knob check), outcome 3 (null-result documentation). All four are present in the 1000-tier narrative.
-- **Concern #13:** Line-count floor: null-result outcome 3 → ≥250 lines required. Actual: 558 (548 at execution). SATISFIED.
+- **Concern #13:** Line-count floor: null-result outcome 3 → ≥250 lines required. Actual: 548 at execution, grew slightly through EXEC review rounds. SATISFIED.
 - **Concern #17:** 100/500-tuned cells: `_baseline-only — see Phase 21_`. PRESENT in §4.2.
 
 ## Deviations from Plan
@@ -193,7 +193,7 @@ None. All placeholder markers in 20-RUNTIME.md replaced. §4.2 100/500-tuned cel
 
 ## Self-Check: PASSED
 
-- [x] `20-RUNTIME.md` exists: 558 lines (548 at execution)
+- [x] `20-RUNTIME.md` exists: 548 lines at execution (grew slightly through EXEC review rounds; ≥250 floor holds)
 - [x] Zero pending markers in 20-RUNTIME.md
 - [x] D-02 four-file grep = 4
 - [x] `### Runtime tuning (Phase 20)` present in CLAUDE.md

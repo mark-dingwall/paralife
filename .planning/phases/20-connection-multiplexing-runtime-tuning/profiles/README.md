@@ -40,13 +40,21 @@ it surfaced F1/F2/F6 defects that shifted the post-fix baseline. Do NOT use
 Run the baseline ONCE per phase iteration cycle, verbatim:
 
 ```bash
-# 1. Capture the pristine baseline at the canonical Plan 1c re-anchor SHA
+# 1. Capture the pristine baseline at the canonical Plan 1c re-anchor SHA.
+#    Artifacts are staged under /tmp while the tree is detached at 62c1b44 —
+#    their target paths under profiles/ are tracked at HEAD but absent at
+#    62c1b44, so writing them in-place would make `git checkout -` refuse to
+#    restore ("untracked working tree files would be overwritten"). Copy into
+#    profiles/ AFTER the restore (step 8).
 git stash --include-untracked  # protect any uncommitted work
 git checkout 62c1b44
 ./gradlew clean loadHarnessJar bootJar
+STAGE=/tmp/p20-baseline-62c1b44; mkdir -p "$STAGE"
 
-# 2. Start the server with JFR continuous-recording from boot
-JFR_OUT=".planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-1000bots-baseline-62c1b44.jfr"
+# 2. Start the server with JFR continuous-recording from boot, then gate on
+#    readiness — the harness must not fire connection attempts at a socket
+#    that is not listening yet (mirrors capture-active.sh's boot-wait).
+JFR_OUT="$STAGE/jfr-1000bots-baseline-62c1b44.jfr"
 java \
   -Xms2g -Xmx2g \
   -XX:+UseG1GC \
@@ -54,12 +62,15 @@ java \
   -Djdk.virtualThreadScheduler.parallelism=8 \
   -Dparalife.admission.cap=1500 \
   -jar build/libs/paralife-0.0.1-SNAPSHOT.jar \
-  --paralife.simulation.spawn.seed=20251205 &
+  --paralife.simulation.spawn.seed=20251205 > "$STAGE/server-1000.log" 2>&1 &
 SERVER_PID=$!
+for i in $(seq 1 40); do
+  grep -q "Started ParalifeApplication" "$STAGE/server-1000.log" && break; sleep 1
+done
 
 # 3. Drive load via the harness jar built in step 1 — BACKGROUNDED so steps
 #    4-5 capture while load is actually running (a foreground harness would
-#    block the shell for the full 200 s and steps 4-5 would profile an idle,
+#    block the shell for the full run and steps 4-5 would profile an idle,
 #    drained server — wrong regime, not the committed steady-state evidence)
 java -jar build/libs/paralife-0.0.1-SNAPSHOT-load-harness.jar \
   --server-uri ws://localhost:8080/ws/world \
@@ -70,10 +81,13 @@ sleep 20   # let ramp-up (rate:50 -> 1000 bots) complete before profiling
 
 # 4. While load runs: capture flamegraphs (serial inside one background
 #    subshell — async-profiler allows only ONE active session per JVM, so the
-#    three 60 s captures must not overlap each other; 3x60 s = 180 s fits the
-#    remaining load window). Step 5's curl-only metric loop runs concurrently.
+#    three 60 s captures must not overlap each other). Timing: the harness
+#    ramps the fleet up FIRST and only then starts its 200 s duration wait,
+#    so the load window is ~220 s from harness launch — the 20 s sleep +
+#    180 s of serial flamegraphs finish with ~20 s of load to spare.
+#    Step 5's curl-only metric loop runs concurrently.
 ASYNC_PROFILER=~/tools/async-profiler/bin/asprof
-OUT_DIR=".planning/phases/20-connection-multiplexing-runtime-tuning/profiles"
+OUT_DIR="$STAGE"
 (
   $ASYNC_PROFILER -d 60 -e cpu   -f "$OUT_DIR/cpu-1000bots-baseline-62c1b44.html"   $SERVER_PID
   $ASYNC_PROFILER -d 60 -e alloc -f "$OUT_DIR/alloc-1000bots-baseline-62c1b44.html" $SERVER_PID
@@ -110,15 +124,24 @@ echo ']}' >> "$SIDE"
 #    A one-shot curl of a single gauge does NOT reproduce the committed
 #    metrics-*.json schema and misses the detach.timeout headline gauge.
 
-# 5b. Let the flamegraph captures and the harness run to completion before
-#     touching the tree (timing: 20 s ramp + 180 s serial flamegraphs ≈ the
-#     200 s load window; the ~30 s metric loop ran concurrently)
-wait "$FLAME_PID" "$HARNESS_PID"
+# 5b. Let the flamegraph captures and the harness run to completion, then
+#     STOP THE SERVER — :8080 must be free before the next tier's step 2, and
+#     no JVM may survive into the git restore. Waits are separate so a
+#     flamegraph failure isn't masked by the harness's exit code (a combined
+#     `wait A B` returns only the LAST pid's status); eyeball the three
+#     cpu/alloc/lock-*.html files in $STAGE before moving on.
+wait "$FLAME_PID"
+wait "$HARNESS_PID"
+kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null || true
 
-# 6. Repeat steps 2-5 for --count 100 and --count 500 tiers
+# 6. Repeat steps 2-5b for --count 100 and --count 500 tiers
 
 # 7. Restore the working tree
 git checkout - && git stash pop
+
+# 8. Move the staged artifacts into profiles/ on the restored branch
+cp "$STAGE"/jfr-*.jfr "$STAGE"/metrics-*.json "$STAGE"/{cpu,alloc,lock}-*.html \
+  .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/
 ```
 
 The same ritual runs against tier 100 and tier 500 — substitute `--count` and
