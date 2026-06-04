@@ -36,3 +36,6 @@ Thumbs.db
 # Codex
 .codex/
 .codex
+
+# Harness runtime reports (transient capture artifacts — committed sidecars go under profiles/)
+harness-*-report.json
