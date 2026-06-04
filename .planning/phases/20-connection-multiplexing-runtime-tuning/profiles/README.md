@@ -67,6 +67,8 @@ SERVER_PID=$!
 for i in $(seq 1 40); do
   grep -q "Started ParalifeApplication" "$STAGE/server-1000.log" && break; sleep 1
 done
+grep -q "Started ParalifeApplication" "$STAGE/server-1000.log" \
+  || { echo "server failed to boot within 40 s — see $STAGE/server-1000.log"; exit 1; }
 
 # 3. Drive load via the harness jar built in step 1 — BACKGROUNDED so steps
 #    4-5 capture while load is actually running (a foreground harness would
@@ -140,12 +142,16 @@ kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null || true
 git checkout - && git stash pop
 
 # 8. Move the staged artifacts into profiles/ on the restored branch
+#    (2>/dev/null: cp copies per-arg and only warns for artifact classes you
+#    skipped — e.g. a single-tier run)
 cp "$STAGE"/jfr-*.jfr "$STAGE"/metrics-*.json "$STAGE"/{cpu,alloc,lock}-*.html \
-  .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/
+  .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/ 2>/dev/null
 ```
 
-The same ritual runs against tier 100 and tier 500 — substitute `--count` and
-the `{N}bots` segment of the filename.
+The same ritual runs against tier 100 and tier 500 — substitute `--count`,
+the `{N}bots` segment of every artifact filename, the `server-{N}.log` name,
+the JFR recording `name=p20-baseline-{N}`, and the harness-id tier suffix
+(`-t{N}`).
 
 ## Re-running (tuned-state captures)
 
