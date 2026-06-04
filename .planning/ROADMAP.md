@@ -126,7 +126,7 @@ Plans:
 **Goal:** Reduce socket/process overhead and tune the runtime for sustained high bot counts without regressing the compact protocol semantics.
 **Depends on:** Phase 19 (world execution path must be in place before tuning transport overhead)
 **Requirements:** SCALE-08, SCALE-09
-**Plans:** 3/7 plans executed
+**Plans:** 7/8 plans executed
 **Success Criteria:**
 - Connection fan-in / multiplexing or an equivalent overhead-reduction path exists for high bot counts.
 - Virtual-thread or runtime tuning guidance is grounded in measured profiles rather than guesswork.
@@ -140,7 +140,7 @@ Plans:
 - [x] 20-02-PLAN.md — paralife.runtime.jetty.* @ConfigurationProperties record + Jetty wiring (SCALE-09)
 - [x] 20-03-PLAN.md — paralife.runtime.app.* @ConfigurationProperties record (D-20 alongside-not-move) (SCALE-09)
 - [x] 20-04-PLAN.md — JVM-flag presets + per-tier recipes in 20-RUNTIME.md (SCALE-09)
-- [ ] 20-05-PLAN.md — JFR-driven codec hot-path opts (or forced-fallback runtime knob tightening per B2) + tuned-state JFR (SCALE-08, SCALE-09)
+- [x] 20-05-PLAN.md — JFR-driven codec hot-path opts (or forced-fallback runtime knob tightening per B2) + tuned-state JFR (SCALE-08, SCALE-09)
 - [ ] 20-06-PLAN.md — 20-RUNTIME.md finalisation + D-02 three-place rationale (README/CLAUDE/inline) + 20-VALIDATION.md flip (SCALE-08, SCALE-09)
 
 ### Phase 20.1: Restore Composite Vision (SENSOR-stitched perception)

@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
-stopped_at: "Phase 20 plan-by-plan — 20-01 / 20-01c / 20-02 / 20-03 / 20-04 done (20-01b superseded); 20-05 / 20-06 pending"
-last_updated: "2026-06-04T18:45:00.000Z"
-last_activity: 2026-06-04 -- Plan 20-04 polish loop closed (caveman + R4 + R5 + R6 multi-review; 14 substantive findings across 4 polish commits 9b9ac5a/c0ff625/344c175/8f183cf; R6 convergence at 3 PASS + 1 NIT-as-FLAG; ship-gate boot-verify PASSED 3 baseline tiers + 1 active-variant smoke at HEAD 8f183cf)
+stopped_at: "Phase 20 plan-by-plan — 20-01 / 20-01c / 20-02 / 20-03 / 20-04 / 20-05 done (20-01b superseded); 20-06 pending"
+last_updated: "2026-06-04T05:15:00.000Z"
+last_activity: 2026-06-04 -- Plan 20-05 executed (JFR triage null-result outcome 3; tuned-state capture at 424e06d confirms equivalence within ±1σ noise floor; one capture retry after transient server VT-stall freeze — leaked Gradle test JVM killed before retry)
 progress:
   total_phases: 15
   completed_phases: 4
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md
 
 Milestone: v3.0 (Scale Engineering / M4) — active
 Phase: 20 (connection-multiplexing-runtime-tuning) — EXECUTING
-Plan: 5 of 7 executed (20-01, 20-01c, 20-02, 20-03, 20-04 done; 20-01b superseded by 20-01c)
-Status: Ready to execute — next is 20-05 (JFR-driven codec hot-path opts + tuned-state JFR)
-Last activity: 2026-06-04 -- Plan 20-04 executed (20-RUNTIME.md skeleton + §3 per-tier recipes; human boot-verify PASSED all three tiers)
+Plan: 6 of 7 executed (20-01, 20-01c, 20-02, 20-03, 20-04, 20-05 done; 20-01b superseded by 20-01c)
+Status: Ready to execute — next is 20-06 (20-RUNTIME.md finalisation + D-02 three-place rationale + 20-VALIDATION.md flip)
+Last activity: 2026-06-04 -- Plan 20-05 executed (null-result equivalence confirmed; tuned-state JFR + metric sidecar captured at 424e06d)
 
 Progress: [█████████░] 97% (34/35 plans)
 
@@ -71,10 +71,10 @@ Progress: [█████████░] 97% (34/35 plans)
 
 ## Session Continuity
 
-Last session: 2026-05-27 (session-drift reconciliation)
-Stopped at: Phase 20 plan-by-plan — 20-01 / 20-01c / 20-03 done (20-01b superseded); 20-01c hardened pass-2..4 (PR#1) + out-of-band diagnostics shipped (PR#2); 20-02 / 20-04 / 20-05 / 20-06 pending
+Last session: 2026-06-04 (Plan 20-05 executed)
+Stopped at: Phase 20 plan-by-plan — 20-01 / 20-01c / 20-02 / 20-03 / 20-04 / 20-05 done (20-01b superseded); 20-06 pending
 Resume file: .planning/phases/20-connection-multiplexing-runtime-tuning/.resume-state.md (refreshed 2026-05-27 — wave model retired, plan-by-plan now)
-Next command: `/gsd-execute-phase 20 --plan 20-02` (paralife.runtime.jetty.* @ConfigurationProperties + Jetty wiring) — citable baseline is now `profiles/*-baseline-1818eeb.*` (20-01c), not the c22e487 capture
+Next command: `/gsd-execute-phase 20` (final plan 20-06 — 20-RUNTIME.md finalisation + D-02 three-place rationale + 20-VALIDATION.md flip)
 
 ## Regression Alarm — fast-track P22.1 if any reappear during P20/P21
 
