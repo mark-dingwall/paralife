@@ -1,0 +1,15 @@
+{
+  "captured_at_sha": "424e06d",
+  "scenario": "1000bots-active-50xfood-tuned",
+  "scenario_flag": "--paralife.simulation.nutrient-spawn-probability=0.05",
+  "duration_s": 200,
+  "jfr_delay_s": 15,
+  "jfr_duration_s": 180,
+  "harness_args": "--count 1000 --duration 200 --ramp-up rate:50 --harness-id tuned-424e06d",
+  "captured_utc": "2026-06-04T05:05:54+00:00",
+  "baseline_pair": "jfr-1000bots-active-50xfood-103a615.jfr",
+  "metric_sidecar": "metrics-1000bots-active-50xfood-tuned-424e06d.json",
+  "metric_baseline_pair": "metrics-1000bots-active-50xfood-103a615.json",
+  "baseline_capture_shape": "Plan 1c active: --duration 130s, JFR 90s window, 18 samples × 5s — Plan 5 capture uses longer harness (200s) and 6-sample metric window per Plan 5 script; noise-floor convention (D-21 ±5% mean OR ±1σ) handles the sampling shape delta. R2 caveat: σ ∝ 1/√n so the tuned-side ±1σ band is ~73% wider than baseline (n=6 vs n=18); Plan 6 §4.2 should bias toward the ±5%-mean branch of D-21 at the tuned side. detach.timeout is read level-only (window asymmetry, see jq comments at step 7).",
+  "opts_applied_summary": "null-result: codec ≤1.8% CPU (84/4792 samples), StringBuilder alloc ≤0.11% (5/4501 TLAB events), 0 VirtualThreadPinned events, 0 SocketRead events — all signals below RESEARCH Pattern 5 thresholds; system at performance floor"
+}
