@@ -47,7 +47,7 @@ R5 surfaces no new findings above the LOW polish threshold. The single gemini BL
 
 ## EXEC-R1 (`20-05-MULTIREVIEW-EXEC-R1.md`) — 0 HIGH+, convergence on first round
 
-3/4 reviewers (codex 6-for-6 fast-fail flake; gemini thin "flawless" — 124 output tokens, weak signal). All numeric claims independently recomputed by claude + opencode: baseline σ=15.74, tuned mean 45.0, |−4.5| < ±15.74 floor — math confirmed sound.
+3/4 reviewers (codex 6-for-6 fast-fail — root-caused post-review: NOT a capacity flake; the loop's `--model codex=gpt-5` pin is rejected with `400 invalid_request_error: gpt-5 not supported with ChatGPT account` by codex CLI v0.131.0; use `gpt-5.5` or default in future rounds. gemini thin "flawless" — 124 output tokens, weak signal). All numeric claims independently recomputed by claude + opencode: baseline σ=15.74, tuned mean 45.0, |−4.5| < ±15.74 floor — math confirmed sound.
 
 ### Fixed (this commit)
 
