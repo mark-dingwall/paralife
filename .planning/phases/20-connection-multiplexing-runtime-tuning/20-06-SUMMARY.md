@@ -60,7 +60,7 @@ Phase 20 Plan 6 completes the phase: 20-RUNTIME.md fully populated with JFR-driv
 - **Started:** 2026-06-05T14:07Z
 - **Completed:** 2026-06-05T14:41Z
 - **Tasks:** 5 of 5 complete
-- **Files modified:** 8 (5 .planning docs + CLAUDE.md + README.md + 2 source files)
+- **Files modified:** 8 (4 .planning docs + CLAUDE.md + README.md + 2 source files)
 - **Test suite:** Three-gate GREEN; full suite exit 0 (TD-22-E XML write noise is pre-existing)
 
 ## Accomplishments
@@ -165,7 +165,7 @@ Lines 141–171 (after the `### Connection model` block, before `<!-- GSD:archit
 
 ## README.md Before/After
 
-- Before: 2 lines (just `# paralife`)
+- Before: 1 line (just `# paralife`)
 - After: 40 lines (project description, build/run, layout, Runtime tuning section)
 
 ## Three-Gate + Full-Suite Green

@@ -233,8 +233,11 @@ java -jar "$HARNESS_JAR" \
 
 **GC choice rationale (JFR-driven):** G1 confirmed for this tier. The baseline JFR
 `profiles/jfr-100bots-baseline-62c1b44.jfr` (Plan 1c, 200 s churn, 2g/2g heap)
-recorded 0 `jdk.GCPhasePause` events in the capture window — GC overhead is
-unmeasurable at 100 bots under default G1. No ZGC switch justified; G1 stays.
+recorded 10 `jdk.GCPhasePause` events totalling 57.2 ms ≈ 0.03% of wall-clock
+(max single pause 11.8 ms) — normal G1 minor pauses, far below the >2%
+GC-pause-time ZGC trigger; the active-scenario capture
+`profiles/jfr-100bots-active-50xfood-103a615.jfr` (90 s window) recorded 0 pause
+events. No ZGC switch justified; G1 stays.
 
 ### §3.2 500-bot tier (single-harness)
 
@@ -278,8 +281,10 @@ paralife:
 
 **GC choice rationale (JFR-driven):** G1 confirmed for this tier. The baseline JFR
 `profiles/jfr-500bots-baseline-62c1b44.jfr` (Plan 1c, 200 s churn, 2g/2g heap)
-recorded 0 `jdk.GCPhasePause` events in the capture window — GC overhead is
-unmeasurable at 500 bots under G1 with a 2g heap. The ZGC threshold (>2% GC pause
+recorded 18 `jdk.GCPhasePause` events totalling 283.7 ms ≈ 0.14% of wall-clock
+(max single pause 41.9 ms) — normal G1 minor pauses under churn load; the
+active-scenario capture `profiles/jfr-500bots-active-50xfood-103a615.jfr`
+(90 s window) recorded 0 pause events. The ZGC threshold (>2% GC pause
 time) is not reached. G1 stays; ZGC switch would require Phase 21 evidence at this
 tier.
 
@@ -333,8 +338,10 @@ paralife:
 active-50xfood, 2g/2g heap) recorded 4 `jdk.GCPhasePause` events totalling
 90.8 ms = 0.05% of 180 s wall-clock — far below the >2% GC-pause-time ZGC
 trigger. The baseline `profiles/jfr-1000bots-baseline-62c1b44.jfr` (Plan 1c,
-churn scenario, 90 s effective window) recorded 0 pauses. No GC switch is
-justified. G1 stays at 2g/2g for the M4 tier.
+churn scenario, 200 s window) recorded 18 pauses totalling 213.0 ms ≈ 0.11%
+of wall-clock; the active-scenario baseline
+`profiles/jfr-1000bots-active-50xfood-103a615.jfr` (90 s window) recorded 0
+pause events. No GC switch is justified. G1 stays at 2g/2g for the M4 tier.
 
 **VT scheduler parallelism rationale (JFR-driven):** `parallelism=8` confirmed — no
 change. The Plan 1c lock flamegraph `profiles/lock-1000bots-baseline-62c1b44.html`
@@ -395,8 +402,8 @@ across the JFR sample window.
 
 At 100 bots (churn baseline, `62c1b44`, 200 s duration), the server shows headroom
 in every dimension. The JFR `profiles/jfr-100bots-baseline-62c1b44.jfr` captured
-0 `jdk.GCPhasePause` events and 0 `jdk.VirtualThreadPinned` events across the
-200 s window. The actuator metric sidecar `metrics-100bots-baseline-62c1b44.json`
+10 `jdk.GCPhasePause` events (57.2 ms total ≈ 0.03% of wall-clock) and
+0 `jdk.VirtualThreadPinned` events across the 200 s window. The actuator metric sidecar `metrics-100bots-baseline-62c1b44.json`
 (6 samples × 5 s, `VALUE` statistic) recorded `paralife.tick.health.work-time-ms`
 at a mean of 9.0 ms (σ=3.22, n=6; sampled values: 12/8/14/7/6/7 ms) and
 `paralife.outbound.detach.timeout` count = 0 throughout. The active-scenario
@@ -404,10 +411,10 @@ flamegraph `cpu-100bots-active-50xfood-103a615.html` shows PerceptionCodec well
 under 2% CPU, consistent with the 1000-tier null-result conclusion: the codec is
 not the bottleneck at any tier.
 
-The G1 GC shows no measurable pause contribution at this tier — 0 events confirm
-the 2g/2g heap is grossly oversized for 100 bots, and even the lower-tier `1g/1g`
-recipe preset (an operator smoke size, not JFR-validated) is unlikely to cause
-pause events. The tick work time of ~9 ms gives ~91 ms slack before a 100 ms tick
+The G1 GC pause contribution at this tier is negligible — 0.03% of wall-clock
+(10 minor pauses, max 11.8 ms) confirms the 2g/2g heap is grossly oversized for
+100 bots; the active-scenario capture (`103a615`, 90 s) recorded 0 pause events
+outright. The tick work time of ~9 ms gives ~91 ms slack before a 100 ms tick
 budget is breached; there is no signal requiring any tuning at 100 bots.
 
 **Pass-2 Concern #17:** 100-bot tier is **baseline-only** in Phase 20. Per-tier
@@ -421,7 +428,8 @@ reproducing the baseline must use 2g/2g (see §3 heap-preset caveat).
 
 At 500 bots (churn baseline, `62c1b44`, 200 s duration), behaviour scales
 roughly linearly from the 100-bot tier. The JFR `profiles/jfr-500bots-baseline-62c1b44.jfr`
-recorded 0 `jdk.GCPhasePause` events and 0 `jdk.VirtualThreadPinned` events.
+recorded 18 `jdk.GCPhasePause` events (283.7 ms total ≈ 0.14% of wall-clock,
+max 41.9 ms) and 0 `jdk.VirtualThreadPinned` events.
 The actuator sidecar `metrics-500bots-baseline-62c1b44.json` (6 samples × 5 s)
 records `paralife.tick.health.work-time-ms` mean 30.2 ms (σ=2.71, n=6; values:
 33/27/29/34/29/29 ms), a roughly 3.4× increase over the 100-bot mean. This is
@@ -466,9 +474,11 @@ is a measurement, not a no-op.
 
 **GC findings.** The tuned JFR `profiles/jfr-1000bots-active-50xfood-tuned-424e06d.jfr`
 (180 s window) recorded 4 `jdk.GCPhasePause` events totalling 90.8 ms ≈ 0.05%
-of wall-clock — normal G1 minor pauses at 2g/2g. The baseline
-`profiles/jfr-1000bots-baseline-62c1b44.jfr` (churn scenario, shorter effective
-window) recorded 0 pauses. No GC delta claim is made: equivalence rests on the
+of wall-clock — normal G1 minor pauses at 2g/2g. The churn baseline
+`profiles/jfr-1000bots-baseline-62c1b44.jfr` (200 s window) recorded 18 pauses
+totalling 213.0 ms ≈ 0.11%; the active-scenario baseline
+`profiles/jfr-1000bots-active-50xfood-103a615.jfr` (90 s window) recorded 0
+pause events. No GC delta claim is made: equivalence rests on the
 headline gauges (D-21). The >2% GC-pause-time ZGC trigger was not reached.
 
 **Headline-gauge delta.** From the actuator metric sidecars:
@@ -489,7 +499,7 @@ is unchanged and the equivalence capture is a clean baseline comparison.
 
 | Opt | JFR signal (active-50xfood baseline, SHA 103a615) | Code change | Three-gate record | Before → After delta |
 |-----|---------------------------------------------------|-------------|-------------------|----------------------|
-| (null-result) | PerceptionCodec 1.75% CPU (84/4792 samples); StringBuilder alloc 0.11% of TLAB events (5/4501); 0 `jdk.VirtualThreadPinned` events; 0 `jdk.SocketRead` events — all signals below RESEARCH Pattern 5 thresholds; system at performance floor. GC (tuned 180 s window — baseline 90 s window captured 0 pauses): 4 `jdk.GCPhasePause` events (27.8/20.9/19.0/23.1 ms) = 90.8 ms ≈ 0.05% of wall-clock, far below the >2% GC-pause-time ZGC trigger (§3 GC rationale); no GC delta claim made — equivalence rests on the headline gauges. | None — no opts justified per D-21 outcome 3 | Three-gate (GoldenTrace + LiveEntityRegistry) GREEN × 2 consecutive — confirmed codebase unchanged | Baseline 49.5 ms → tuned 45.0 ms (−4.5 ms, within ±15.74 ms noise floor); detach.timeout 0 → 0 |
+| (null-result) | PerceptionCodec 1.75% CPU (84/4792 samples); StringBuilder alloc 0.11% of TLAB events (5/4501); 0 `jdk.VirtualThreadPinned` events; 0 `jdk.SocketRead` events — all signals below RESEARCH Pattern 5 thresholds; system at performance floor. GC (tuned 180 s window — the active-`103a615` baseline's 90 s window captured 0 pauses): 4 `jdk.GCPhasePause` events (27.8/20.9/19.0/23.1 ms) = 90.8 ms ≈ 0.05% of wall-clock, far below the >2% GC-pause-time ZGC trigger (§3 GC rationale); no GC delta claim made — equivalence rests on the headline gauges. | None — no opts justified per D-21 outcome 3 | Three-gate (GoldenTrace + LiveEntityRegistry) GREEN × 2 consecutive — confirmed codebase unchanged | Baseline 49.5 ms → tuned 45.0 ms (−4.5 ms, within ±15.74 ms noise floor); detach.timeout 0 → 0 |
 
 ***
 
@@ -508,7 +518,7 @@ is unchanged and the equivalence capture is a clean baseline comparison.
 
 ## §6 Profile Index
 
-> The Phase 20 canonical baseline is anchored at SHA `62c1b44` (Plan 1c F6 re-anchor; supersedes the original `c22e487` capture which surfaced D1/D2/D3 fixes that shifted the post-fix baseline). Both capture sets remain on disk for historical reference; only the `62c1b44` series is cited by §3 recipes, §4 numbers, and D-19. The active-scenario evidence set (`103a615`) and tuned-state capture (`424e06d`) are indexed below. See `profiles/README.md` for the filename-convention contract.
+> The Phase 20 canonical baseline is anchored at SHA `62c1b44` (Plan 1c F6 re-anchor; supersedes the original `c22e487` capture which surfaced D1/D2/D3 fixes that shifted the post-fix baseline). Both capture sets remain on disk for historical reference; the `c22e487` series is history-only — the `62c1b44` series anchors the §3 churn recipes, the §4.2 100/500-bot baseline cells, and D-19, while §4's 1000-bot active evidence cites the active-scenario set (`103a615`) and tuned-state capture (`424e06d`), both indexed below. See `profiles/README.md` for the filename-convention contract.
 
 | Filename | Scenario | Source SHA | Captured | Size | Notes |
 |----------|----------|------------|----------|------|-------|

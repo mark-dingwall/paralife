@@ -70,9 +70,14 @@ $ASYNC_PROFILER -d 60 -e cpu   -f "$OUT_DIR/cpu-1000bots-baseline-62c1b44.html" 
 $ASYNC_PROFILER -d 60 -e alloc -f "$OUT_DIR/alloc-1000bots-baseline-62c1b44.html" $SERVER_PID
 $ASYNC_PROFILER -d 60 -e lock  -f "$OUT_DIR/lock-1000bots-baseline-62c1b44.html"  $SERVER_PID
 
-# 5. Scrape actuator metrics into the sidecar (Pass-2 Concern #10)
-curl -s http://localhost:8080/actuator/metrics/paralife.tick.health.work-time-ms > \
-  "$OUT_DIR/metrics-1000bots-baseline-62c1b44.json"
+# 5. Capture the actuator metric sidecar (Pass-2 Concern #10).
+#    Use the committed capture script's sampling loop — it polls all Phase 20
+#    metrics (incl. BOTH headline gauges: paralife.tick.health.work-time-ms AND
+#    paralife.outbound.detach.timeout) every 5 s into the committed sidecar
+#    schema ({captured_at_sha, scenario, cap_during_run, samples[]}):
+#      ../capture-active.sh COUNT SHA OUTDIR   # see its header + METRICS array
+#    A one-shot curl of a single gauge does NOT reproduce the committed
+#    metrics-*.json schema and misses the detach.timeout headline gauge.
 
 # 6. Repeat steps 2-5 for --count 100 and --count 500 tiers
 
@@ -96,7 +101,9 @@ SCENARIO="active-50xfood"          # or "baseline" for churn-baseline variant
 # "${SCENARIO}-tuned-${HEAD_SHA}", e.g. "active-50xfood-tuned-${HEAD_SHA}"
 # For the active-50xfood scenario, add to the server launch:
 #   --paralife.simulation.nutrient-spawn-probability=0.05
-# (as a Spring app-arg AFTER -jar, NOT as -D before -jar -- gemini R4 finding)
+# (as a Spring app-arg AFTER -jar; a -D form placed AFTER -jar is a program
+#  argument Spring silently ignores -- gemini R4 finding. -D BEFORE -jar is a
+#  JVM system property and does work, but the app-arg form is the convention.)
 ```
 
 Tuned captures land alongside the baseline. The before/after deltas live in `20-RUNTIME.md` §4.2 and §4.4.
