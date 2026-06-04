@@ -315,7 +315,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   `GridConfig.java`, `TickConfig.java` — `@ConfigurationProperties` precedent records the
   new `paralife.runtime.*` records mirror
 - `src/main/resources/application.yml` — config root; new `paralife.runtime.*` keys land
-  here with sensible defaults; **`management.endpoints.web.exposure.include: health,info,metrics` (line 15) exposes `/actuator/metrics/{name}` — Plan 1b + Plan 5 use this for headline-gauge JSON sidecar capture per pass-2 Concern #10 disposition**
+  here with sensible defaults; **`management.endpoints.web.exposure.include: health,info,metrics` (line 15) exposes `/actuator/metrics/{name}` — Plan 1c (originally Plan 1b, superseded) + Plan 5 use this for headline-gauge JSON sidecar capture per pass-2 Concern #10 disposition**
 - `build.gradle.kts:75-76` — `forkEvery=1` enforced unconditional (P22); D-06 notes profile
   runs are out-of-test so this does not apply
 - `src/test/resources/junit-platform.properties` — 5-min JUnit timeout (P22); same
@@ -354,7 +354,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
 - **LoadHarness (Phase 18)** — the 1000-bot driver. Phase 20 profile runs invoke it directly
   via `loadHarnessJar` CLI (D-06); no harness-side code change. `--harness-id` and JSON run
   report give per-run attribution.
-- **Spring Boot Actuator at `/actuator/metrics/{name}`** (already wired via `application.yml:15`) — Plan 1b baseline capture + Plan 5 tuned capture poll the named meters via `curl` into JSON sidecars during the 180s load window. No code change required (pass-2 Concern #10 disposition).
+- **Spring Boot Actuator at `/actuator/metrics/{name}`** (already wired via `application.yml:15`) — Plan 1c baseline capture (originally Plan 1b, superseded by the `62c1b44` re-anchor) + Plan 5 tuned capture poll the named meters via `curl` into JSON sidecars during the load window (200 s churn / 90 s active / 180 s tuned). No code change required (pass-2 Concern #10 disposition).
 
 ### Established Patterns
 

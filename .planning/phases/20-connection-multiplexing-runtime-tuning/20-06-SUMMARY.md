@@ -44,7 +44,7 @@ key-files:
 key-decisions:
   - "D-14 + D-15 + D-16 delivered: 20-RUNTIME.md FINAL, CLAUDE.md §Runtime tuning, README.md operator paragraph"
   - "D-02 three-place codification complete: 4 files contain WS:entity 1:1 literal (grep-verified)"
-  - "Plan 5 null-result (D-21 outcome 3) inherited by Plan 6 §4.3 narrative — 548 lines exceeds ≥250 null-result floor"
+  - "Plan 5 null-result (D-21 outcome 3) inherited by Plan 6 §4.3 narrative — 558 lines (548 at execution; +10 from EXEC-R1 GC re-attribution) exceeds ≥250 null-result floor"
   - "100/500-tier baseline cells sourced from metric sidecars: 9.0 ms (σ=3.22, n=6) and 30.2 ms (σ=2.71, n=6)"
   - "0 jdk.VirtualThreadPinned events at all three tiers — G1 confirmed, Phase 999.6 remains backlog"
 
@@ -67,11 +67,11 @@ Phase 20 Plan 6 completes the phase: 20-RUNTIME.md fully populated with JFR-driv
 
 ### Task 6.1 — Finalise 20-RUNTIME.md (commit `6be125e`)
 
-**20-RUNTIME.md** is now 548 lines — exceeds the ≥250 null-result floor (Pass-2 Concern #13).
+**20-RUNTIME.md** is now 558 lines (548 at execution; +10 from EXEC-R1 GC re-attribution) — exceeds the ≥250 null-result floor (Pass-2 Concern #13).
 
 Key changes:
 - **§3 intro**: stale forward-refs rewritten to past tense; heap honesty note updated (all captures used 2g/2g; lower-tier presets are operator smoke sizing, not JFR-validated)
-- **§3.1/3.2/3.3 GC rationale**: all three tiers now have JFR-driven measured statements (G1 confirmed: 0 GCPausePause events at 100/500-bot baseline; 4 events = 0.05% wall-clock at 1000-bot tuned — far below >2% ZGC trigger)
+- **§3.1/3.2/3.3 GC rationale**: all three tiers now have JFR-driven measured statements (G1 confirmed — churn `62c1b44` baselines: 10 `jdk.GCPhasePause` events / 57.2 ms ≈ 0.03% wall-clock at 100-bot, 18 / 283.7 ms ≈ 0.14% at 500-bot, 18 / 213.0 ms ≈ 0.11% at 1000-bot; active `103a615` captures: 0 pause events at all tiers; tuned `424e06d`: 4 events / 90.8 ms ≈ 0.05% — all far below the >2% ZGC trigger. Numbers as corrected by EXEC-R1; original execution wrongly claimed 0 churn-baseline pauses)
 - **§3.3 VT scheduler parallelism**: confirmed parallelism=8 (0 VirtualThreadPinned events, 0 carrier saturation — see lock flamegraph)
 - **§4.2**: 100-bot baseline filled: 9.0 ms (σ=3.22, n=6); 500-bot baseline filled: 30.2 ms (σ=2.71, n=6); both detach.timeout=0; both VirtualThreadPinned=0. Scenario note added (baseline mix intentional).
 - **§4.3 Per-tier narrative**: 1–2 paragraphs per tier; each heading cites the tier's JFR filename verbatim; ≥9 per-tier 62c1b44 JFR citations (15 total)
@@ -137,7 +137,7 @@ Sign-off: `planner-signed-off (d37d281 on 2026-06-05)`.
 
 ## 20-RUNTIME.md Final State
 
-- **Line count:** 548 (≥250 null-result floor — Pass-2 Concern #13 satisfied)
+- **Line count:** 558 post EXEC-R1 (548 at execution; ≥250 null-result floor — Pass-2 Concern #13 satisfied)
 - **Plan 5 outcome:** null-result (D-21 outcome 3)
 - **Sections:** §1 WS:entity 1:1, §2 Tuning Surface, §3 Per-Scale-Tier Recipes (3 tiers), §4 Profile Findings (§4.1 Methodology, §4.2 Headline Numbers, §4.3 Per-tier Narrative, §4.4 Codec Hot-path Opts), §5 Forward Notes, §6 Profile Index
 - **Pending markers:** 0 (zero-pending audit passes)
@@ -176,7 +176,7 @@ Lines 141–171 (after the `### Connection model` block, before `<!-- GSD:archit
 ## Pass-2 Concerns Confirmation
 
 - **Concern #9:** SCALE-08 inheritance truth enumerates all four D-21 outcomes in §4.3.3: outcome 1 (codec opts check), outcome 4 (VT pinning check), outcome 2 (runtime-knob check), outcome 3 (null-result documentation). All four are present in the 1000-tier narrative.
-- **Concern #13:** Line-count floor: null-result outcome 3 → ≥250 lines required. Actual: 548 lines. SATISFIED.
+- **Concern #13:** Line-count floor: null-result outcome 3 → ≥250 lines required. Actual: 558 (548 at execution). SATISFIED.
 - **Concern #17:** 100/500-tuned cells: `_baseline-only — see Phase 21_`. PRESENT in §4.2.
 
 ## Deviations from Plan
@@ -193,7 +193,7 @@ None. All placeholder markers in 20-RUNTIME.md replaced. §4.2 100/500-tuned cel
 
 ## Self-Check: PASSED
 
-- [x] `20-RUNTIME.md` exists: 548 lines
+- [x] `20-RUNTIME.md` exists: 558 lines (548 at execution)
 - [x] Zero pending markers in 20-RUNTIME.md
 - [x] D-02 four-file grep = 4
 - [x] `### Runtime tuning (Phase 20)` present in CLAUDE.md

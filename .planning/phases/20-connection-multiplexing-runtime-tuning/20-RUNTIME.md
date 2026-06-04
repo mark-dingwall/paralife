@@ -438,7 +438,7 @@ bots receives per-bot vision encoding from `TickBroadcaster`. The
 `paralife.outbound.detach.timeout` count remained 0, confirming no slow-client
 pressure at this tier.
 
-The 5× food active-scenario contrast JFR `profiles/jfr-500bots-active-50xfood-103a615.jfr`
+The 50× food active-scenario contrast JFR `profiles/jfr-500bots-active-50xfood-103a615.jfr`
 (90 s window) shows a somewhat higher CPU profile than the churn baseline due to
 sustained entity activity, but the allocation flamegraph
 `alloc-500bots-active-50xfood-103a615.html` shows no TLAB churn signal requiring
@@ -531,7 +531,7 @@ is unchanged and the equivalence capture is a clean baseline comparison.
 | `profiles/metrics-{100,500,1000}bots-baseline-62c1b44.json` | actuator metric sidecars (Pass-2 Concern #10) | 62c1b44 | Plan 1c — 2026-05-20 | ~13–14 KB each | 6-sample headline-gauge JSON snapshots |
 | `profiles/jfr-{100,500,1000}bots-baseline-62c1b44.meta.json` | JFR capture metadata sidecars (baseline) | 62c1b44 | Plan 1c — 2026-05-20 | ~1.2 KB each | per-JFR provenance: SHA / cap / seed / asprof rate |
 | `profiles/jfr-{100,500,1000}bots-active-50xfood-103a615.jfr` | active-population scenario (50× food, sustained live pop) | 103a615 | Plan 1c §Active — 2026-05-25 (from metric sidecar) | ~0.35–0.8 MB each | transport-overhead evidence — Plan 5's tuning evidence set (null-result; see §4.4) |
-| `profiles/{cpu,alloc,lock}-{100,500,1000}bots-active-50xfood-103a615.html` | async-profiler flamegraphs (active scenario) | 103a615 | Plan 1c §Active — 2026-05-25 (from metric sidecar) | 17–157 KB each | active-profile flamegraphs |
+| `profiles/{cpu,alloc,lock}-{100,500,1000}bots-active-50xfood-103a615.html` | async-profiler flamegraphs (active scenario) | 103a615 | Plan 1c §Active — 2026-05-25 (from metric sidecar) | 16–153 KB each | active-profile flamegraphs |
 | `profiles/metrics-{100,500,1000}bots-active-50xfood-103a615.json` | actuator metric sidecars (active scenario) | 103a615 | Plan 1c §Active — 2026-05-25 (from metric sidecar) | ~39–43 KB each | 18-sample headline-gauge JSON snapshots (3× baseline sample count) |
 | `profiles/jfr-{100,500,1000}bots-active-50xfood-103a615.meta.json` | JFR capture metadata sidecars (active scenario) | 103a615 | Plan 1c §Active — 2026-05-25 (from metric sidecar) | ~0.7 KB each | per-JFR provenance: SHA / cap / seed / asprof rate |
 | `profiles/jfr-1000bots-active-50xfood-tuned-424e06d.jfr` | 1000 bots, active-50xfood, tuned-state (null-result equivalence) | 424e06d | Plan 5 — 2026-06-04 | 3.5 MB | tuned-state JFR; null-result — 0 VirtualThreadPinned, 0 SocketRead, 4 GCPhasePause (≈0.05% wall-clock) |

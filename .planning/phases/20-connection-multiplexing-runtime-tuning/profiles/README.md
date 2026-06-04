@@ -50,7 +50,7 @@ JFR_OUT=".planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr
 java \
   -Xms2g -Xmx2g \
   -XX:+UseG1GC \
-  -XX:StartFlightRecording=duration=180s,filename="$JFR_OUT",settings=profile,name=p20-baseline-1000 \
+  -XX:StartFlightRecording=duration=200s,filename="$JFR_OUT",settings=profile,name=p20-baseline-1000 \
   -Djdk.virtualThreadScheduler.parallelism=8 \
   -Dparalife.admission.cap=1500 \
   -jar build/libs/paralife-0.0.1-SNAPSHOT.jar \
@@ -60,8 +60,8 @@ SERVER_PID=$!
 # 3. Drive load via the harness jar built in step 1
 java -jar build/libs/paralife-0.0.1-SNAPSHOT-load-harness.jar \
   --server-uri ws://localhost:8080/ws/world \
-  --count 1000 --duration 180 --ramp-up rate:50 \
-  --harness-id baseline-62c1b44
+  --count 1000 --duration 200 --ramp-up rate:50 \
+  --harness-id baseline-62c1b44-t1000
 
 # 4. While load runs: capture flamegraphs concurrently (see tools/async-profiler-bootstrap.md)
 ASYNC_PROFILER=~/tools/async-profiler/bin/asprof
@@ -110,7 +110,7 @@ Tuned captures land alongside the baseline. The before/after deltas live in `20-
 
 ## Size discipline
 
-Phase 20 D-05 bound: **≤10 MB per file, ≤50 MB phase-total**. JFR `settings=profile` at 180s/1000 bots can balloon to 50-200 MB raw. After every capture:
+Phase 20 D-05 bound: **≤10 MB per file, ≤50 MB phase-total**. JFR `settings=profile` at 180–200s/1000 bots can balloon to 50-200 MB raw. After every capture:
 
 ```bash
 jfr summary "$OUT_DIR/jfr-1000bots-active-50xfood-tuned-${HEAD_SHA}.jfr" | head
