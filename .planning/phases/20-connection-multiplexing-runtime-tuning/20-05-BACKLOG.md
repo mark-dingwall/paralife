@@ -40,3 +40,31 @@ Round-by-round NEW HIGH+ trajectory: R1=4, R2=2, R3=5 (1 BLOCKER), R4=2, **R5=0*
 ## Convergence judgement
 
 R5 surfaces no new findings above the LOW polish threshold. The single gemini BLOCKER was a regex misread cross-verified against actual file bytes by both claude and opencode. **Plan 20-05 is executable as-written**, modulo the LOW-tier polish items applied in R5.
+
+---
+
+# Post-execution review loop (EXEC-R1+)
+
+## EXEC-R1 (`20-05-MULTIREVIEW-EXEC-R1.md`) — 0 HIGH+, convergence on first round
+
+3/4 reviewers (codex 6-for-6 fast-fail flake; gemini thin "flawless" — 124 output tokens, weak signal). All numeric claims independently recomputed by claude + opencode: baseline σ=15.74, tuned mean 45.0, |−4.5| < ±15.74 floor — math confirmed sound.
+
+### Fixed (this commit)
+
+| # | Sev | Finding | Fix |
+|---|-----|---------|-----|
+| M1 | MEDIUM | "sub-threshold" GC framing (claude: contradicts D-21 ≤1ms floor heuristic at 22.7ms mean; opencode: tuned data in baseline-headed §4.4 column) | 3 sites reworded — criterion now explicit: 90.8 ms ≈ 0.05% wall-clock vs >2% GC-pause ZGC trigger; tuned/baseline window provenance stated; "no GC delta claim" explicit |
+| L1 | LOW | RUNTIME §4.2 VirtualThreadPinned 1000 cells `_Pending_` despite confirmed 0 in both JFRs | filled: 0/min (0 events, 90 s / 180 s) |
+| L2 | LOW | ROADMAP 20-05 entry stale "(or forced-fallback runtime knob tightening per B2)" — B2 framing replaced by D-21 pre-execution | reworded to D-21 four-outcome tree + resolved outcome 3 |
+| L3 | LOW | ROADMAP "7/8 plans executed" vs STATE "6 of 7" denominator convention | ROADMAP line annotated (checkbox count incl. superseded 20-01b vs active-plan count); self-erases at 20-06 completion |
+| N1 | NIT | SUMMARY Task 5.2 "see final commit" | cited `328ff7a` + `f796b55` |
+| N2 | NIT | tuned meta.json thinner than baseline sidecar | backfilled `jvm_flags`, `cap_during_run`, `spawn_seed` from capture-script truth |
+| N3 | NIT | TRIAGE GC floor row vacuous at n=0 | reworded: vacuous-pass marked, tuned-window contrast cross-referenced |
+
+### Dropped with reason (do not re-flag)
+
+- **[EXEC-R1 claude LOW] STATE.md progress bar 34/35 unchanged across Plan-5 diff** — DROPPED. End-state is correct: 34 done / 35 total project-wide, 20-06 sole pending; verified at tracking-commit time. Diff-shape (which commit bumped the numerator) is not a correctness property of the current state.
+
+### Convergence judgement
+
+EXEC-R1 = 0 NEW HIGH+. **Convergence threshold met on first post-execution round.** Fix-round (this commit) is doc-wording + sidecar-field polish only — no numeric, contract, or evidence change.

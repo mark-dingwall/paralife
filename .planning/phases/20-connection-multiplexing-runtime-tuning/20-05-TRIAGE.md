@@ -118,7 +118,7 @@ All three outcomes (1, 4, 2) failed to fire. The baseline JFR shows:
 | Signal | Threshold | Measured | Floor reached? |
 |--------|-----------|----------|----------------|
 | `jdk.VirtualThreadPinned` count | > 100/min @ 20ms | 0 events (0/min) | Yes |
-| `jdk.GCPhasePause` mean | > 1ms | No GCPhasePause events in JFR | Yes (no GC pauses captured) |
+| `jdk.GCPhasePause` mean | > 1ms | No GCPhasePause events in baseline 90 s JFR (vacuous pass at n=0; tuned 180 s window later showed 4 minor pauses ≈ 0.05% wall-clock — see SUMMARY) | Yes (no baseline GC pressure signal) |
 | PerceptionCodec CPU % | > 3% CPU | 1.75% (84/4,792 samples) | Yes |
 | StringBuilder alloc in codec | > 5% alloc events | 0.11% (5/4,501 events) | Yes |
 | `jdk.SocketRead` events | Any idle long-tail | 0 events | Yes |

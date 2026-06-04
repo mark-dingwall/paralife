@@ -70,7 +70,7 @@ JFR triage of active-50xfood 1000-bot baseline (SHA `103a615`) finds all codec s
 
 1. **Task 5.0: JFR Triage** - `bd59e60` (docs) — 20-05-TRIAGE.md created with null-result analysis
 2. **Task 5.1: Equivalence proof** - `becbb2e` (docs) — TRIAGE updated with three-gate run records + invariant checks
-3. **Task 5.2: JFR capture** - see final commit — JFR + metric sidecar + meta.json; 20-RUNTIME.md §4.2/§4.4/§6 populated
+3. **Task 5.2: JFR capture** - `328ff7a` (capture + RUNTIME §4.2/§4.4/§6) + `f796b55` (SUMMARY completion) — JFR + metric sidecar + meta.json; 20-RUNTIME.md populated
 
 ## Plan 5 Outcome: Documented Null-Result (D-21 Outcome 3)
 
@@ -128,7 +128,7 @@ The system is at the performance floor. No codec opts, no knob tightening, no pi
 - `jdk.VirtualThreadPinned`: 0
 - `jdk.SocketRead`: 0
 - `jdk.ExecutionSample`: 909
-- `jdk.GCPhasePause`: 4 (27.8 / 20.9 / 19.0 / 23.1 ms) — normal G1 minor pauses, sub-threshold, no action required
+- `jdk.GCPhasePause`: 4 (27.8 / 20.9 / 19.0 / 23.1 ms) — normal G1 minor pauses totalling 90.8 ms ≈ 0.05% of the 180 s wall-clock, far below the >2% GC-pause-time ZGC trigger (20-RUNTIME.md §3 GC rationale). Baseline 90 s window captured 0 GC pauses, so no GC delta is claimed — equivalence rests on the headline gauges (D-21).
 
 **Capture provenance:** First capture attempt aborted by the script's own sample-count guard (actuator unresponsive — server-side VT stall during connect burst; all 12 curl probes timed out; partial artifacts removed). A leaked Gradle Test Executor JVM from earlier test runs was killed before retry; retry-2 ran clean with a freeze watchdog armed (zero trips). One-retry event was environmental, not a code defect.
 

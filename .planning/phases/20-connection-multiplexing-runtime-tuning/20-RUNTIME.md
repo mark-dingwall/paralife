@@ -343,7 +343,7 @@ across the JFR sample window.
 |--------|------|------|------|------|------|------|
 | `paralife.tick.health.work-time-ms` (mean ms) | _Pending — Plan 1c actuator sidecar_ | _baseline-only — see Phase 21_ | _Pending — Plan 1c actuator sidecar_ | _baseline-only — see Phase 21_ | 49.5 ms (σ=15.74, n=18) | 45.0 ms (σ=8.77, n=6) |
 | `paralife.outbound.detach.timeout` (count) | _Pending_ | _baseline-only — see Phase 21_ | _Pending_ | _baseline-only — see Phase 21_ | 0 | 0 |
-| `jdk.VirtualThreadPinned` (events/min @ 20ms) | _Pending_ | _baseline-only — see Phase 21_ | _Pending_ | _baseline-only — see Phase 21_ | _Pending_ | _Pending_ |
+| `jdk.VirtualThreadPinned` (events/min @ 20ms) | _Pending_ | _baseline-only — see Phase 21_ | _Pending_ | _baseline-only — see Phase 21_ | 0/min (0 events, 90 s JFR) | 0/min (0 events, 180 s JFR) |
 
 > **1000-tier footnote:** 1000-tier baseline + tuned columns source from active-50xfood scenario per 20-01c-SUMMARY:144-147 directive (transport stack dominant under active load; churn baseline mis-routes triage toward env-CA). Baseline: `metrics-1000bots-active-50xfood-103a615.json` (18 samples × 5 s). Tuned: `metrics-1000bots-active-50xfood-tuned-424e06d.json` (6 samples × 5 s). Delta −4.5 ms is within noise floor (D-21 max(±5% mean = ±2.48 ms, ±1σ = ±15.74 ms) = ±15.74 ms) — **null-result, equivalence confirmed**.
 
@@ -355,7 +355,7 @@ _Plan 6 populates._
 
 | Opt | JFR signal (active-50xfood baseline, SHA 103a615) | Code change | Three-gate record | Before → After delta |
 |-----|---------------------------------------------------|-------------|-------------------|----------------------|
-| (null-result) | PerceptionCodec 1.75% CPU (84/4792 samples); StringBuilder alloc 0.11% of TLAB events (5/4501); 0 `jdk.VirtualThreadPinned` events; 0 `jdk.SocketRead` events — all signals below RESEARCH Pattern 5 thresholds; system at performance floor. GC: 4 `jdk.GCPhasePause` events (27.8/20.9/19.0/23.1 ms) in tuned 180s window — normal G1 minor pauses, sub-threshold, no action. | None — no opts justified per D-21 outcome 3 | Three-gate (GoldenTrace + LiveEntityRegistry) GREEN × 2 consecutive — confirmed codebase unchanged | Baseline 49.5 ms → tuned 45.0 ms (−4.5 ms, within ±15.74 ms noise floor); detach.timeout 0 → 0 |
+| (null-result) | PerceptionCodec 1.75% CPU (84/4792 samples); StringBuilder alloc 0.11% of TLAB events (5/4501); 0 `jdk.VirtualThreadPinned` events; 0 `jdk.SocketRead` events — all signals below RESEARCH Pattern 5 thresholds; system at performance floor. GC (tuned 180 s window — baseline 90 s window captured 0 pauses): 4 `jdk.GCPhasePause` events (27.8/20.9/19.0/23.1 ms) = 90.8 ms ≈ 0.05% of wall-clock, far below the >2% GC-pause-time ZGC trigger (§3 GC rationale); no GC delta claim made — equivalence rests on the headline gauges. | None — no opts justified per D-21 outcome 3 | Three-gate (GoldenTrace + LiveEntityRegistry) GREEN × 2 consecutive — confirmed codebase unchanged | Baseline 49.5 ms → tuned 45.0 ms (−4.5 ms, within ±15.74 ms noise floor); detach.timeout 0 → 0 |
 
 ***
 
@@ -390,7 +390,7 @@ _Plan 6 populates._
 | `profiles/metrics-{100,500,1000}bots-active-50xfood-103a615.json` | actuator metric sidecars (active scenario) | 103a615 | _Plan 1c §Active_ | _~39–43 KB each_ | 18-sample headline-gauge JSON snapshots (3× baseline sample count) |
 | `profiles/jfr-{100,500,1000}bots-baseline-62c1b44.meta.json` | JFR capture metadata sidecars (baseline) | 62c1b44 | _Plan 1c_ | _~1.2 KB each_ | per-JFR provenance: SHA / cap / seed / asprof rate |
 | `profiles/jfr-{100,500,1000}bots-active-50xfood-103a615.meta.json` | JFR capture metadata sidecars (active scenario) | 103a615 | _Plan 1c §Active_ | _~0.7 KB each_ | per-JFR provenance: SHA / cap / seed / asprof rate |
-| `profiles/jfr-1000bots-active-50xfood-tuned-424e06d.jfr` | 1000 bots, active-50xfood, tuned-state (null-result equivalence) | 424e06d | _Plan 5_ | 3.5 MB | tuned-state JFR; null-result — 0 VirtualThreadPinned, 0 SocketRead, 4 GCPhasePause (sub-threshold) |
+| `profiles/jfr-1000bots-active-50xfood-tuned-424e06d.jfr` | 1000 bots, active-50xfood, tuned-state (null-result equivalence) | 424e06d | _Plan 5_ | 3.5 MB | tuned-state JFR; null-result — 0 VirtualThreadPinned, 0 SocketRead, 4 GCPhasePause (≈0.05% wall-clock) |
 | `profiles/metrics-1000bots-active-50xfood-tuned-424e06d.json` | actuator metric sidecar (tuned, active-50xfood) | 424e06d | _Plan 5_ | ~KB-class | 6-sample headline-gauge JSON; mean 45.0 ms work-time-ms, detach.timeout=0 |
 | `profiles/jfr-1000bots-active-50xfood-tuned-424e06d.meta.json` | JFR capture metadata sidecar (tuned, active-50xfood) | 424e06d | _Plan 5_ | ~1 KB | opts_applied_summary = null-result label per TRIAGE.md outcome-label contract |
 | `profiles/{cpu,alloc,lock}-1000bots-active-50xfood-tuned-424e06d.html` | async-profiler flamegraphs (tuned, active) | _deferred to Plan 6 — JFR-event triage suffices for Plan 5_ | _deferred_ | — | flamegraph (deferred) |
