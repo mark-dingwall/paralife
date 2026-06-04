@@ -56,12 +56,37 @@ Loop target: no NEW HIGH+ post-triage. Subject: 20-06-PLAN.md (pre-execution, po
 
 - **[R2 codex MEDIUM] D-19 bullet annotation leaves stale "git checkout c22e487" lead text in 20-CONTEXT.md** — DROPPED. Annotate-not-rewrite is the deliberate pattern for 20-CONTEXT (decision-history record; step 7 says "do NOT rewrite the surrounding decision history"). Operator-facing capture guidance lives in `profiles/README.md`, which step 7 now de-stales to `62c1b44`. A reader of the D-19 bullet hits the re-anchor parenthetical in the same sentence.
 
+## R3 (`20-06-MULTIREVIEW-R3.md`) — post-triage: 2 HIGH accepted; all fixed this commit
+
+### Fixed (this commit)
+
+| # | Source | Sev (post-triage) | Finding | Fix |
+|---|--------|------|---------|-----|
+| H1 | claude+gemini (consensus; claude proved on live 62c1b44 brace row) | HIGH | R2's c22e487 acceptance greps literal-only while step 5 prescribes compressed-brace form — faithful execution rejected (R1-H1 defect class, introduced by R2 fix) | greps → brace-tolerant ERE `(\{[0-9,]+\}\|1000)bots`; dry-run vs prescribed strings = match |
+| H2 | codex (solo, verified real) | HIGH | step 1 told executor to write heap presets as "measured-justified / defaults stand" — but ALL captures (churn/active/tuned) ran `-Xms2g -Xmx2g` per meta.json `jvm_flags`; 100-tier `1g/1g` + 500-tier `1g/2g` presets never exercised by any JFR → false claim in canonical doc | step 1 split: GC + parallelism measured-justified; heap = honest "no heap retune; smoke presets, NOT JFR-validated; reproduction uses 2g/2g capture shape"; recipe values unchanged |
+| M1 | codex | MEDIUM | acceptance could pass with `jdk.VirtualThreadPinned` 100/500 cells still `_Pending_` (gauge grep covers only the 2 paralife rows; audit was action-only) | zero-pending audit added as acceptance gate (`! grep -iqE ...`) |
+| M2 | codex | MEDIUM | profiles/README tuned filename examples (~L17, ~L75-99) still non-scenario `jfr-{N}bots-tuned-{HEAD_SHA}.jfr` — operator would mint wrongly-named tuned captures | README bullet extended: scenario-aware pattern + concrete `424e06d` example |
+| M3 | claude | MEDIUM | §4.2 baseline row silently mixes churn-62c1b44 (100/500) with active-103a615 (1000) — headline table apples-to-oranges without label | step 3: one-line scenario note added to §4.2 footnote (kept churn sources — re-sourcing 100/500 from active sidecars would change tier-anchor meaning; 01c directive applied active treatment to 1000 only) |
+| M4 | codex | MEDIUM | `jfr print profiles/...` path fails from repo root | full repo-root path inlined |
+| L1 | claude | LOW | pinning-dominates grouped at ≥250 contradicts canonical Concern #13 disposition (≥350 for codec/knob/pinning; 250 = null-result only); inert this run | case branch + must_haves min_lines + prose regrouped; disposition-aligned |
+| L2 | opencode | LOW | step 5 "capture dates via ls -lh" — mtimes not authoritative; risks losing `_Plan 1c_` provenance labels | sizes from ls -lh, dates from meta.json `captured_at`, labels retained (`Plan 1c — 2026-05-27` form) |
+| L3 | opencode | LOW | VALIDATION ~L62 Wave-0 intro still says "four P22" + lists re-enabled TD-22-D — outside the R2 rewrite scope (L24/L96 only) | L62 added to Task 6.5 step 4 rewrite scope |
+| L4 | claude | LOW | tuned-JFR manual row is L82 not "~L83" | corrected |
+| N1 | claude | NIT | must_haves OutboundSender artifact ref "~132-135" vs actual L136-138 | corrected + match-on-code-block note |
+
+### Dropped with reason (do not re-flag)
+
+- **[R3 gemini MEDIUM] AdmissionMetrics at L63/L72, template stale** — DROPPED. `grep -n` at HEAD (`59e8cfd`-era file, last touched `0824f1a`): `M_TICK_WORK_MS`=**L70**, `M_DETACH_TIMEOUT`=**L79**. Gemini's THIRD distinct wrong pair (R1: 52/59; R3: 63/72) for the same two constants — likely reading a stale/partial view. Claude independently verified 70/79 in R1 and R3. Plan's line-agnostic grep + re-verify clause makes the dispute moot at execution time anyway.
+- **[R3 opencode NIT] no automated grep for `application.yml:15` ref** — DROPPED. Re-verify instruction (R2-N2) suffices; a yml-line-ref grep adds contract surface for a cosmetic citation. Line verified correct at HEAD by two reviewers.
+
 ## Round fix indexes (do not re-raise)
 
 - **R1** `cf2e4e3` → `20-06-MULTIREVIEW-R1.md`
-- **R2** (this commit) → `20-06-MULTIREVIEW-R2.md`
+- **R2** `59e8cfd` → `20-06-MULTIREVIEW-R2.md`
+- **R3** (this commit) → `20-06-MULTIREVIEW-R3.md`
 
 ## Reviewer health
 
 R1: 4/4 succeeded — first codex success of the Phase 20 loops (gpt-5.5 pin per the gpt-5/ChatGPT-account 400 root-cause). Gemini produced full review but misread AdmissionMetrics line numbers (only reviewer to do so).
 R2: 4/4 succeeded. Severity calibration divergent (codex ran hot: 2 of its HIGHs recategorised; gemini's HIGH recategorised MED). opencode's HIGH was the round's one accepted HIGH (with count correction 7→6).
+R3: 4/4 succeeded. Codex's solo heap HIGH verified REAL (meta.json evidence) — its uncorroborated findings deserve direct verification, not dismissal. Gemini's AdmissionMetrics misread recurred (3rd wrong pair) — treat gemini line-number claims on this file as suspect. opencode found nothing above LOW (called execution-ready).
