@@ -2,6 +2,10 @@
 
 Loop target: no NEW HIGH+ post-triage. Subject: 20-06-PLAN.md (pre-execution, post-de-stale `3477d39`).
 
+## Convergence reached at R4
+
+Round-by-round post-triage HIGH trajectory: R1=3, R2=1, R3=2, **R4=0**. Convergence target met. R4's only HIGH claim (codex `captured_at` field) recategorised MEDIUM (one-word field-name error, executor-recoverable by reading the meta) and fixed alongside the round's other accepted items. **Plan 20-06 is executable as-written.**
+
 ## R1 (`20-06-MULTIREVIEW-R1.md`) — post-triage: 3 HIGH, 6 MEDIUM accepted; all fixed this commit
 
 ### Fixed (this commit)
@@ -79,14 +83,40 @@ Loop target: no NEW HIGH+ post-triage. Subject: 20-06-PLAN.md (pre-execution, po
 - **[R3 gemini MEDIUM] AdmissionMetrics at L63/L72, template stale** — DROPPED. `grep -n` at HEAD (`59e8cfd`-era file, last touched `0824f1a`): `M_TICK_WORK_MS`=**L70**, `M_DETACH_TIMEOUT`=**L79**. Gemini's THIRD distinct wrong pair (R1: 52/59; R3: 63/72) for the same two constants — likely reading a stale/partial view. Claude independently verified 70/79 in R1 and R3. Plan's line-agnostic grep + re-verify clause makes the dispute moot at execution time anyway.
 - **[R3 opencode NIT] no automated grep for `application.yml:15` ref** — DROPPED. Re-verify instruction (R2-N2) suffices; a yml-line-ref grep adds contract surface for a cosmetic citation. Line verified correct at HEAD by two reviewers.
 
+## R4 (`20-06-MULTIREVIEW-R4.md`) — post-triage: 0 HIGH (CONVERGED); accepted MED/LOW fixed this commit
+
+### Fixed (this commit)
+
+| # | Source | Sev (post-triage) | Finding | Fix |
+|---|--------|------|---------|-----|
+| M1 | codex HIGH (recat MED — executor reads the meta and recovers) | MEDIUM | R3's date instruction named nonexistent field `captured_at`; live field is `captured_utc` (62c1b44 + tuned metas); `103a615` active metas have NO timestamp field at all | step 5: `captured_utc` when present; 103a615 → first `sample_utc` from matching metrics sidecar, marked `(from metric sidecar)`; "do not invent dates" |
+| M2 | claude | MEDIUM | Task 6.4 `&& ./gradlew test` hard gate vs documented pre-existing HundredBot WSL2 timeout (20-01c-SUMMARY Caveat #1, verified pre-Phase-20 at `14e96ea`); TD-22-E clause didn't cover it — executor would stop-and-report on a non-Plan-6 condition | flake protocol widened: two enumerated pre-existing conditions (TD-22-E XML, HundredBot WSL2 timeout); retry-once → record + three-gate load-bearing; any OTHER failure still stop-and-report |
+| M3 | codex | MEDIUM | §4.3 100-tier template hint "default G1 + 1g heap sustains" would reintroduce the exact heap overclaim R3-H2 fixed | template hint reworded: headroom shown in 2g/2g capture; 1g = smoke preset, not JFR-validated |
+| M4 | opencode | MEDIUM | VALIDATION L84 D-02 grep has dead `see 20-RUNTIME` branch (case mismatch vs planned "See 20-RUNTIME.md" comment; OutboundSender comment has no "see" at all); `WS:entity 1:1` alternative carries | Task 6.5 step 3 scope += L84: drop dead branch or `20-RUNTIME\.md` |
+| L1 | claude | LOW | RUNTIME footer `· v1 · 2026-06-XX` placeholder evades zero-pending audit; no step stamps it | step 5: stamp completion date |
+| L2 | codex | LOW | objective prose (L64) + verification summary (L509) still said "≥250 for outcomes 3/4" — residue of R3's pinning regroup | both aligned to 1/2/4→350, 3→250 |
+| L3 | opencode | LOW | step 5 "add a row for profiles/README if absent" incongruous with §6 table schema (Filename/Scenario/SHA/Captured/Size); README already cited in §6 preamble ~L332 | inverted: do NOT add a row, cite preamble |
+
+### Dropped with reason (do not re-flag)
+
+- **[R4 claude NIT] README template nests ```bash fence inside ```markdown fence** — DROPPED. Executor Writes the literal body; final file well-formed; restructuring the fence is churn.
+- **[R4 opencode LOW] audit regex could false-positive on past-tense "Plan 4 produced"** — DROPPED per reviewer's own analysis (harmless; executor verifies and moves on; regex is documented as forward-ref-only).
+- **[R4 opencode LOW] OutboundSender ~L136-138** — reviewer self-verified correct; no action.
+
 ## Round fix indexes (do not re-raise)
 
 - **R1** `cf2e4e3` → `20-06-MULTIREVIEW-R1.md`
 - **R2** `59e8cfd` → `20-06-MULTIREVIEW-R2.md`
-- **R3** (this commit) → `20-06-MULTIREVIEW-R3.md`
+- **R3** `4887739` → `20-06-MULTIREVIEW-R3.md`
+- **R4** (this commit) → `20-06-MULTIREVIEW-R4.md`
 
 ## Reviewer health
 
 R1: 4/4 succeeded — first codex success of the Phase 20 loops (gpt-5.5 pin per the gpt-5/ChatGPT-account 400 root-cause). Gemini produced full review but misread AdmissionMetrics line numbers (only reviewer to do so).
 R2: 4/4 succeeded. Severity calibration divergent (codex ran hot: 2 of its HIGHs recategorised; gemini's HIGH recategorised MED). opencode's HIGH was the round's one accepted HIGH (with count correction 7→6).
 R3: 4/4 succeeded. Codex's solo heap HIGH verified REAL (meta.json evidence) — its uncorroborated findings deserve direct verification, not dismissal. Gemini's AdmissionMetrics misread recurred (3rd wrong pair) — treat gemini line-number claims on this file as suspect. opencode found nothing above LOW (called execution-ready).
+R4: 4/4 succeeded (gemini fell back to gemini-3-flash-preview on capacity, returned 0 findings + correct verification log incl. AdmissionMetrics 70/79 — its earlier misreads were the pro model). Each remaining finding single-reviewer; all 5 verified real on direct check. CONVERGED.
+
+## Convergence judgement
+
+R4 surfaces zero post-triage HIGH. The four R4 MEDIUMs are precision residue of R3's own fixes (date field name, heap-template hint) plus two pre-existing-environment/file items (HundredBot WSL2 gate, VALIDATION L84 dead branch) — all fixed in the R4 commit. Four-round trajectory 3→1→2→0 with each round's new findings increasingly self-inflicted-by-prior-fix rather than original-plan defects. **Plan 20-06 ready for `/gsd-execute-phase 20`.**
