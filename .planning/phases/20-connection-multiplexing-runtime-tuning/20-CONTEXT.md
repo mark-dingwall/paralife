@@ -38,8 +38,10 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
 - `README.md` operator note codifying the WS:entity 1:1 deliberate-choice rationale
 - Inline code comments on the OutboundSender / WS upgrade sites pointing at the same
   rationale so future contributors do not "fix" the design
-- Verification: existing protocol + regression tests stay green (excluding 4 P22 `@Disabled`
-  tests held for P21/P22.1, see D-12); P19 D-10 golden-trace byte-equivalence gate plus the
+- Verification: existing protocol + regression tests stay green (excluding the P22 `@Disabled`
+  tests held for P21/P22.1, see D-12; *de-stale 2026-06-04: live inventory is 6 `@Disabled`
+  across 5 files — 3 P22-origin TD-22-A/B/C plus 3 pre-existing; TD-22-D HundredBot was never
+  disabled — see 20-VALIDATION.md Wave 0 intro*); P19 D-10 golden-trace byte-equivalence gate plus the
   new P19.1 D-11/D-12 gates stay green at fixed-seed scenarios; tuned config matrix shipped
   with measured before/after numbers
 
@@ -56,7 +58,8 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   surface — future bench-harness phase
 - Wire schema mutation — `15-SCHEMA.md` LOCKED; codec impl tuning never crosses the wire
   boundary
-- Re-enabling P22's `@Disabled` tests (TD-22-A..D) — P21 / P22.1 territory
+- Re-enabling P22's `@Disabled` tests (TD-22-A/B/C; *de-stale 2026-06-04: TD-22-D HundredBot
+  was never `@Disabled` — it runs in-suite with a known latch-race flake*) — P21 / P22.1 territory
 - Namespace migration of `paralife.admission.backpressure.outbound-queue-size` →
   `paralife.runtime.app.*` — deferred to backlog (D-20)
 - `/actuator/prometheus` wiring — M5
@@ -159,11 +162,14 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   in the full suite. P20 codec tuning re-runs the gate **in-suite** only; do not gate CI on
   isolated runs. P22.1 will revalidate after P20.
 
-- **D-12:** **Existing test suite stays green excluding the 4 `@Disabled` tests held for
+- **D-12:** **Existing test suite stays green excluding the `@Disabled` tests held for
   P21 / P22.1:** TD-22-A `MetabolismIntegrationTest` (read-lock starvation under tick-write
   pressure), TD-22-B `EncodeDeflatePerformanceGateTest` (real perf regression), TD-22-C
-  `PopulationDynamicsTest` (probabilistic flat-line), TD-22-D `HundredBotIntegrationTest`
-  (connect-latch race). **P20 MUST NOT re-enable any of these** — that's P21 / P22.1
+  `PopulationDynamicsTest` (probabilistic flat-line). *De-stale 2026-06-04: TD-22-D
+  `HundredBotIntegrationTest` (connect-latch race) was never `@Disabled` — it runs in-suite
+  with a known flake; live inventory is 6 `@Disabled` annotations across 5 files (3 P22-origin
+  above + Toxin×2 + CellularAutomaton perf-only) — see 20-VALIDATION.md Wave 0 intro.*
+  **P20 MUST NOT re-enable any of these** — that's P21 / P22.1
   territory. P20 tuning may incidentally resolve TD-22-A's read-lock starvation, but proving
   it is P21's job. Stale "166+ tests" figure dropped; current count is 136 test files.
 
@@ -292,7 +298,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   D-11 / D-12 — `GoldenTraceWithActionsTest` + `LiveEntityRegistryInvariantTest` (D-11
   three-gate stack)
 - `.planning/phases/22-integration-test-resource-leak-audit/22-SUMMARY.md` — TD-22-A..D
-  `@Disabled` markers; D-12 inherits
+  tech-debt register (A/B/C `@Disabled`; D never disabled — in-suite flake); D-12 inherits
 
 ### In-tree code referenced as ground truth
 

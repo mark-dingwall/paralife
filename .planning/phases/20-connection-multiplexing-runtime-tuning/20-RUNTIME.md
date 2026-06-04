@@ -345,7 +345,7 @@ pause events. No GC switch is justified. G1 stays at 2g/2g for the M4 tier.
 
 **VT scheduler parallelism rationale (JFR-driven):** `parallelism=8` confirmed — no
 change. The Plan 1c lock flamegraph `profiles/lock-1000bots-baseline-62c1b44.html`
-shows no carrier-thread saturation at the default JVM setting (12 `JavaMonitorEnter`
+shows no carrier-thread saturation at the explicitly-set `parallelism=8` (12 `JavaMonitorEnter`
 events observed during Plan 5 triage, all attributable to EPollSelector NIO
 internals, 0 in paralife-owned sites). The tuned JFR `profiles/jfr-1000bots-active-50xfood-tuned-424e06d.jfr`
 recorded 0 `jdk.VirtualThreadPinned` events — no carrier saturation signal. The

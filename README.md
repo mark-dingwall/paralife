@@ -15,7 +15,7 @@ population oscillations, niche formation) arises from simple local rules.
 ./gradlew test              # JUnit 5 unit + integration suite
 ./gradlew bootRun           # Start server on :8080
 ./gradlew loadHarnessJar    # Build the standalone load harness
-./gradlew runBot            # Single-bot operator CLI (<=100 bots)
+./gradlew runBot            # Operator CLI — launches up to 100 bots per invocation
 ```
 
 ## Project layout

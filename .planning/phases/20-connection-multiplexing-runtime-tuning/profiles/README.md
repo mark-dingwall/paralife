@@ -70,12 +70,32 @@ $ASYNC_PROFILER -d 60 -e cpu   -f "$OUT_DIR/cpu-1000bots-baseline-62c1b44.html" 
 $ASYNC_PROFILER -d 60 -e alloc -f "$OUT_DIR/alloc-1000bots-baseline-62c1b44.html" $SERVER_PID
 $ASYNC_PROFILER -d 60 -e lock  -f "$OUT_DIR/lock-1000bots-baseline-62c1b44.html"  $SERVER_PID
 
-# 5. Capture the actuator metric sidecar (Pass-2 Concern #10).
-#    Use the committed capture script's sampling loop — it polls all Phase 20
-#    metrics (incl. BOTH headline gauges: paralife.tick.health.work-time-ms AND
-#    paralife.outbound.detach.timeout) every 5 s into the committed sidecar
-#    schema ({captured_at_sha, scenario, cap_during_run, samples[]}):
-#      ../capture-active.sh COUNT SHA OUTDIR   # see its header + METRICS array
+# 5. Capture the actuator metric sidecar (Pass-2 Concern #10) with a
+#    baseline-safe sampling loop. Do NOT use ../capture-active.sh here — that
+#    script is the ACTIVE-50xfood variant (hard-codes TAG=active-50xfood,
+#    FOOD=0.05, 90 s window, and boots its own server with the food flag);
+#    running it for the churn baseline would mint wrong-scenario sidecars.
+#    This loop mirrors its METRICS array (incl. BOTH headline gauges) and the
+#    committed schema {captured_at_sha, scenario, cap_during_run, samples[]}:
+METRICS=(paralife.tick.work.ms paralife.tick.health.work-time-ms paralife.admission.active.entities \
+  paralife.admission.rejected paralife.backpressure.stalled.sessions paralife.outbound.frame.size.bytes \
+  paralife.outbound.queue.depth.max paralife.outbound.encode.send.ms paralife.outbound.detach.timeout)
+SIDE="$OUT_DIR/metrics-1000bots-baseline-62c1b44.json"
+echo '{"captured_at_sha":"62c1b44","scenario":"1000bots","cap_during_run":1500,"samples":[' > "$SIDE"
+first=1
+for s in $(seq 1 6); do      # 6 samples x 5 s, matching the committed sidecars
+  obj=$(jq -n --arg t "$(date -u +%FT%T+00:00)" '{sample_utc:$t}')
+  for m in "${METRICS[@]}"; do
+    key=$(echo "$m" | sed 's/\./_/g')
+    body=$(curl -s -m3 "localhost:8080/actuator/metrics/${m}" 2>/dev/null)
+    [ -z "$body" ] && body=null
+    obj=$(echo "$obj" | jq --arg k "$key" --argjson v "$body" '. + {($k):$v}')
+  done
+  [ $first -eq 1 ] && first=0 || echo "," >> "$SIDE"
+  echo "$obj" | jq -c . >> "$SIDE"
+  sleep 5
+done
+echo ']}' >> "$SIDE"
 #    A one-shot curl of a single gauge does NOT reproduce the committed
 #    metrics-*.json schema and misses the detach.timeout headline gauge.
 

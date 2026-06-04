@@ -46,7 +46,7 @@ key-decisions:
   - "D-02 three-place codification complete: 4 files contain WS:entity 1:1 literal (grep-verified)"
   - "Plan 5 null-result (D-21 outcome 3) inherited by Plan 6 §4.3 narrative — 558 lines (548 at execution; +10 from EXEC-R1 GC re-attribution) exceeds ≥250 null-result floor"
   - "100/500-tier baseline cells sourced from metric sidecars: 9.0 ms (σ=3.22, n=6) and 30.2 ms (σ=2.71, n=6)"
-  - "0 jdk.VirtualThreadPinned events at all three tiers — G1 confirmed, Phase 999.6 remains backlog"
+  - "0 jdk.VirtualThreadPinned events at all three tiers; G1 confirmed for GC; Phase 999.6 (ReentrantLock conversion) remains backlog"
 
 duration: ~34 minutes
 completed: 2026-06-05
