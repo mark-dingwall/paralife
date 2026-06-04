@@ -211,6 +211,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   `20-RUNTIME.md` profile-findings section. Reviewers and future agents (incl. P22.1) can
   `git checkout c22e487` and re-run the harness to reproduce. Reproducibility is cheap
   insurance for the project's "evidence over assertion" stance (D-05).
+  (re-anchored to `62c1b44` by Plan 1c F6; active-scenario evidence set `103a615`; tuned capture `424e06d` — see 20-RUNTIME.md §6)
 
 - **D-20 (was G-04):** **Layer `paralife.runtime.app.*` keys alongside the existing
   `paralife.admission.backpressure.outbound-queue-size`** rather than moving it.
@@ -223,6 +224,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   1. **Shipped codec opts** with JFR-cited delta on `paralife.tick.health.work-time-ms` or `paralife.outbound.detach.timeout` (D-10 / D-13).
   2. **JFR-justified runtime-knob tightening** (Plan 2 / Plan 3 record default change) with measured delta — same triage rigor as a codec opt (JFR signal + two-consecutive-green three-gate verification + tuned-state JFR delta documented).
   3. **Documented null-result** showing the c22e487 baseline is at the relevant performance floor at 1000 bots (e.g., `jdk.GCPhasePause` mean ≤1ms, `jdk.VirtualThreadPinned` count <10/min, codec stack ≤2% CPU, allocation steady-state). The tuning surface (Plan 2 + Plan 3 records + Plan 4 per-tier recipes + Plan 1/1b baseline JFRs + Plan 5 tuned-state equivalence capture) IS the SCALE-08 deliverable; a measured null-result is a measurement, not a no-op.
+     (superseded by Plan 1c re-anchor — see D-19 annotation; actual evidence set is `103a615` active + `424e06d` tuned)
   4. **Dominant pinning with backlog-handoff** (added pass-2 per Concern #9 — adopted OpenCode's reading) — JFR shows `jdk.VirtualThreadPinned` is the binding constraint at the relevant scale AND the `synchronized → ReentrantLock` conversion work is filed as Phase 999.6 (`vt-pinning-reentrantlock-conversion`) per pass-1 Concern #2 disposition AND the tuned-state JFR confirms equivalence (no regression introduced by Plan 5). Structurally identical to outcome 3: the system is at the performance floor for the work Plan 5 is permitted to do; the unresolved overhead path is documented and handed off to a backlog phase rather than masked by a forced-fallback knob change. **Codex's pass-2 reading (block-and-don't-claim-SCALE-08) is rejected per Concern #9 disposition:** the alternative would either downgrade SCALE-08 (rejected — D-21 rationale is sound) or expand Plan 5 scope to include the conversion (rejected — Phase 999.6 backlog is pass-1 #2 disposition).
 
   **Pinning-dominates supersedes runtime-knob tightening (do NOT manufacture a fallback delta on top of dominant pinning — outcome 4 is the correct disposition; outcome 2 is wrong when pinning is dominant).**
@@ -325,6 +327,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   canonical operator/contributor doc
 - `.planning/phases/20-connection-multiplexing-runtime-tuning/profiles/` — D-05 committed
   JFR + flamegraph artifacts; baseline filenames cite `c22e487` per D-19; **per-tier metric sidecar JSON files (`metrics-{N}bots-baseline-c22e487.json` + `metrics-1000bots-tuned-{HEAD}.json`) added pass-2 per Concern #10 disposition**
+  (superseded by Plan 1c re-anchor — see D-19 annotation; shipped names use `62c1b44` churn baseline / `active-50xfood-103a615` active scenario / `active-50xfood-tuned-424e06d` tuned)
 
 </canonical_refs>
 
@@ -463,6 +466,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   The original `c22e487`-anchored baseline (D-19) is intentionally frozen for
   reproducibility; this backlog item produces a fresh, post-MVP baseline so future tuning
   decisions compare against current reality, not the P19.1-close snapshot.
+  (superseded by Plan 1c re-anchor — see D-19 annotation; canonical frozen baseline is now `62c1b44`)
 
 ### Reviewed Todos (not folded)
 
