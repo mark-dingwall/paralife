@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
-stopped_at: "Phase 20 plan-by-plan — 20-01 / 20-01c / 20-02 / 20-03 / 20-04 / 20-05 done (20-01b superseded); 20-06 pending"
-last_updated: "2026-06-04T05:15:00.000Z"
-last_activity: 2026-06-04 -- Plan 20-05 executed (JFR triage null-result outcome 3; tuned-state capture at 424e06d confirms equivalence within ±1σ noise floor; one capture retry after transient server VT-stall freeze — leaked Gradle test JVM killed before retry)
+stopped_at: "Phase 20 plan-by-plan — all plans done (20-01 / 20-01c / 20-02 / 20-03 / 20-04 / 20-05 / 20-06; 20-01b superseded); multi-review of 20-06 next"
+last_updated: "2026-06-04T14:50:00.000Z"
+last_activity: 2026-06-04 -- Plan 20-06 executed (20-RUNTIME.md FINAL 548 lines; D-02 three-place rationale landed; 20-VALIDATION.md flipped nyquist_compliant. Post-merge gate: 961/962 + TD-22-D known flake passed isolated rerun; leaked worktree test JVM killed)
 progress:
   total_phases: 15
   completed_phases: 4
   total_plans: 35
-  completed_plans: 34
-  percent: 97
+  completed_plans: 35
+  percent: 100
 ---
 
 # Project State
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md
 ## Current Position
 
 Milestone: v3.0 (Scale Engineering / M4) — active
-Phase: 20 (connection-multiplexing-runtime-tuning) — EXECUTING
-Plan: 6 of 7 executed (20-01, 20-01c, 20-02, 20-03, 20-04, 20-05 done; 20-01b superseded by 20-01c)
-Status: Ready to execute — next is 20-06 (20-RUNTIME.md finalisation + D-02 three-place rationale + 20-VALIDATION.md flip)
-Last activity: 2026-06-04 -- Plan 20-05 executed (null-result equivalence confirmed; tuned-state JFR + metric sidecar captured at 424e06d)
+Phase: 20 (connection-multiplexing-runtime-tuning) — plans complete, review in progress
+Plan: 7 of 7 executed (20-01, 20-01c, 20-02, 20-03, 20-04, 20-05, 20-06 done; 20-01b superseded by 20-01c)
+Status: Multi-review loop on 20-06 changes, then /gsd-verify-work 20
+Last activity: 2026-06-04 -- Plan 20-06 executed (Phase 20 deliverable finalised; gate green incl. TD-22-D flake rerun)
 
-Progress: [█████████░] 97% (34/35 plans)
+Progress: [██████████] 100% (35/35 plans)
 
 ## Deferred Items
 
@@ -71,10 +71,10 @@ Progress: [█████████░] 97% (34/35 plans)
 
 ## Session Continuity
 
-Last session: 2026-06-04 (Plan 20-05 executed)
-Stopped at: Phase 20 plan-by-plan — 20-01 / 20-01c / 20-02 / 20-03 / 20-04 / 20-05 done (20-01b superseded); 20-06 pending
+Last session: 2026-06-04 (Plan 20-06 executed — phase 20 plans complete)
+Stopped at: Phase 20 all plans done; 20-06 multi-review loop next
 Resume file: .planning/phases/20-connection-multiplexing-runtime-tuning/.resume-state.md (refreshed 2026-05-27 — wave model retired, plan-by-plan now)
-Next command: `/gsd-execute-phase 20` (final plan 20-06 — 20-RUNTIME.md finalisation + D-02 three-place rationale + 20-VALIDATION.md flip)
+Next command: multi-review of 20-06, then `/gsd-verify-work 20`
 
 ## Regression Alarm — fast-track P22.1 if any reappear during P20/P21
 

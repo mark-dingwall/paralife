@@ -126,7 +126,7 @@ Plans:
 **Goal:** Reduce socket/process overhead and tune the runtime for sustained high bot counts without regressing the compact protocol semantics.
 **Depends on:** Phase 19 (world execution path must be in place before tuning transport overhead)
 **Requirements:** SCALE-08, SCALE-09
-**Plans:** 7/8 plans executed (checkbox count incl. superseded 20-01b; 6/7 active plans per STATE.md)
+**Plans:** 8/8 plans complete
 **Success Criteria:**
 - Connection fan-in / multiplexing or an equivalent overhead-reduction path exists for high bot counts.
 - Virtual-thread or runtime tuning guidance is grounded in measured profiles rather than guesswork.
@@ -141,7 +141,7 @@ Plans:
 - [x] 20-03-PLAN.md — paralife.runtime.app.* @ConfigurationProperties record (D-20 alongside-not-move) (SCALE-09)
 - [x] 20-04-PLAN.md — JVM-flag presets + per-tier recipes in 20-RUNTIME.md (SCALE-09)
 - [x] 20-05-PLAN.md — JFR-driven codec hot-path triage per D-21 four-outcome tree + tuned-state JFR (resolved: outcome 3 documented null-result) (SCALE-08, SCALE-09)
-- [ ] 20-06-PLAN.md — 20-RUNTIME.md finalisation + D-02 three-place rationale (README/CLAUDE/inline) + 20-VALIDATION.md flip (SCALE-08, SCALE-09)
+- [x] 20-06-PLAN.md — 20-RUNTIME.md finalisation + D-02 three-place rationale (README/CLAUDE/inline) + 20-VALIDATION.md flip (SCALE-08, SCALE-09)
 
 ### Phase 20.1: Restore Composite Vision (SENSOR-stitched perception)
 **Goal:** Restore the SENSOR-based stitched perception that Phase 12 designed and Phase 15's protocol overhaul dropped, so SENSOR role members produce tangible value to their composite — extended FOV that informs LOCOMOTOR voting and AUTHORITY_LITE tactical decisions, rather than rest-acting passively.
