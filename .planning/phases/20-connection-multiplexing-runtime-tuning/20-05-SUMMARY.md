@@ -1,7 +1,7 @@
 ---
 phase: 20-connection-multiplexing-runtime-tuning
 plan: 05
-status: partial — Task 5.2 (JFR capture) pending checkpoint:human-action
+status: complete
 completed: 2026-06-04
 requirements: [SCALE-08, SCALE-09]
 subsystem: codec-tuning
@@ -16,8 +16,8 @@ requires:
 provides:
   - "20-05-TRIAGE.md: JFR-driven null-result analysis — all codec/pinning/knob signals below threshold"
   - "Equivalence proof: three-gate stack GREEN x2 confirms codebase state unchanged"
-  - "Pending: tuned-state JFR + actuator metric sidecar (Task 5.2, checkpoint:human-action)"
-  - "Pending: 20-RUNTIME.md §4.2 1000-tuned column + §4.4 null-result row (after Task 5.2)"
+  - "Tuned-state JFR + actuator metric sidecar at 1000 bots, active-50xfood scenario (SHA 424e06d): null-result equivalence confirmed within noise floor"
+  - "20-RUNTIME.md §4.2 1000-tuned column populated; §4.4 null-result row; §6 tuned artifacts indexed"
 
 affects: [20-06, phase-21-benchmark-gate]
 
@@ -30,29 +30,34 @@ tech-stack:
 key-files:
   created:
     - .planning/phases/20-connection-multiplexing-runtime-tuning/20-05-TRIAGE.md
-  modified: []
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-1000bots-active-50xfood-tuned-424e06d.jfr
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/metrics-1000bots-active-50xfood-tuned-424e06d.json
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/profiles/jfr-1000bots-active-50xfood-tuned-424e06d.meta.json
+  modified:
+    - .planning/phases/20-connection-multiplexing-runtime-tuning/20-RUNTIME.md
 
 key-decisions:
   - "D-21 outcome 3 (null-result): PerceptionCodec 1.75% CPU, 0 VirtualThreadPinned events, 0 SocketRead events — system at performance floor; no codec opts or runtime-knob tightening justified"
   - "Null-result IS valid SCALE-08 evidence: tuning surface from Plans 2/3/4 + measured equivalence closes SCALE-08"
+  - "Tuned-state confirms equivalence: baseline 49.5 ms → tuned 45.0 ms (−4.5 ms), within noise floor (±15.74 ms = ±1σ); detach.timeout 0 → 0"
 
 requirements-completed: []
 
-duration: ~45min (Tasks 5.0+5.1; Task 5.2 pending)
+duration: ~45min (Tasks 5.0+5.1) + JFR capture (Task 5.2, human-action with one-retry)
 completed: 2026-06-04
 ---
 
 Plan 5 outcome: null-result
 
-JFR triage of active-50xfood 1000-bot baseline (SHA `103a615`) finds all codec signals below RESEARCH Pattern 5 thresholds — outcome 3 (documented null-result) per D-21; three-gate equivalence proof green; Task 5.2 (JFR capture at HEAD) blocked pending checkpoint:human-action.
+JFR triage of active-50xfood 1000-bot baseline (SHA `103a615`) finds all codec signals below RESEARCH Pattern 5 thresholds — outcome 3 (documented null-result) per D-21; three-gate equivalence proof green; tuned-state capture at SHA `424e06d` confirms equivalence within noise floor (−4.5 ms, within ±15.74 ms = ±1σ).
 
 ## Performance
 
-- **Duration:** ~45 min (Tasks 5.0 + 5.1; Task 5.2 blocked at checkpoint)
+- **Duration:** ~45 min (Tasks 5.0 + 5.1) + JFR capture (Task 5.2, including one-retry)
 - **Started:** 2026-06-04
-- **Completed:** 2026-06-04 (Tasks 5.0+5.1); Task 5.2 pending human action
-- **Tasks:** 2 of 3 complete (Task 5.0: checkpoint triage done; Task 5.1: equivalence proof done; Task 5.2: human-action checkpoint)
-- **Files modified:** 1 (20-05-TRIAGE.md created)
+- **Completed:** 2026-06-04 (all tasks)
+- **Tasks:** 3 of 3 complete
+- **Files modified:** 4 created (20-05-TRIAGE.md, JFR + metrics + meta.json sidecars); 1 modified (20-RUNTIME.md §4.2/§4.4/§6)
 
 ## Accomplishments
 
@@ -65,7 +70,7 @@ JFR triage of active-50xfood 1000-bot baseline (SHA `103a615`) finds all codec s
 
 1. **Task 5.0: JFR Triage** - `bd59e60` (docs) — 20-05-TRIAGE.md created with null-result analysis
 2. **Task 5.1: Equivalence proof** - `becbb2e` (docs) — TRIAGE updated with three-gate run records + invariant checks
-3. **Task 5.2: JFR capture** — PENDING (checkpoint:human-action — requires local server)
+3. **Task 5.2: JFR capture** - see final commit — JFR + metric sidecar + meta.json; 20-RUNTIME.md §4.2/§4.4/§6 populated
 
 ## Plan 5 Outcome: Documented Null-Result (D-21 Outcome 3)
 
@@ -108,6 +113,25 @@ The system is at the performance floor. No codec opts, no knob tightening, no pi
 1. The four-layer tuning surface from Plans 2/3/4 (JVM/Jetty/app/codec knobs documented in 20-RUNTIME.md §2/§3)
 2. This documented null-result showing the active-50xfood transport stack IS the overhead source but is at equilibrium with the current architecture (1.75% codec CPU, no backpressure events)
 
+## Task 5.2: Tuned-State Capture Results
+
+**Capture:** `jfr-1000bots-active-50xfood-tuned-424e06d.jfr` (3.5 MB, within D-05 10 MB limit); `metrics-1000bots-active-50xfood-tuned-424e06d.json` (6 samples × 5 s); `jfr-1000bots-active-50xfood-tuned-424e06d.meta.json` (opts_applied_summary = null-result label).
+
+**Headline deltas:**
+
+| Gauge | Baseline | Tuned | Delta | Noise floor (D-21) | Classification |
+|-------|----------|-------|-------|--------------------|----------------|
+| `paralife.tick.health.work-time-ms` mean | 49.5 ms (σ=15.74, n=18) | 45.0 ms (σ=8.77, n=6) | −4.5 ms | ±15.74 ms (= ±1σ, dominates ±5% mean = ±2.48 ms) | **Within noise floor — equivalence confirmed** |
+| `paralife.outbound.detach.timeout` | 0 (all 18 samples) | 0 (all 6 samples) | 0 | level-only read per window-asymmetry rule | Confirmed zero both sides |
+
+**JFR event counts (tuned 180 s window):**
+- `jdk.VirtualThreadPinned`: 0
+- `jdk.SocketRead`: 0
+- `jdk.ExecutionSample`: 909
+- `jdk.GCPhasePause`: 4 (27.8 / 20.9 / 19.0 / 23.1 ms) — normal G1 minor pauses, sub-threshold, no action required
+
+**Capture provenance:** First capture attempt aborted by the script's own sample-count guard (actuator unresponsive — server-side VT stall during connect burst; all 12 curl probes timed out; partial artifacts removed). A leaked Gradle Test Executor JVM from earlier test runs was killed before retry; retry-2 ran clean with a freeze watchdog armed (zero trips). One-retry event was environmental, not a code defect.
+
 ## Baseline metric values (for Task 5.2 delta computation)
 
 Source: `profiles/metrics-1000bots-active-50xfood-103a615.json` (18 samples x 5s window)
@@ -144,21 +168,14 @@ Three P22 tests carry `@Disabled` (confirmed by per-file grep at Task 5.1):
 `grep -c "synchronized(session)" OutboundSender.java` = 6 — unchanged from baseline.
 Encoding remains OUTSIDE `synchronized(session)`.
 
-## Task 5.2 Pending: JFR + Actuator Metric Capture at 1000 Bots
+## Task 5.2: JFR + Actuator Metric Capture — COMPLETE
 
-Task 5.2 is `type="checkpoint:human-action"` — requires a locally running server.
+All three artifacts captured at SHA `424e06d` (active-50xfood scenario, 1000 bots):
+- `profiles/jfr-1000bots-active-50xfood-tuned-424e06d.jfr` — 3.5 MB (within D-05 limit)
+- `profiles/metrics-1000bots-active-50xfood-tuned-424e06d.json` — 6 samples × 5 s
+- `profiles/jfr-1000bots-active-50xfood-tuned-424e06d.meta.json` — null-result label from TRIAGE.md
 
-**What Task 5.2 must produce:**
-- `profiles/jfr-1000bots-active-50xfood-tuned-{HEAD_SHA}.jfr` — tuned-state JFR (active-50xfood scenario)
-- `profiles/metrics-1000bots-active-50xfood-tuned-{HEAD_SHA}.json` — actuator metric sidecar (6 samples x 5s)
-- `profiles/jfr-1000bots-active-50xfood-tuned-{HEAD_SHA}.meta.json` — sibling meta sidecar
-- 20-RUNTIME.md §4.2: 1000-tuned column for work-time-ms + detach.timeout (sourced from metric sidecar)
-- 20-RUNTIME.md §4.4: single "(null-result)" row with baseline performance-floor evidence
-- 20-RUNTIME.md §6: new rows for tuned JFR + tuned metric sidecar + flamegraph placeholder deferred
-
-**Expected outcome for null-result:** tuned ≈ baseline within noise floor (±2.48ms or ±1σ) on work-time-ms; detach.timeout = 0. No code was changed so equivalence is the expected finding.
-
-**Capture script:** See Plan 5 Task 5.2 `<how-to-verify>` block — complete shell script with SIGTERM/SIGKILL fallback, actuator metric polling, JSON sidecar templating, and sentinel guard against TEMPLATE_PLACEHOLDER_REPLACE_BEFORE_COMMIT.
+20-RUNTIME.md §4.2, §4.4, and §6 populated. See "Task 5.2: Tuned-State Capture Results" section above for delta table and provenance note.
 
 ## Deviations from Plan
 
@@ -177,13 +194,17 @@ No new network endpoints, auth paths, file access patterns, or schema changes in
 
 ## Known Stubs
 
-None for Tasks 5.0 and 5.1 (no code changes). Task 5.2 pending produces the §4.2/§4.4 content for 20-RUNTIME.md — those sections remain with "Pending" markers until Task 5.2 completes.
+None. 20-RUNTIME.md §4.2 and §4.4 are fully populated. §4.2 100-tier and 500-tier tuned cells are marked `_baseline-only — see Phase 21_` by plan directive (Plan 6 Task 6.1), not a stub.
 
-## Self-Check: PARTIAL (Task 5.2 pending)
+## Self-Check: PASSED
 
 - [x] TRIAGE.md exists at `.planning/phases/20-connection-multiplexing-runtime-tuning/20-05-TRIAGE.md`
 - [x] Commits bd59e60 (triage) and becbb2e (equivalence proof) exist
 - [x] First non-frontmatter line: `Plan 5 outcome: null-result`
 - [x] Triage outcome-label contract: `null-result:` prefix on TRIAGE.md line 1
-- [ ] Task 5.2: JFR + metric sidecar — PENDING checkpoint:human-action
-- [ ] 20-RUNTIME.md §4.2 + §4.4 — PENDING Task 5.2 completion
+- [x] Task 5.2: JFR `jfr-1000bots-active-50xfood-tuned-424e06d.jfr` present (3.5 MB ≤ 10 MB)
+- [x] Task 5.2: Metric sidecar `metrics-1000bots-active-50xfood-tuned-424e06d.json` present; parses as JSON; 6 samples (≥ 3)
+- [x] Task 5.2: Meta sidecar `jfr-1000bots-active-50xfood-tuned-424e06d.meta.json` present; parses as JSON; no template sentinel; opts_applied_summary non-empty
+- [x] 20-RUNTIME.md §4.2: 1000-baseline and 1000-tuned cells populated for work-time-ms and detach.timeout; caption footnote present
+- [x] 20-RUNTIME.md §4.4: single (null-result) row with baseline performance-floor evidence
+- [x] 20-RUNTIME.md §6: rows added for tuned JFR, metric sidecar, meta sidecar; flamegraph row rewritten as deferred-to-Plan-6
