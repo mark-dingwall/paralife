@@ -57,18 +57,29 @@ java \
   --paralife.simulation.spawn.seed=20251205 &
 SERVER_PID=$!
 
-# 3. Drive load via the harness jar built in step 1
+# 3. Drive load via the harness jar built in step 1 — BACKGROUNDED so steps
+#    4-5 capture while load is actually running (a foreground harness would
+#    block the shell for the full 200 s and steps 4-5 would profile an idle,
+#    drained server — wrong regime, not the committed steady-state evidence)
 java -jar build/libs/paralife-0.0.1-SNAPSHOT-load-harness.jar \
   --server-uri ws://localhost:8080/ws/world \
   --count 1000 --duration 200 --ramp-up rate:50 \
-  --harness-id baseline-62c1b44-t1000
+  --harness-id baseline-62c1b44-t1000 &
+HARNESS_PID=$!
+sleep 20   # let ramp-up (rate:50 -> 1000 bots) complete before profiling
 
-# 4. While load runs: capture flamegraphs concurrently (see tools/async-profiler-bootstrap.md)
+# 4. While load runs: capture flamegraphs (serial inside one background
+#    subshell — async-profiler allows only ONE active session per JVM, so the
+#    three 60 s captures must not overlap each other; 3x60 s = 180 s fits the
+#    remaining load window). Step 5's curl-only metric loop runs concurrently.
 ASYNC_PROFILER=~/tools/async-profiler/bin/asprof
 OUT_DIR=".planning/phases/20-connection-multiplexing-runtime-tuning/profiles"
-$ASYNC_PROFILER -d 60 -e cpu   -f "$OUT_DIR/cpu-1000bots-baseline-62c1b44.html"   $SERVER_PID
-$ASYNC_PROFILER -d 60 -e alloc -f "$OUT_DIR/alloc-1000bots-baseline-62c1b44.html" $SERVER_PID
-$ASYNC_PROFILER -d 60 -e lock  -f "$OUT_DIR/lock-1000bots-baseline-62c1b44.html"  $SERVER_PID
+(
+  $ASYNC_PROFILER -d 60 -e cpu   -f "$OUT_DIR/cpu-1000bots-baseline-62c1b44.html"   $SERVER_PID
+  $ASYNC_PROFILER -d 60 -e alloc -f "$OUT_DIR/alloc-1000bots-baseline-62c1b44.html" $SERVER_PID
+  $ASYNC_PROFILER -d 60 -e lock  -f "$OUT_DIR/lock-1000bots-baseline-62c1b44.html"  $SERVER_PID
+) &
+FLAME_PID=$!
 
 # 5. Capture the actuator metric sidecar (Pass-2 Concern #10) with a
 #    baseline-safe sampling loop. Do NOT use ../capture-active.sh here — that
@@ -98,6 +109,11 @@ done
 echo ']}' >> "$SIDE"
 #    A one-shot curl of a single gauge does NOT reproduce the committed
 #    metrics-*.json schema and misses the detach.timeout headline gauge.
+
+# 5b. Let the flamegraph captures and the harness run to completion before
+#     touching the tree (timing: 20 s ramp + 180 s serial flamegraphs ≈ the
+#     200 s load window; the ~30 s metric loop ran concurrently)
+wait "$FLAME_PID" "$HARNESS_PID"
 
 # 6. Repeat steps 2-5 for --count 100 and --count 500 tiers
 

@@ -177,7 +177,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   `20-RUNTIME.md` per-scale-tier section cites a baseline JFR + a tuned JFR with concrete
   metric deltas. **Headline gauges:**
   - `paralife.tick.health.work-time-ms` (P17 D-18 — primary scalar)
-  - `paralife.outbound.detach.timeout` (P19.1 D-13/D-14, `AdmissionMetrics.java:74` — direct
+  - `paralife.outbound.detach.timeout` (P19.1 D-13/D-14, `AdmissionMetrics.java:79` — direct
     signal of slow-client wedging the drain VT past close-aware detach budget)
 
   Recommendations without measurement are not shipped.
@@ -308,9 +308,9 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   bounded queue; D-02 inline comment + outbound queue depth field is part of the new
   `paralife.runtime.app.*` record (note: lives under `com.paralife.admission`, NOT
   `com.paralife.websocket` as prior draft claimed)
-- `src/main/java/com/paralife/admission/AdmissionMetrics.java:65, :74, :175-176, :451` —
-  `paralife.tick.health.work-time-ms` and `paralife.outbound.detach.timeout` registration
-  sites
+- `src/main/java/com/paralife/admission/AdmissionMetrics.java:70, :79` (constants), `:167, :190`
+  (registration sites; *line refs de-staled 2026-06-04*) —
+  `paralife.tick.health.work-time-ms` and `paralife.outbound.detach.timeout`
 - `src/main/java/com/paralife/websocket/TickBroadcaster.java` — frame encode hot path
   candidate for D-10 codec opts
 - `src/main/java/com/paralife/codec/PerceptionCodec.java` (and `Base64Codec`) — primary
@@ -354,7 +354,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
 - **Three-gate equivalence stack** (P19 D-10 + P19.1 D-11 + P19.1 D-12) — already in repo;
   D-11 reuses unchanged. TD-19.5-A flake caveat: in-suite signal trustworthy, isolated runs
   not. **L1 detach-timeout counter** (`paralife.outbound.detach.timeout` at
-  `AdmissionMetrics.java:74`) — new headline gauge per D-18.
+  `AdmissionMetrics.java:79`) — new headline gauge per D-18.
 - **`paralife.simulation.spawn.seed` (SpawnConfig)** — D-06 profile runs use it for
   reproducibility; same precedent as Phase 19 D-06 placement-determinism contract.
 - **LoadHarness (Phase 18)** — the 1000-bot driver. Phase 20 profile runs invoke it directly

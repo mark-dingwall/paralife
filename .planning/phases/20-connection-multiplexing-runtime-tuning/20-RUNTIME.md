@@ -414,8 +414,9 @@ not the bottleneck at any tier.
 The G1 GC pause contribution at this tier is negligible — 0.03% of wall-clock
 (10 minor pauses, max 11.8 ms) confirms the 2g/2g heap is grossly oversized for
 100 bots; the active-scenario capture (`103a615`, 90 s) recorded 0 pause events
-outright. The tick work time of ~9 ms gives ~91 ms slack before a 100 ms tick
-budget is breached; there is no signal requiring any tuning at 100 bots.
+outright. The tick work time of ~9 ms leaves ~491 ms of slack under the 500 ms
+tick interval (`paralife.tick.interval-ms: 500`); there is no signal requiring
+any tuning at 100 bots.
 
 **Pass-2 Concern #17:** 100-bot tier is **baseline-only** in Phase 20. Per-tier
 benchmark evidence (i.e., re-running the harness against tuned HEAD) is Phase 21's
