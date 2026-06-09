@@ -412,12 +412,25 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         log.warn("Transport error for session {}: {}", session.getId(), exception.getMessage());
+        boolean wasStalled = isStalled(session.getAttributes());
         // Phase 22 (TD-19.5-A): close-then-interrupt to avoid spurious VT-did-not-exit warnings.
         if (outboundSender != null) {
             outboundSender.detachSession(session);
         }
-        cleanupBot(session);
         sessionRegistry.unregister(session.getId());
+
+        if (wasStalled) {
+            // TD-20-01c-E: a STALLED session's entity is held on the grid for the grace-expiry
+            // sweep (ResumeTokenRegistry @Order(1)). Mirror afterConnectionClosed:388 — do NOT
+            // cleanupBot here. markStalled already cleared ATTR_ENTITY_ID, so cleanupBot would
+            // (a) clear the held grid cell early via the botRegistry.getBySession block and
+            // (b) skip liveEntityRegistry.unregister (guarded by entityId != null), orphaning
+            // the registry entry. The grace-expiry sweep's cleanupByEntityId is the sole reaper.
+            log.info("BACKPRESSURE transport-error-held tick={} session={}",
+                    tickEngine.currentTick(), session.getId());
+            return;
+        }
+        cleanupBot(session);
     }
 
     // ── Inbound message dispatch ─────────────────────────────────────────────
