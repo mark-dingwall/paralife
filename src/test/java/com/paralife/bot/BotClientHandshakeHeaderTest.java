@@ -57,6 +57,7 @@ class BotClientHandshakeHeaderTest {
     private ServerSocket server;
     private int port;
     private volatile boolean stop;
+    private Thread acceptThread;
 
     /**
      * Captured headers from successive connections. Each entry is the header map
@@ -73,7 +74,7 @@ class BotClientHandshakeHeaderTest {
         capturedHeaders.clear();
         server = new ServerSocket(0);
         port = server.getLocalPort();
-        Thread.ofVirtual().name("stub-accept").start(this::acceptLoop);
+        acceptThread = Thread.ofVirtual().name("stub-accept").start(this::acceptLoop);
     }
 
     @AfterEach
@@ -81,6 +82,11 @@ class BotClientHandshakeHeaderTest {
         stop = true;
         if (server != null && !server.isClosed()) {
             server.close();
+        }
+        // Join the accept loop so it is confirmed dead before the next test (mirrors the
+        // sibling BotClientClosesOnMissingServerDeflateTest); server.close() unblocks accept().
+        if (acceptThread != null) {
+            acceptThread.join(1000);
         }
     }
 

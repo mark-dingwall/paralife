@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -198,6 +199,9 @@ class LiveEntityRegistryTest {
         start.countDown();
         done.await();
         pool.shutdown();
+        // Await termination so the fixed pool's platform threads are reclaimed before
+        // the test ends, rather than lingering in the shared test JVM (forkEvery-removal hygiene).
+        assertThat(pool.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
 
         assertThat(registry.size()).isEqualTo(threadsCount * idsPerThread);
 
