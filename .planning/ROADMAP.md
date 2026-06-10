@@ -147,7 +147,7 @@ Plans:
 **Goal:** Restore the SENSOR-based stitched perception that Phase 12 designed and Phase 15's protocol overhaul dropped, so SENSOR role members produce tangible value to their composite — extended FOV that informs LOCOMOTOR voting and AUTHORITY_LITE tactical decisions, rather than rest-acting passively.
 **Depends on:** Phase 19 (golden-trace equivalence gate must exist before perception semantics change), Phase 20 (avoid colliding with transport tuning churn)
 **Requirements:** None — post-Phase-15 design recovery; no SCALE-* assignment
-**Plans:** 4 plans
+**Plans:** 0/4 plans executed
 **Success Criteria:**
 - LOCOMOTOR's tick frame carries a stitched neighbourhood derived from the union of SENSOR member 5×5 cells, deduplicated and deterministically ordered.
 - Composite without any SENSOR member retains today's per-member FULL / AUTHORITY_LITE / PASSIVE behaviour (no regression).
