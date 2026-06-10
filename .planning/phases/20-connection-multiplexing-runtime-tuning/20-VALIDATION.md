@@ -120,3 +120,15 @@ What plans MUST create (non-test artifacts):
 - [x] D-19 enforced (as re-anchored by Plan 1c F6): canonical churn baseline series cites `62c1b44`, active-scenario evidence set cites `103a615`, tuned capture cites `424e06d`; superseded `c22e487` series retained on disk for history (Task 6.1 step 7 reconciles the 20-CONTEXT.md D-19 wording)
 
 **Approval:** planner-signed-off (d37d281 on 2026-06-05)
+
+---
+
+## Validation Audit 2026-06-11
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+Re-audit at HEAD `d059521`. Spot-checks: all 10 artifact files present, D-02 inline comments intact, CLAUDE.md + README.md sections present, all 6 test files exist, @Disabled count still 6 (matches D-12 inventory), three-gate quick stack green (32 s). No status changes — all tasks remain ✅ green.
