@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
-status: executing
-stopped_at: "Phase 20 plan-by-plan — all plans done (20-01 / 20-01c / 20-02 / 20-03 / 20-04 / 20-05 / 20-06; 20-01b superseded); multi-review of 20-06 next"
-last_updated: "2026-06-04T14:50:00.000Z"
-last_activity: 2026-06-04 -- Plan 20-06 executed (20-RUNTIME.md FINAL 548 lines; D-02 three-place rationale landed; 20-VALIDATION.md flipped nyquist_compliant. Post-merge gate: 961/962 + TD-22-D known flake passed isolated rerun; leaked worktree test JVM killed)
+status: verifying
+stopped_at: Phase 20.1 context gathered
+last_updated: "2026-06-10T22:47:00.043Z"
+last_activity: 2026-06-04 -- Plan 20-06 executed (Phase 20 deliverable finalised; gate green incl. TD-22-D flake rerun)
 progress:
   total_phases: 15
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 35
-  completed_plans: 35
-  percent: 100
+  completed_plans: 36
+  percent: 33
 ---
 
 # Project State
@@ -71,9 +71,9 @@ Progress: [██████████] 100% (35/35 plans)
 
 ## Session Continuity
 
-Last session: 2026-06-04 (Plan 20-06 executed — phase 20 plans complete)
-Stopped at: Phase 20 all plans done; 20-06 multi-review loop next
-Resume file: .planning/phases/20-connection-multiplexing-runtime-tuning/.resume-state.md (refreshed 2026-05-27 — wave model retired, plan-by-plan now)
+Last session: 2026-06-10T22:47:00.025Z
+Stopped at: Phase 20.1 context gathered
+Resume file: .planning/phases/20.1-restore-composite-vision-sensor-stitched-perception/20.1-CONTEXT.md
 Next command: multi-review of 20-06, then `/gsd-verify-work 20`
 
 ## Regression Alarm — fast-track P22.1 if any reappear during P20/P21
