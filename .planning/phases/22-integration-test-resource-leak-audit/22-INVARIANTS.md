@@ -32,7 +32,17 @@ If P20 changes the lock model (fair lock, StampedLock, segmented locking, partit
 
 Current state: `build.gradle.kts` sets `forkEvery=1` / `maxParallelForks=1` unconditionally. This isolates each test class in its own JVM, so leaked threads from one test cannot starve subsequent tests.
 
-P22 exit gate (deferred to P22.1): `forkEvery=0` + **<100 live threads** at end of suite + zero "did not exit" warnings + zero "Could not write XML" errors.
+P22 exit gate (deferred to P22.1), all conditions at once under `forkEvery=0`:
+
+1. **`forkEvery=0`** — the suite runs in a single shared JVM (no per-class fork isolation).
+2. **End-of-suite live platform threads are bounded by the context cache, not by suite size.**
+   With `spring.test.context.cache.maxSize = N` the count is `≈ JVM-floor + N × per-context-cost`
+   and is invariant to how many test classes ran. Equivalently: forcing a full context-cache
+   eviction at end of suite returns live threads to the JVM floor (± shared VT-carrier / commonPool).
+   Any thread that survives a full cache flush — or any growth that scales with class count rather
+   than cached-context count — is a leak and fails the gate.
+3. **Zero "did not exit" warnings.**
+4. **Zero "Could not write XML" errors.**
 
 Do **not** remove `forkEvery=1` until that exit gate passes.
 

@@ -165,6 +165,36 @@ unchanged — 999.6 is partially addressed.)*
 **62** threads, **0** scheduler residue. Targeted regression batch (new test + `EligibleCellIndex*` +
 placement + bot/fleet + `WorldWebSocketHandlerCleanupTest`): **34 passed**.
 
+## Full-suite `forkEvery=0` gate check (2026-06-10)
+
+Ran the **entire** suite (987 tests, all tags) in one shared JVM via `leakProbe` (empty class
+filter), `maxSize=32`. Result against the I-04 exit gate:
+
+| Gate condition | Result |
+|---|---|
+| 1. `forkEvery=0` runs **and completes** (no hang) | ✅ — **completed in ~19 min; did not deadlock** (pre-fix, the `EligibleCellIndex` pin would have hung it) |
+| 2. threads bounded by cache, not suite size | ⚠️ **213 threads** at `maxSize=32`. ~165 are per-context Jetty (85 `qtp` + 56 `WebSocket@` + 12 acceptor + 12 `Scheduler` ≈ 12 cached contexts) — legitimate, cache-bounded. But ~25 residual client threads remain (16 `HttpClient@` + 9 `HttpClient@…-scheduler`) from client paths beyond the fleet fix (e.g. `LoadHarnessIntegrationTest` unreachable-URI `connect()` that starts then abandons a client; `BlockingWebSocketClient` helpers). |
+| 3. zero "did not exit" warnings | ❌ **12** — all `OutboundSender` *"Sender VT … did not exit within 100ms after interrupt"*. These are drain VTs blocked on the `synchronized(session)` monitor — the **unaddressed half of backlog 999.6** (this branch converted `EligibleCellIndex` only). |
+| 4. zero "Could not write XML" errors | ✅ 0 |
+
+Also 21/987 tests failed — but these are **`forkEvery=0` isolation artifacts, not regressions**:
+e.g. `PlacementDensityIntegrationTest` and the `TickEngineTest` cases fail in the shared JVM yet
+pass under `forkEvery=1` (verified in the targeted batch), and several are already-known flakies
+(`GoldenTrace*`, `EmergenceStabilityLoadTest` — see STATE.md deferred TD list). They are the very
+cross-class contamination `forkEvery=1` exists to hide.
+
+**Verdict: good progress, gate not yet passable.** The hang (the hard blocker) is gone and the
+fleet scheduler leak is fixed; the remaining blockers are concrete and named — the
+`synchronized(session)` half of 999.6 (drain-VT non-exit) plus residual client stop-hygiene and the
+test-isolation coupling. `forkEvery=1` stays pinned (I-04 not met).
+
+**I-04 amendment (this session):** criterion 2 was reworded from an absolute *"<100 live threads"*
+to a structural *"bounded by the context cache, not by suite size; survives-cache-flush ⇒ leak"*.
+The old number was arbitrary — it tracked context-count × per-context-cost (a sizing property), not
+leakage. The cache-cap experiment above established the law `total ≈ 19 floor + ~9 per cached
+context` and that every non-floor bucket evicts on `context.close()`, which is the property the
+reworded gate actually tests.
+
 ## Fixed on this branch
 
 - `fix(websocket)`: `handleTransportError` holds stalled entity for the grace sweep (TD-20-01c-E)
