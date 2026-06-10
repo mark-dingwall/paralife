@@ -127,9 +127,43 @@ gate (`forkEvery=0` + <100 threads), not another band-aid. The 6-class set is al
 
 **Correction to the suspect list:** the ~24 `HttpClient@…-scheduler` threads flagged above were
 **absent in both runs despite HundredBot being in the set** — so `HundredBotIntegrationTest` is
-*exonerated* as the client-scheduler source. The lingering schedulers originate in one of the 3
-classes from the original 9-set not included here; that remains the open lead for client-side
-`WebSocketClient` stop-hygiene (out of this branch's scope).
+*exonerated* as the client-scheduler source. The lingering schedulers originate in the bot/load
+fleet classes (see below).
+
+## Tracing the schedulers — two real bugs behind the band-aid (2026-06-10)
+
+Probing the bot/load fleet classes (`LoadTest`, `LoadHarnessIntegrationTest`, `BotClientIntegrationTest`,
+`RespawnFlowIntegrationTest`, …) in one shared JVM did **not** produce a clean census — it **hung**,
+and so did `LoadTest` *alone*. A thread dump of the hung JVM was decisive: **19 live
+`HttpClient@…-scheduler` threads** (the original "~24", confirmed real, not a snapshot artifact) *and*
+a teardown deadlock. This **updates the deep-dive's headline** — `forkEvery=1` masks not only
+concurrent resource pressure but a genuine client-side leak **and** a reproducible hang.
+
+**Bug A — client `WebSocketClient` leak (prod).** `BotClient` only stopped its Jetty client in
+`disconnect()`. A bot reaped by **server idle-timeout** takes the `@OnWebSocketClose` *reconnect*
+branch (the server proactively issues a resume token at registration, so `resumeToken != null`); at
+fleet teardown the server is gone, so re-bind fails — and the failed `reconnect()` left the client
+running. One leaked `HttpClient@…-scheduler` (+ selector/executor pools) per idle-reaped bot.
+**Fix:** `reconnect()` now releases the client on failure via a new `stopClientAsync()` (off the Jetty
+callback thread — `stop()` would deadlock on the pool dispatching the callback), idempotent with
+`disconnect()` via a one-shot `clientStopped` CAS. Terminal `onClose` (no token / shutdown) also
+releases. Regression test: `BotClientTerminalCloseStopsClientTest.failedReconnectStopsStartedClient`.
+
+**Bug B — teardown hang via VT carrier pinning (prod).** Dump showed two platform threads BLOCKED on
+the `EligibleCellIndex` monitor inside `cleanupBot → notifyChanged`, with **no platform thread holding
+it** — the owner was a virtual thread parked while holding the intrinsic `synchronized` monitor.
+Under a mass idle-timeout cascade, `synchronized` **pins the carrier** (the holder blocks on the inner
+grid read lock and can't unmount), starving the VT pool → deadlock. This is the 2026-05-03 incident
+class / backlog 999.6. **Fix:** `EligibleCellIndex`'s `synchronized` methods → a `ReentrantLock`
+(same lock order, reentrant for `rebuildForTest`→`initialize`); a VT blocked while holding a
+`ReentrantLock` unmounts instead of pinning, clearing the cascade. *(Scope note: this resolves the
+reproduced `EligibleCellIndex` pin; the `synchronized(session)` monitor that 999.6 also names is
+unchanged — 999.6 is partially addressed.)*
+
+**Verification (both fixes).** Via `leakProbe`: `LoadTest` alone went from indefinite hang → **22 s**,
+**0** `HttpClient` schedulers (was 19). The full 7-class fleet set went from a **19-min hang → 1 m 6 s**,
+**62** threads, **0** scheduler residue. Targeted regression batch (new test + `EligibleCellIndex*` +
+placement + bot/fleet + `WorldWebSocketHandlerCleanupTest`): **34 passed**.
 
 ## Fixed on this branch
 
@@ -137,3 +171,8 @@ classes from the original 9-set not included here; that remains the open lead fo
   + regression test `stalledTransportError_holdsEntityForGraceSweep`.
 - `test/harden`: `OutboundSender` `@PreDestroy` mass-detach (abrupt-shutdown defense);
   `BotClientHandshakeHeaderTest` accept-VT join; `LiveEntityRegistryTest` `awaitTermination`.
+- `test(probe)`: `leakProbe` cache-cap thread-census harness (`LeakCensusListener`, opt-in).
+- `fix(bot)`: `BotClient.reconnect()` releases the Jetty client on failure (`stopClientAsync` +
+  `clientStopped` CAS) — stops the `HttpClient@…-scheduler` leak. Test: `BotClientTerminalCloseStopsClientTest`.
+- `fix(engine)`: `EligibleCellIndex` `synchronized` → `ReentrantLock` — removes the VT carrier-pinning
+  teardown deadlock (backlog 999.6, partial).

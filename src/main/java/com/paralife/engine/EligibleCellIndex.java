@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Phase 19 SCALE-06 (D-01..D-06): O(1) sparse-set of cells eligible for bot
@@ -32,11 +33,23 @@ import java.util.Random;
  * processEnergyDecay, processOvercrowding penalty, combat damage withEnergy,
  * toxin/mutagen damage) MUST NOT — they don't change occupancy.
  *
- * <p><b>Lock-order invariant (REVIEWS L1):</b> index-monitor → grid-read-lock.
- * {@code synchronized(this)} (the index monitor) is acquired before
+ * <p><b>Lock-order invariant (REVIEWS L1):</b> index-lock → grid-read-lock.
+ * The index lock (a {@link ReentrantLock}) is acquired before
  * {@link WorldGrid#getCell} (which acquires the grid read lock). Tick handlers
  * must call {@code notifyChanged} AFTER the WorldGrid mutation returns, never
  * inside the write lock.
+ *
+ * <p><b>Why {@link ReentrantLock}, not {@code synchronized} (backlog 999.6):</b>
+ * {@code notifyChanged} holds the index lock and then blocks on the grid
+ * read lock. Under an intrinsic {@code synchronized} monitor, a virtual thread
+ * that blocks while inside the monitor <em>pins its carrier</em> — so a burst of
+ * concurrent server-side {@code cleanupBot → notifyChanged} calls (e.g. a mass
+ * idle-timeout cascade at fleet teardown) starves the VT carrier pool and
+ * deadlocks: the lock holder can never be rescheduled to finish, and every other
+ * thread waiting on the index lock blocks forever. A {@code ReentrantLock} does
+ * NOT pin — a VT blocked on {@code lock.lock()} or on the inner grid lock unmounts
+ * cleanly — which lets the holder make progress and clears the cascade. This was
+ * the 2026-05-03 teardown-hang class reproduced by the Phase 22.1 leak probe.
  *
  * <p><b>Init order (REVIEWS H2 + L2):</b> {@code @DependsOn("rockGenerator")}
  * forces this bean's @PostConstruct to run after RockGenerator's;
@@ -79,6 +92,15 @@ public class EligibleCellIndex {
     private int size = 0;
 
     /**
+     * Index lock — replaces the former {@code synchronized(this)} intrinsic monitor.
+     * A {@link ReentrantLock} so virtual threads blocking while holding it (on the
+     * inner grid read lock) unmount rather than pin their carrier (backlog 999.6;
+     * see class javadoc). Reentrant so {@link #rebuildForTest()} → {@link #initialize()}
+     * nests without self-deadlock, exactly as the old monitor allowed.
+     */
+    private final ReentrantLock lock = new ReentrantLock();
+
+    /**
      * Spring-used constructor. {@link EnvironmentEngine} is injected via
      * {@link #setEnvironmentEngine} after construction to break the circular dependency.
      */
@@ -119,27 +141,32 @@ public class EligibleCellIndex {
     }
 
     @PostConstruct
-    public synchronized void initialize() {
+    public void initialize() {
         // Phase 19.5 M4: clear posInDense + size at the top so re-init starts
         // clean rather than double-counting cells. rebuildForTest() does this
         // already; making initialize() self-contained removes the latent ordering
         // requirement and lets any caller (Spring @PostConstruct or test) invoke
         // it safely. dense[] does not need explicit clearing — addInternal
         // overwrites entries [0..size-1] starting from size=0.
-        // Synchronized: M4 hardens against test-misuse footguns where any future
-        // call path invokes initialize() outside the index monitor concurrent
-        // with reads. @PostConstruct + synchronized is honoured by Spring;
-        // rebuildForTest already holds the monitor (re-entrant — free).
-        Arrays.fill(posInDense, -1);
-        size = 0;
-        Map<Position, Byte> snap = environmentEngine != null
-                ? environmentEngine.cellStatusCacheView() : Map.of();
-        for (int x = 0; x < width; x++) {
-            for (int y = 0; y < height; y++) {
-                if (evaluateEligibility(x, y, snap)) addInternal(x, y);
+        // Locked: M4 hardens against test-misuse footguns where any future
+        // call path invokes initialize() outside the index lock concurrent
+        // with reads. @PostConstruct + lock is honoured by Spring;
+        // rebuildForTest already holds the lock (re-entrant — free).
+        lock.lock();
+        try {
+            Arrays.fill(posInDense, -1);
+            size = 0;
+            Map<Position, Byte> snap = environmentEngine != null
+                    ? environmentEngine.cellStatusCacheView() : Map.of();
+            for (int x = 0; x < width; x++) {
+                for (int y = 0; y < height; y++) {
+                    if (evaluateEligibility(x, y, snap)) addInternal(x, y);
+                }
             }
+            log.info("EligibleCellIndex initialised: {} eligible cells of {} total", size, width * height);
+        } finally {
+            lock.unlock();
         }
-        log.info("EligibleCellIndex initialised: {} eligible cells of {} total", size, width * height);
     }
 
     /**
@@ -155,8 +182,13 @@ public class EligibleCellIndex {
     }
 
     /** Add cell (x,y) to the eligible set. No-op if already present. Thread-safe. */
-    public synchronized void add(int x, int y) {
-        addInternal(x, y);
+    public void add(int x, int y) {
+        lock.lock();
+        try {
+            addInternal(x, y);
+        } finally {
+            lock.unlock();
+        }
     }
 
     private void addInternal(int x, int y) {
@@ -168,8 +200,13 @@ public class EligibleCellIndex {
     }
 
     /** Remove cell (x,y) from the eligible set. No-op if absent. Thread-safe. */
-    public synchronized void remove(int x, int y) {
-        removeInternal(x, y);
+    public void remove(int x, int y) {
+        lock.lock();
+        try {
+            removeInternal(x, y);
+        } finally {
+            lock.unlock();
+        }
     }
 
     private void removeInternal(int x, int y) {
@@ -188,15 +225,25 @@ public class EligibleCellIndex {
      * O(1) uniform sample. Returns {@code null} iff eligible set is empty (→ GRID_FULL).
      * Uses exactly 1 call to {@code rng.nextInt(size)} per successful sample.
      */
-    public synchronized Position sample(Random rng) {
-        if (size == 0) return null;
-        int idx = dense[rng.nextInt(size)];
-        return fromIndex(idx);
+    public Position sample(Random rng) {
+        lock.lock();
+        try {
+            if (size == 0) return null;
+            int idx = dense[rng.nextInt(size)];
+            return fromIndex(idx);
+        } finally {
+            lock.unlock();
+        }
     }
 
     /** Returns the number of cells currently in the eligible set. */
-    public synchronized int eligibleCount() {
-        return size;
+    public int eligibleCount() {
+        lock.lock();
+        try {
+            return size;
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -204,23 +251,28 @@ public class EligibleCellIndex {
      * wrap via {@code Math.floorMod}. Cell-status cache is read exactly once per
      * call and hoisted — REVIEWS MEDIUM-1 / O3 (single cellStatusCacheView() per notifyChanged).
      *
-     * <p>Lock order: acquires index monitor ({@code synchronized(this)}) then
+     * <p>Lock order: acquires the index lock ({@link ReentrantLock}) then
      * internally calls {@code worldGrid.getCell} (grid read lock). This order
-     * is index-monitor → grid-read-lock and must not be inverted.
+     * is index-lock → grid-read-lock and must not be inverted.
      */
-    public synchronized void notifyChanged(int px, int py) {
-        Map<Position, Byte> hoistedCache = environmentEngine != null
-                ? environmentEngine.cellStatusCacheView() : Map.of();
-        for (int dy = -DIRTY_BBOX_RADIUS; dy <= DIRTY_BBOX_RADIUS; dy++) {
-            for (int dx = -DIRTY_BBOX_RADIUS; dx <= DIRTY_BBOX_RADIUS; dx++) {
-                int cx = Math.floorMod(px + dx, width);
-                int cy = Math.floorMod(py + dy, height);
-                if (evaluateEligibility(cx, cy, hoistedCache)) {
-                    addInternal(cx, cy);
-                } else {
-                    removeInternal(cx, cy);
+    public void notifyChanged(int px, int py) {
+        lock.lock();
+        try {
+            Map<Position, Byte> hoistedCache = environmentEngine != null
+                    ? environmentEngine.cellStatusCacheView() : Map.of();
+            for (int dy = -DIRTY_BBOX_RADIUS; dy <= DIRTY_BBOX_RADIUS; dy++) {
+                for (int dx = -DIRTY_BBOX_RADIUS; dx <= DIRTY_BBOX_RADIUS; dx++) {
+                    int cx = Math.floorMod(px + dx, width);
+                    int cy = Math.floorMod(py + dy, height);
+                    if (evaluateEligibility(cx, cy, hoistedCache)) {
+                        addInternal(cx, cy);
+                    } else {
+                        removeInternal(cx, cy);
+                    }
                 }
             }
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -270,9 +322,10 @@ public class EligibleCellIndex {
      * Test helper — wipe the index and rebuild from current grid state.
      * Mirrors the @PostConstruct init; call after {@code worldGrid.clear()} in tests.
      */
-    public synchronized void rebuildForTest() {
+    public void rebuildForTest() {
         // Phase 19.5 M4: initialize() now self-clears posInDense + size at the top,
         // so this is a thin alias. Kept as a public test seam for clarity at call sites.
+        // (initialize() takes the reentrant index lock itself; nesting is free.)
         initialize();
     }
 }

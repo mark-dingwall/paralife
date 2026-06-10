@@ -98,6 +98,17 @@ public class BotClient {
      */
     private final AtomicBoolean closedFired = new AtomicBoolean(false);
 
+    /**
+     * One-shot guard so the underlying {@link WebSocketClient} is stopped exactly once,
+     * whether the trigger is an explicit {@link #disconnect()} (owner thread, synchronous
+     * stop) or a terminal remote close in {@link Endpoint#onClose} (Jetty callback thread,
+     * async stop). Before this guard, a server-initiated close (e.g. idle timeout) with no
+     * pending resume token left the client — and its scheduler/selector/executor pools —
+     * running forever, leaking ~1 {@code HttpClient@…-scheduler} thread per reaped bot
+     * (Phase 22.1 leak probe).
+     */
+    private final AtomicBoolean clientStopped = new AtomicBoolean(false);
+
     private WebSocketClient client;
     private volatile Session session;
     private volatile String entityId;
@@ -208,10 +219,16 @@ public class BotClient {
         } catch (Exception e) {
             log.warn("Error closing session: {}", e.getMessage());
         }
+        // Stop the underlying Jetty client (releases its scheduler/selector/executor
+        // pools). The clientStopped CAS coordinates with the terminal-close path in
+        // Endpoint.onClose so the client is stopped exactly once. disconnect() runs on
+        // the owning thread (e.g. BotFleet.shutdown), so a synchronous stop() is safe
+        // and desirable here — callers expect the pools gone on return.
         try {
-            if (client != null) {
-                client.stop();
-                client = null;
+            WebSocketClient c = this.client;
+            if (c != null && clientStopped.compareAndSet(false, true)) {
+                this.client = null;
+                c.stop();
             }
         } catch (Exception e) {
             log.warn("Error stopping client: {}", e.getMessage());
@@ -222,9 +239,43 @@ public class BotClient {
         fireCloseCallbacks();
     }
 
+    /**
+     * Stop and release the Jetty {@link WebSocketClient} off the calling thread.
+     *
+     * <p>Invoked from {@link Endpoint#onClose} on a terminal remote close (server-initiated
+     * close / idle timeout with no pending resume token). The stop runs on a separate thread
+     * because {@code WebSocketClient.stop()} shuts down the very Jetty client pool that is
+     * currently dispatching the {@code @OnWebSocketClose} callback — a synchronous stop there
+     * would block/deadlock (the same hazard Phase 17 flagged at {@code connect()}). The
+     * {@code clientStopped} CAS makes this idempotent with {@link #disconnect()}.
+     */
+    private void stopClientAsync() {
+        WebSocketClient c = this.client;
+        if (c == null || !clientStopped.compareAndSet(false, true)) {
+            return; // no client, or another path already owns the stop
+        }
+        this.client = null;
+        CompletableFuture.runAsync(() -> {
+            try {
+                c.stop();
+            } catch (Exception e) {
+                log.warn("Error stopping client (async): {}", e.getMessage());
+            }
+        });
+    }
+
     public boolean isConnected() {
         Session s = this.session;
         return s != null && s.isOpen();
+    }
+
+    /**
+     * Test seam (Phase 22.1): {@code true} once the underlying {@link WebSocketClient}
+     * has been stopped and released — by {@link #disconnect()} or by the terminal
+     * remote-close path. Package-private; used by the client-leak regression test.
+     */
+    boolean isClientStopped() {
+        return clientStopped.get();
     }
 
     /** Phase 18 D-06: returns the harness identity carried in the handshake headers. */
@@ -465,11 +516,22 @@ public class BotClient {
      * Re-enters the connect cycle after a STALLED WS close.
      * Called from the {@code onClose} hook when a resume token is held.
      */
-    private void reconnect() {
+    // Package-private (was private) so the Phase 22.1 reconnect-failure regression test
+    // can drive this path directly without standing up and then tearing down a server.
+    void reconnect() {
         try {
             connect();
         } catch (Exception e) {
             log.warn("Reconnect failed: {}", e.getMessage());
+            // The STALLED-pivot / idle-timeout reconnect failed: connect() started (or
+            // reused) the Jetty client but established no session, so no further
+            // @OnWebSocketClose will fire to retry or clean up. Release the client now —
+            // otherwise its scheduler/selector/executor pools leak until disconnect()
+            // (Phase 22.1: this is the dominant source of the lingering
+            // HttpClient@…-scheduler threads — bots reaped by server idle-timeout at
+            // fleet teardown, when the server is already gone and re-bind cannot succeed).
+            // Idempotent + off-thread via stopClientAsync (we may be on a Jetty/commonPool thread).
+            stopClientAsync();
         }
     }
 
@@ -526,8 +588,16 @@ public class BotClient {
                 // Phase 17 STALLED-pivot: reconnect on a fresh WS to attempt re-bind within grace window.
                 // Jittered 100–300ms — anti-thundering-herd when many sessions stall together
                 // (e.g., GC pause hits the server, cascade of overflows, all clients reconnect at once).
+                // NOTE: the client is intentionally NOT stopped here — connect() reuses it across reconnects.
                 long delayMs = 100L + rng.nextLong(200L);
                 CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS).execute(BotClient.this::reconnect);
+            } else {
+                // Terminal remote close (server idle-timeout / server-initiated close with no
+                // pending resume token, or a close racing an in-flight disconnect()). No reconnect
+                // will reuse the client, so release it — otherwise its scheduler/selector/executor
+                // pools leak (Phase 22.1: ~1 HttpClient@…-scheduler per idle-reaped bot). Async
+                // because we are on the Jetty client callback thread (see stopClientAsync).
+                stopClientAsync();
             }
         }
 
