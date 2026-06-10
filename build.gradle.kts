@@ -39,7 +39,9 @@ dependencies {
     implementation("info.picocli:picocli:4.7.7")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    // Promoted from testRuntimeOnly so the Phase 22.1 LeakCensusListener (a
+    // platform TestExecutionListener) compiles against the launcher API.
+    testImplementation("org.junit.platform:junit-platform-launcher")
 }
 
 // Plan 15-11 Task 4 removed the former `sourceSets.test.java.exclude(...)` block.
@@ -82,6 +84,61 @@ tasks.jacocoTestReport {
     reports {
         xml.required = true
         html.required = true
+    }
+}
+
+// Phase 22.1 cache-cap experiment (opt-in, throwaway probe).
+// Runs a curated set of heavy RANDOM_PORT integration classes — each with a DISTINCT
+// @TestPropertySource, hence a DISTINCT cached Spring context — together in ONE shared
+// JVM (forkEvery=0), then LeakCensusListener dumps an end-of-suite platform-thread census.
+//
+// This deliberately does NOT touch the pinned `test` task (invariant I-04: forkEvery=1
+// must stay until the P22.1 exit gate passes). It is a measurement harness, not a config change.
+//
+//   ./gradlew leakProbe -PcacheMax=32 -Plabel=uncapped   # baseline (all contexts coexist)
+//   ./gradlew leakProbe -PcacheMax=1  -Plabel=cap1        # forces eviction within the run
+//
+// Census written to build/leak-probe/census-<label>.txt (and echoed to stdout).
+tasks.register<Test>("leakProbe") {
+    group = "verification"
+    description = "Phase 22.1 cache-cap thread census: heavy integration classes in one shared JVM."
+
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+
+    val cacheMax = (project.findProperty("cacheMax") as String?) ?: "32"
+    val label = (project.findProperty("label") as String?) ?: "run"
+    // Default probe set: 6 classes → 6 distinct cached contexts (each a distinct
+    // @TestPropertySource). Override with -PprobeClasses=Simple1,Simple2 for smoke runs.
+    val probeClasses = (project.findProperty("probeClasses") as String?)
+            ?: "HundredBotIntegrationTest,StallRecoveryIntegrationTest,MetabolismIntegrationTest," +
+               "WebSocketIntegrationTest,PerceptionActionIntegrationTest,BotFleetTest"
+
+    // Neutralise the two inherited `tasks.withType<Test>` settings that would corrupt the probe:
+    //   1. forkEvery=1  → set 0 so all contexts share ONE JVM (the whole point).
+    //   2. jacoco finalizer → jacocoTestReport dependsOn(test), which would drag in the
+    //      entire pinned suite. Clear it; this is a measurement run, not a coverage run.
+    forkEvery = 0
+    maxParallelForks = 1
+    setFinalizedBy(emptyList<Any>())
+
+    // Re-assert the platform with NO tag exclusion (the inherited block excludes "slow"
+    // unless -PincludeLong=true; StallRecovery is @Tag("slow") and we want it included).
+    useJUnitPlatform { }
+    filter {
+        isFailOnNoMatchingTests = false
+        probeClasses.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach {
+            includeTestsMatching("*.$it")
+        }
+    }
+
+    systemProperty("paralife.leakprobe", "1")
+    systemProperty("paralife.leakprobe.label", label)
+    systemProperty("spring.test.context.cache.maxSize", cacheMax)
+
+    testLogging {
+        showStandardStreams = true
+        events("passed", "skipped", "failed")
     }
 }
 

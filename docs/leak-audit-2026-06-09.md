@@ -94,6 +94,43 @@ masks *concurrent cached-context resource pressure*, not a leak. Removing it saf
 
 These are test-architecture and runtime-tuning levers, properly the domain of Phase 22.1.
 
+## Follow-up: cache-cap discriminator experiment (2026-06-10)
+
+To test whether the 268 is *legitimate per-context pressure* (evicts on `context.close()`) or a
+*leak* (survives eviction), a reusable probe was added — `leakProbe` Gradle task + opt-in
+`LeakCensusListener` (`com.paralife.probe`, inert unless `-Dparalife.leakprobe` is set, so the
+pinned `forkEvery=1` `test` task is untouched). It runs a curated set of heavy RANDOM_PORT classes
+— each with a distinct `@TestPropertySource`, hence a distinct cached context — in one shared JVM
+(`forkEvery=0`) and dumps an end-of-suite platform-thread census.
+
+Set of **6 classes → 6 distinct cached contexts** (HundredBot, StallRecovery, Metabolism,
+WebSocketIntegration, PerceptionAction, BotFleet). Same set, two cache sizes:
+
+| Bucket | `maxSize=32` (uncapped) | `maxSize=1` | Scales with contexts? |
+|---|---:|---:|---|
+| `qtp` (Jetty server pool) | 43 | 7 | yes |
+| `qtp…acceptor…ServerConnector` | 6 | 1 | yes — exactly 1 per cached context |
+| `Scheduler` | 6 | 1 | yes |
+| `ForkJoinPool-worker` (VT carriers) | 6 | 6 | no — JVM-shared |
+| JVM floor | ~13 | ~13 | no |
+| **TOTAL** | **74** | **28** | |
+
+Fitted law: `total ≈ 19 (floor) + ~9 per coexisting cached context` (6 → 73≈74; 1 → 28). Zero
+"did not exit" / "Could not write XML" warnings; both runs ~23 s.
+
+**Verdict:** every non-floor bucket scaled down with the cache — i.e. reclaimed by graceful
+`context.close()`. **No leak residue** (no bucket stayed constant while contexts were evicted). This
+confirms the conclusion above empirically: the count is legitimate per-context Jetty infrastructure,
+and **`spring.test.context.cache.maxSize` linearly bounds it** — a measured path to the P22.1 exit
+gate (`forkEvery=0` + <100 threads), not another band-aid. The 6-class set is already 28 threads at
+`maxSize=1`.
+
+**Correction to the suspect list:** the ~24 `HttpClient@…-scheduler` threads flagged above were
+**absent in both runs despite HundredBot being in the set** — so `HundredBotIntegrationTest` is
+*exonerated* as the client-scheduler source. The lingering schedulers originate in one of the 3
+classes from the original 9-set not included here; that remains the open lead for client-side
+`WebSocketClient` stop-hygiene (out of this branch's scope).
+
 ## Fixed on this branch
 
 - `fix(websocket)`: `handleTransportError` holds stalled entity for the grace sweep (TD-20-01c-E)
