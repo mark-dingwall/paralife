@@ -59,11 +59,18 @@ dependencies {
 // The three stale files were deleted alongside Messages.java in plan 15-11 Task 4.
 
 tasks.withType<Test> {
+    // The leakProbe task MUST include @Tag("slow") (StallRecoveryIntegrationTest is one of
+    // its distinct cached contexts). An empty `useJUnitPlatform {}` in the leakProbe block
+    // does NOT clear an already-configured excludeTags — JUnitPlatformOptions is cumulative
+    // (verified on Gradle 8.14.2: --test-dry-run selected 5/6 probe classes, dropping the
+    // slow one). So condition the exclusion at the source, on task name, rather than relying
+    // on the probe task to undo it. (PR#3 review — codex HIGH.)
+    val excludeSlow = name != "leakProbe" && project.findProperty("includeLong") != "true"
     useJUnitPlatform {
         // Phase 16 Plan 03: @Tag("slow") tests are opt-in via -PincludeLong=true.
         // Default `./gradlew test` excludes slow tests (16-06 long-run emergence
         // stability). `./gradlew test -PincludeLong=true` includes all tags.
-        if (project.findProperty("includeLong") != "true") {
+        if (excludeSlow) {
             excludeTags("slow")
         }
     }
@@ -122,8 +129,10 @@ tasks.register<Test>("leakProbe") {
     maxParallelForks = 1
     setFinalizedBy(emptyList<Any>())
 
-    // Re-assert the platform with NO tag exclusion (the inherited block excludes "slow"
-    // unless -PincludeLong=true; StallRecovery is @Tag("slow") and we want it included).
+    // Tag handling is sourced in the `tasks.withType<Test>` block above: it skips
+    // excludeTags("slow") for this task by name, so StallRecovery (@Tag("slow")) IS
+    // included here. An empty useJUnitPlatform {} cannot clear a cumulative exclude, so we
+    // do NOT rely on that — this call only ensures the framework is set.
     useJUnitPlatform { }
     filter {
         isFailOnNoMatchingTests = false
