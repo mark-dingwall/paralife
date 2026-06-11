@@ -4,7 +4,7 @@ milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
 stopped_at: "Phase 20 plan-by-plan — 20-01 / 20-01c / 20-03 done (20-01b superseded); 20-01c hardened pass-2..4 (PR#1) + out-of-band diagnostics shipped (PR#2); 20-02 / 20-04 / 20-05 / 20-06 pending"
-last_updated: "2026-06-11T03:41:36.190Z"
+last_updated: "2026-06-11T05:12:29.645Z"
 last_activity: 2026-06-11 -- Phase 20.1 planning complete
 progress:
   total_phases: 15
