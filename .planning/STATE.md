@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: executing
-stopped_at: "Phase 20 plan-by-plan — 20-01 / 20-01c / 20-02 / 20-03 done (20-01b superseded); 20-04 / 20-05 / 20-06 pending"
-last_updated: "2026-06-03T07:55:00.000Z"
-last_activity: 2026-06-03 -- Plan 20-02 executed (JettyRuntimeConfig record + Jetty Configurable wiring + yaml block + tests); three-gate stack green; zero-behaviour-change defaults preserved
+stopped_at: "Phase 20 plan-by-plan — 20-01 / 20-01c / 20-03 done (20-01b superseded); 20-01c hardened pass-2..4 (PR#1) + out-of-band diagnostics shipped (PR#2); 20-02 / 20-04 / 20-05 / 20-06 pending"
+last_updated: "2026-06-11T00:12:09.325Z"
+last_activity: 2026-06-11 -- Phase 20.1 planning complete
 progress:
   total_phases: 15
   completed_phases: 4
-  total_plans: 35
+  total_plans: 39
   completed_plans: 33
-  percent: 94
+  percent: 27
 ---
 
 # Project State
@@ -28,8 +28,8 @@ See: .planning/PROJECT.md
 Milestone: v3.0 (Scale Engineering / M4) — active
 Phase: 20 (connection-multiplexing-runtime-tuning) — EXECUTING
 Plan: 4 of 7 executed (20-01, 20-01c, 20-02, 20-03 done; 20-01b superseded by 20-01c)
-Status: Ready to execute — next is 20-04 (JVM-flag presets + per-tier recipes in 20-RUNTIME.md)
-Last activity: 2026-06-03 -- Plan 20-02 executed (JettyRuntimeConfig + Jetty wiring + yaml + tests)
+Status: Ready to execute
+Last activity: 2026-06-11 -- Phase 20.1 planning complete
 
 Progress: [█████████░] 94% (33/35 plans)
 
