@@ -25,6 +25,13 @@ import org.junit.platform.launcher.TestPlan;
  * The count is therefore the <em>concurrent cached-context high-water mark</em>, matching
  * the 2026-06-09 deep-dive's {@code forkEvery=0} census (268 threads, uncapped cache).
  *
+ * <p>Note: this listener does NOT force a final cache flush before counting, so the last
+ * cached context's threads are still live at census time. Leakage is inferred from the
+ * <em>comparison</em> between an uncapped run ({@code cacheMax=32}) and a capped run
+ * ({@code cacheMax=1}, which evicts+closes each prior context within the run) — not from an
+ * absolute floor at this instant. That comparison is what operationalises the I-04
+ * "survives-a-full-cache-flush ⇒ leak" gate.
+ *
  * <p>Caveat (unchanged from the prior probe): {@link Thread#getAllStackTraces()} does
  * <strong>not</strong> enumerate virtual threads, so this counts <em>platform</em> threads only —
  * which is exactly the Jetty server/connector ({@code WebSocket@}, {@code qtp}) and client

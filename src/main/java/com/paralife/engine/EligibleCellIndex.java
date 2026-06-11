@@ -95,8 +95,11 @@ public class EligibleCellIndex {
      * Index lock — replaces the former {@code synchronized(this)} intrinsic monitor.
      * A {@link ReentrantLock} so virtual threads blocking while holding it (on the
      * inner grid read lock) unmount rather than pin their carrier (backlog 999.6;
-     * see class javadoc). Reentrant so {@link #rebuildForTest()} → {@link #initialize()}
-     * nests without self-deadlock, exactly as the old monitor allowed.
+     * see class javadoc). {@link ReentrantLock} (vs a plain lock) preserves the old
+     * monitor's reentrancy as a latent safety net against any future self-nesting call
+     * path — though no current path recursively acquires this lock ({@code rebuildForTest()}
+     * merely delegates to {@code initialize()} holding nothing; the other methods lock
+     * once and descend only into the grid lock).
      */
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -150,8 +153,8 @@ public class EligibleCellIndex {
         // overwrites entries [0..size-1] starting from size=0.
         // Locked: M4 hardens against test-misuse footguns where any future
         // call path invokes initialize() outside the index lock concurrent
-        // with reads. @PostConstruct + lock is honoured by Spring;
-        // rebuildForTest already holds the lock (re-entrant — free).
+        // with reads. @PostConstruct + lock is honoured by Spring. (rebuildForTest()
+        // just calls this; it holds no lock of its own, so this acquires once.)
         lock.lock();
         try {
             Arrays.fill(posInDense, -1);
@@ -325,7 +328,7 @@ public class EligibleCellIndex {
     public void rebuildForTest() {
         // Phase 19.5 M4: initialize() now self-clears posInDense + size at the top,
         // so this is a thin alias. Kept as a public test seam for clarity at call sites.
-        // (initialize() takes the reentrant index lock itself; nesting is free.)
+        // (initialize() takes the index lock itself; this method holds no lock.)
         initialize();
     }
 }
