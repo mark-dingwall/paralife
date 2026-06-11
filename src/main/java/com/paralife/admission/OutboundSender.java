@@ -3,6 +3,7 @@ package com.paralife.admission;
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
 import io.micrometer.core.instrument.Timer;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -12,6 +13,7 @@ import org.springframework.web.socket.WebSocketSession;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -153,6 +155,26 @@ public class OutboundSender {
      * D-07) with {@link CloseStatus#SERVICE_RESTARTED} — the transport-close unblocks the
      * stuck write, making the interrupt effective.
      */
+    /**
+     * Defense-in-depth: detach every still-attached session when the bean is destroyed.
+     *
+     * <p>On a graceful Spring shutdown the embedded Jetty server stops first and fires
+     * {@code afterConnectionClosed} per session, which already detaches each sender VT — so in
+     * the common path this finds an empty map. This hook covers ABRUPT teardown (a bean-destroy
+     * ordering where sessions outlive their connection-close callbacks), guaranteeing no
+     * {@code ws-sender-*} VT is left blocked on {@code queue.take()} after the context closes.
+     */
+    @PreDestroy
+    public void shutdown() {
+        var ids = new ArrayList<>(senderThreads.keySet());
+        for (String id : ids) {
+            detachSession(id);
+        }
+        if (!ids.isEmpty()) {
+            log.info("OutboundSender @PreDestroy detached {} residual session(s)", ids.size());
+        }
+    }
+
     public void detachSession(String sessionId) {
         queues.remove(sessionId);
         overflowFiredFlags.remove(sessionId);
