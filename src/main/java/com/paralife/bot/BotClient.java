@@ -109,7 +109,10 @@ public class BotClient {
      */
     private final AtomicBoolean clientStopped = new AtomicBoolean(false);
 
-    private WebSocketClient client;
+    // volatile (PR#3 review H2): mutated by the owner thread (disconnect()), the commonPool
+    // reconnect thread (connect()/stopClientAsync()), and Jetty callback threads — needs a
+    // happens-before so disconnect() nulling it is visible to an in-flight connect().
+    private volatile WebSocketClient client;
     private volatile Session session;
     private volatile String entityId;
     /** Phase 17: server-issued opaque resume token; sent on reconnect after STALLED to re-bind to the same entity. */
@@ -164,47 +167,104 @@ public class BotClient {
      * {@code r|<species>} register frame.
      */
     public void connect() throws Exception {
+        // PR#3 review (codex/gemini HIGH): re-check shutdown under the same volatile BEFORE
+        // standing up a client. disconnect() sets `shutdown` as its first act, so this skips
+        // the create once teardown has begun — closing the wide part of the reconnect-vs-
+        // disconnect window where a fresh, unreleasable client could be stood up.
+        if (shutdown.get()) {
+            throw new IllegalStateException("connect aborted: shutdown in progress");
+        }
         // Phase 17: reuse the WebSocketClient across reconnects. Originally a fresh
         // client+pool was created per connect(); STALLED-pivot reconnects then leaked
         // selector + executor + scheduler thread pools (200+ threads after 100 reconnects).
         // Stopping the old client per-reconnect was even worse — `stop()` blocks during
         // the very thundering-herd conditions a stall produces. Lazy-init once; reuse
         // for subsequent connect() calls.
-        if (client == null) {
-            client = new WebSocketClient();
-            client.start();
+        //
+        // PR#3 review (H2): read the field once into a local and use the local throughout, so
+        // a disconnect() nulling the field mid-connect can't NPE us here.
+        WebSocketClient c = this.client;
+        if (c == null) {
+            // PR#3 review (codex/gemini HIGH, residual hairline): re-ARM the one-shot stop CAS
+            // for this fresh instance. The lifetime CAS may already be consumed by a
+            // disconnect() that won the race, which would otherwise leave this brand-new client
+            // permanently unreleasable. Per-instance arming means whichever path stops THIS
+            // client (reconnect-failure catch / terminal onClose / the post-upgrade check below)
+            // can always win the CAS for it. Reset only fires on a genuinely fresh create
+            // (field was null ⇒ a prior client was already stopped+nulled), so Phase 17's
+            // reuse-across-stall-reconnects is untouched.
+            clientStopped.set(false);
+            WebSocketClient fresh = new WebSocketClient();
+            try {
+                fresh.start();
+            } catch (Exception e) {
+                // start() failed → release the half-built client; field was never published.
+                try { fresh.stop(); } catch (Exception ignored) { /* best effort */ }
+                throw e;
+            }
+            // Publish ONLY AFTER a successful start (PR#3 review round-3, codex HIGH —
+            // publish-before-start lost-stop). If the field were published before start(), a
+            // racing disconnect() could win the CAS and stop() the not-yet-started client, then
+            // our start() would REVIVE it — a running client with a nulled field and a spent CAS
+            // that no path can stop, invisible to hasLiveClient(). Publishing post-start means
+            // disconnect() cannot observe the instance until it is started (hence stoppable); any
+            // shutdown that wins the race thereafter is released by the re-armed CAS via the
+            // reconnect-failure catch or the post-upgrade check below.
+            c = fresh;
+            this.client = c;
         }
 
-        ClientUpgradeRequest req = new ClientUpgradeRequest();
-        req.addExtensions("permessage-deflate; server_no_context_takeover");
+        // PR#3 review round-4 (codex/gemini HIGH): once we hold a started client `c`, ANY failure
+        // before this method returns a usable connection must release it. The reconnect() path has
+        // its own catch, but the public startup connect() path (BotFleet.java:113) does NOT — so
+        // without this, a teardown that raced in between fresh.start() and publish (disconnect()
+        // saw null and skipped) and then an upgrade failure (server gone) would leak the
+        // published-but-failed client's Jetty pools forever. stopClientAsync is CAS-idempotent, so
+        // double-cover with reconnect()'s catch / the post-upgrade re-check is harmless.
+        try {
+            ClientUpgradeRequest req = new ClientUpgradeRequest();
+            req.addExtensions("permessage-deflate; server_no_context_takeover");
 
-        // Phase 18 D-06: harness identity carriage. Headers re-sent on EVERY connect()
-        // invocation — this is what preserves attribution across STALLED-pivot reconnects
-        // (RESEARCH.md Pitfall 1 / T-18-04). identity is a final field bound at construction time.
-        req.setHeader("X-Paralife-Source", identity.source());
-        identity.harnessId().ifPresent(id -> req.setHeader("X-Paralife-Harness", id));
+            // Phase 18 D-06: harness identity carriage. Headers re-sent on EVERY connect()
+            // invocation — this is what preserves attribution across STALLED-pivot reconnects
+            // (RESEARCH.md Pitfall 1 / T-18-04). identity is a final field bound at construction time.
+            req.setHeader("X-Paralife-Source", identity.source());
+            identity.harnessId().ifPresent(id -> req.setHeader("X-Paralife-Harness", id));
 
-        Endpoint endpoint = new Endpoint();
-        Session connected = client.connect(endpoint, URI.create(serverUri), req)
-                .get(10, TimeUnit.SECONDS);
-        this.session = connected;
+            Endpoint endpoint = new Endpoint();
+            Session connected = c.connect(endpoint, URI.create(serverUri), req)
+                    .get(10, TimeUnit.SECONDS);
+            this.session = connected;
 
-        // D-33 client-side enforcement — reject any upgrade response that lacks
-        // permessage-deflate. Mitigation for threat T-15-02 (extension downgrade).
-        String serverExt = connected.getUpgradeResponse().getHeader("Sec-WebSocket-Extensions");
-        if (serverExt == null || !serverExt.contains("permessage-deflate")) {
-            connected.close(1002, "Server did not negotiate permessage-deflate",
-                    Callback.NOOP);
-            throw new IllegalStateException(
-                    "permessage-deflate not negotiated by server: " + serverExt);
+            // If teardown won the race AFTER we stood up the client (server still accepted the
+            // upgrade), close the session and bail — the catch below releases the client.
+            if (shutdown.get()) {
+                connected.close(1001, "client shutting down", Callback.NOOP);
+                throw new IllegalStateException("connect aborted: shutdown won the race");
+            }
+
+            // D-33 client-side enforcement — reject any upgrade response that lacks
+            // permessage-deflate. Mitigation for threat T-15-02 (extension downgrade).
+            String serverExt = connected.getUpgradeResponse().getHeader("Sec-WebSocket-Extensions");
+            if (serverExt == null || !serverExt.contains("permessage-deflate")) {
+                connected.close(1002, "Server did not negotiate permessage-deflate",
+                        Callback.NOOP);
+                throw new IllegalStateException(
+                        "permessage-deflate not negotiated by server: " + serverExt);
+            }
+
+            connectedLatch.countDown();
+            log.info("Bot connected: species={} uri={}", species, serverUri);
+
+            // Send initial register frame immediately; server responds with S|<id>.
+            // Phase 17: if a resume token is held (STALLED reconnect), include it.
+            sendInitialRegister();
+        } catch (Exception e) {
+            // Release the started client on any connect/upgrade/register failure, then rethrow so
+            // the caller (reconnect()'s catch, BotFleet launch VT, awaitConnected) still observes it.
+            stopClientAsync();
+            throw e;
         }
-
-        connectedLatch.countDown();
-        log.info("Bot connected: species={} uri={}", species, serverUri);
-
-        // Send initial register frame immediately; server responds with S|<id>.
-        // Phase 17: if a resume token is held (STALLED reconnect), include it.
-        sendInitialRegister();
     }
 
     /** Disconnect the bot and stop the underlying Jetty client. */
@@ -222,8 +282,12 @@ public class BotClient {
         // Stop the underlying Jetty client (releases its scheduler/selector/executor
         // pools). The clientStopped CAS coordinates with the terminal-close path in
         // Endpoint.onClose so the client is stopped exactly once. disconnect() runs on
-        // the owning thread (e.g. BotFleet.shutdown), so a synchronous stop() is safe
-        // and desirable here — callers expect the pools gone on return.
+        // the owning thread (e.g. BotFleet.shutdown), so the synchronous stop() below is
+        // safe (no stop-on-own-dispatch-pool deadlock). Note (PR#3 review): if a Jetty
+        // onClose races in and wins the CAS first, the stop completes ASYNCHRONOUSLY on
+        // stopClientAsync's commonPool task — so this method may return before those pools
+        // are fully torn down. The client is still released (no leak); only the timing is
+        // best-effort. A hard "pools gone on return" guarantee would join that future.
         try {
             WebSocketClient c = this.client;
             if (c != null && clientStopped.compareAndSet(false, true)) {
@@ -276,6 +340,17 @@ public class BotClient {
      */
     boolean isClientStopped() {
         return clientStopped.get();
+    }
+
+    /**
+     * Test seam (PR#3 review, H1): {@code true} iff a started-but-not-yet-released Jetty
+     * {@link WebSocketClient} is currently held. Distinguishes "no client leaked" from
+     * "a fresh client was stood up that the lifetime {@code clientStopped} CAS can no longer
+     * release" — the reconnect-after-disconnect leak. Package-private; used by the regression test.
+     */
+    boolean hasLiveClient() {
+        WebSocketClient c = this.client;
+        return c != null && c.isRunning();
     }
 
     /** Phase 18 D-06: returns the harness identity carried in the handshake headers. */
@@ -519,6 +594,16 @@ public class BotClient {
     // Package-private (was private) so the Phase 22.1 reconnect-failure regression test
     // can drive this path directly without standing up and then tearing down a server.
     void reconnect() {
+        // H1 (PR#3 review): a disconnect() may have raced ahead of this already-scheduled
+        // reconnect. BotFleet.shutdown() loops disconnect() over every bot; disconnect() sets
+        // `shutdown` as its first act. The onClose schedule site only checks `shutdown` at
+        // schedule time, not at fire time. This guard is the fast path — it avoids even
+        // entering connect() during teardown (connect() also re-checks shutdown and re-arms the
+        // per-instance stop CAS, so a hairline race past this guard is still released, not leaked).
+        if (shutdown.get()) {
+            stopClientAsync(); // release a reused-but-unstopped client if one survived; no-op otherwise
+            return;
+        }
         try {
             connect();
         } catch (Exception e) {
