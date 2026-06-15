@@ -33,6 +33,26 @@ three options**. You are NOT implementing anything and NOT committing to a choic
   claim against the actual code and cite `file:line` evidence.
 - Write only ONE new file: the final report, at the path in *Output*.
 
+## Setup — clone the framework source (do this first)
+
+Outbound network egress to GitHub **is available** in this environment (verified).
+Before investigating, shallow-clone both repos into a scratch dir OUTSIDE the
+Paralife repo so you read the real source, not just the READMEs:
+
+```bash
+mkdir -p /tmp/wf-investigation && cd /tmp/wf-investigation
+git clone --depth 1 https://github.com/obra/superpowers.git
+git clone --depth 1 https://github.com/Fission-AI/OpenSpec.git
+```
+
+These are different *kinds* of artifact, confirmed by structure:
+- **Superpowers** — a prose-**skills** Claude Code plugin: `skills/*/SKILL.md` (14
+  skills), `hooks/`, `.claude-plugin/`, almost no code. The skills ARE the product.
+- **OpenSpec** — an engineered **TypeScript CLI**: `src/{cli,commands,core,prompts}`,
+  `schemas/`, `bin/`, a vitest suite, and it dogfoods itself in `openspec/`.
+
+Read the internals, not the marketing.
+
 ## Method — fan out, then synthesize
 
 Run the investigation as parallel **read-only subagents** (Explore or
@@ -47,19 +67,33 @@ the report yourself. Suggested strands (adjust as needed):
    codebase modularity (records / sealed interfaces, flat packages); and the
    doc-drift between `CLAUDE.md` and `.planning/STATE.md` (e.g. milestone/phase
    mismatch, claims about REQUIREMENTS.md / `.gsd/gsd.db`).
-2. **Superpowers deep-dive.** Fetch its README + CLAUDE.md + skill docs. Determine:
-   install path into Claude Code (plugin/marketplace), what skills it ships, how it
-   enforces RED-GREEN TDD, how its parallel-agent / subagent-driven execution
-   works, persistent artifacts it keeps, language/stack assumptions (Java + Gradle
-   fit), maturity & maintenance risk (single maintainer; does NOT accept skill
-   contributions; auto-triggering skills). NOTE: its repo `CLAUDE.md` is an
-   *upstream contribution policy* (PR rejection rules), NOT the process it imposes
-   on consumers — verify this distinction.
-3. **OpenSpec deep-dive.** Fetch its README + docs. Determine: the
-   propose → apply → **archive** change-proposal model, the on-disk layout
-   (`openspec/changes/<name>/` with proposal/specs/design/tasks), how it coexists
-   with out-of-band work (non-totalizing — no global STATE to reconcile), install,
-   language-agnosticism / Java fit, maturity.
+2. **Superpowers deep-dive — read the source.** From the clone, read the actual
+   skill files, not the README. Priority targets:
+   `skills/test-driven-development/SKILL.md` (how RED-GREEN is enforced — does it
+   really "delete code written before tests"?), `skills/subagent-driven-development`
+   and `skills/dispatching-parallel-agents` (the fan-out engine — how tasks are
+   split and dispatched), `skills/requesting-code-review` + `receiving-code-review`
+   (the 2-stage review), `skills/writing-plans` + `executing-plans`,
+   `skills/using-git-worktrees`, `skills/verification-before-completion`,
+   `skills/writing-skills` (the meta-pattern). Also inspect `hooks/` and
+   `.claude-plugin/` (how skills auto-trigger and install), and `tests/`
+   (`skill-triggering`, `subagent-driven-dev` — how they verify behaviour).
+   Determine: install path into Claude Code, persistent artifacts kept, how
+   intrusive auto-triggering is, Java/Gradle fit, maturity & maintenance risk
+   (single maintainer; does NOT accept skill contributions). NOTE: the repo's
+   `CLAUDE.md` is an *upstream contribution policy* (PR rejection rules), NOT the
+   process it imposes on consumers — confirm this from the skills, not the policy.
+3. **OpenSpec deep-dive — read the source.** From the clone, read `src/core`
+   (the change/spec model + archiving logic — the heart of the tool), `src/commands`
+   and `src/prompts` (the slash-command surface and the prompt templates injected
+   into the agent), `schemas/` (the enforced artifact shapes), `bin/` + relevant
+   `package.json` scripts (install + CLI entry), and the dogfooded `openspec/`
+   directory (real `changes/`, `specs/` — the on-disk layout you'd actually live
+   with). Skim `test/` to see what behaviour it guarantees. Determine: how
+   propose → apply → **archive** works mechanically, how it stays non-totalizing
+   (no global STATE to reconcile), install footprint (npm + a `node_modules`
+   dependency in a Java repo — is that acceptable?), language-agnosticism / Java
+   fit, maturity.
 4. **Migration & composition strand.** How A and B compose in Option C; how to
    cleanly retire GSD (precedent: GSD2 was archived as read-only markdown on
    2026-04-11 — the same move could apply to GSD1 `.planning/`); how the project's
@@ -140,6 +174,8 @@ Keep it evidence-based and concise. Prefer tables over prose where it aids
 scanning. Cite sources (repo `file:line`, and framework doc URLs).
 
 ## Source URLs
+
+Clone these (see *Setup*) and read the source; the READMEs are a starting point only.
 
 - Superpowers: https://github.com/obra/superpowers
   (README: https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/README.md ,
