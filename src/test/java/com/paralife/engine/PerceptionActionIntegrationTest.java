@@ -247,13 +247,13 @@ class PerceptionActionIntegrationTest {
 
     private BotConn connectAndRegister(char species) throws Exception {
         BotConn conn = new BotConn(port);
+        connections.add(conn);
         conn.connect();
         // send r|<species>; wait for S|<entityId>
         conn.send(new Frame.RegisterFrame(species));
         Frame.SyncFrame sync = conn.waitForSync(5_000);
         assertThat(sync).as("Register should elicit S sync frame").isNotNull();
         conn.entityId = sync.entityId();
-        connections.add(conn);
         return conn;
     }
 

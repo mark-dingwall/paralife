@@ -31,6 +31,7 @@ import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -308,6 +309,34 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
 
         if (admissionConfig.maintenance()) {
             log.info("ADMISSION maintenance state=on");
+        }
+    }
+
+    /**
+     * TD-22.1-B: close-aware mass-detach at context teardown. WWSH depends on
+     * {@link OutboundSender}, so Spring destroys WWSH first — this hook runs before
+     * {@link OutboundSender#shutdown()}, draining every active session via the D-07
+     * close-aware {@link OutboundSender#detachSession(WebSocketSession, CloseStatus)}
+     * overload (transport-close unblocks any in-flight Jetty write so the drain VT exits).
+     * That leaves OutboundSender's own {@code @PreDestroy} an idempotent no-op, eliminating
+     * the 12 forkEvery=0 "Sender VT … did not exit within 100ms" teardown WARNs.
+     *
+     * <p>Note the close fires {@code afterConnectionClosed} → {@code cleanupBot} synchronously,
+     * which touches WWSH's own injected collaborators (worldGrid, botRegistry, admissionMetrics …).
+     * Safe for the same reason: Spring destroys WWSH before any bean it depends on, so those
+     * collaborators are all still live during this hook. A future {@code @DependsOn} that inverts
+     * that order would break this re-entrant cleanup.
+     */
+    @PreDestroy
+    void shutdownDetachAll() {
+        if (outboundSender == null) return;   // back-compat ctors skip detach
+        for (WebSocketSession session : sessionRegistry.getActiveSessions()) {
+            try {
+                outboundSender.detachSession(session, CloseStatus.GOING_AWAY);
+            } catch (RuntimeException e) {
+                log.debug("Teardown detach failed for session={}: {}",
+                        session.getId(), e.getMessage());
+            }
         }
     }
 
@@ -802,6 +831,13 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         if (buffRegistry != null) buffRegistry.unregisterEntity(entityId);
         if (deathCleanupHooks != null) deathCleanupHooks.clearInfectionOnDeath(entityId);
         if (environmentEngine != null) environmentEngine.fleeingRemove(entityId);
+        // Multi-review R1 (codex/gemini/claude): the :877 ATTR_ENTITY_ID strip routes the delegated
+        // cleanupBot onto its entityId==null path, which skips clearActive. Mirror it here alongside
+        // the env-state cleanups above. Idempotent and a no-op for the stalled grace-expiry path
+        // (the ACTIVE token was already converted to STALLED at markStalled); it only matters for a
+        // direct non-stalled cleanupByEntityId, which would otherwise leak an ACTIVE resume-token
+        // entry — persistent shared-JVM state under forkEvery=0.
+        if (resumeTokenRegistry != null) resumeTokenRegistry.clearActive(entityId);
 
         String sessionId = botRegistry.getSessionByEntity(entityId).orElse(null);
         io.micrometer.core.instrument.Tags bucketTags = admissionMetrics != null
@@ -843,6 +879,15 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
             if (liveEntityRegistry != null) liveEntityRegistry.unregister(entityId);
             // Full cleanup (slot release + grid + BotRegistry). cleanupBot's entityId==null
             // guard is now correct: we have already dec'd+released+unregistered above.
+            // Enforce the :851 stalled-session precondition rather than assume it: clear
+            // ATTR_ENTITY_ID so cleanupBot takes its entityId==null path and does NOT dec the
+            // active bucket a second time. The sole production caller (grace-expiry sweep) always
+            // passes an already-stalled session (attr absent → this remove is a no-op); a
+            // non-stalled caller (e.g. direct cleanupByEntityId in tests) would otherwise drive
+            // the bucket gauge negative via cleanupBot's fallback dec at the snapshot-released
+            // line below. Env-state (buff/infection/fleeing) is already cleared at :825-827, so
+            // skipping cleanupBot's entityId!=null env branch loses nothing.
+            session.getAttributes().remove(ATTR_ENTITY_ID);
             cleanupBot(session);
         } else {
             // Session unregistered (typical stalled-close path). Manually drop active gauge,

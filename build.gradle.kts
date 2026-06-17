@@ -80,8 +80,15 @@ tasks.withType<Test> {
     // `Thread.join()` in WorldGridTest.concurrentReadsDontBlock hung for 2h after
     // 497 leaked threads from earlier tests starved the virtual-thread carrier pool —
     // proving leaks now exist outside slow-tagged tests too. Made unconditional until
-    // Phase C (integration-test resource-leak audit) lets us safely remove it.
-    forkEvery = 1
+    // the integration-test resource-leak audit (Phase 22 / 22.1) could safely remove it.
+    // 2026-06-14 (P22.1): I-04 exit gate met — flipped to 0 so the whole suite shares ONE
+    // JVM. Closing three root causes made this safe: (A) WorldWebSocketHandler @PreDestroy
+    // close-aware mass-detach → 0 "did not exit" drain-VT WARNs; (B) test client-stop hygiene
+    // (BlockingWebSocketClient self-clean + register-before-connect) → 0 HttpClient/scheduler
+    // residue in the end-of-suite census; (C) a real cleanupByEntityId→cleanupBot double-dec
+    // of the active-bucket gauge (surfaced only under shared-JVM context reuse). 967 tests,
+    // 3 consecutive green forkEvery=0 runs, threads cache-bounded (leakProbe census).
+    forkEvery = 0
     maxParallelForks = 1
     finalizedBy(tasks.jacocoTestReport)
 }

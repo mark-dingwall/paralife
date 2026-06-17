@@ -78,8 +78,8 @@ class HundredBotIntegrationTest {
                 ticksByBot.put(botId, ticks);
                 try {
                     Bot bot = new Bot(botId, port, ticks, allReceivedTicks);
-                    bot.connect();
                     bots.add(bot);
+                    bot.connect();
                 } catch (Exception e) {
                     connectErrors.incrementAndGet();
                     log.error("Bot {} failed to connect: {}", botIndex, e.getMessage());

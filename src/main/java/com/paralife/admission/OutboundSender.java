@@ -158,11 +158,12 @@ public class OutboundSender {
     /**
      * Defense-in-depth: detach every still-attached session when the bean is destroyed.
      *
-     * <p>On a graceful Spring shutdown the embedded Jetty server stops first and fires
-     * {@code afterConnectionClosed} per session, which already detaches each sender VT — so in
-     * the common path this finds an empty map. This hook covers ABRUPT teardown (a bean-destroy
-     * ordering where sessions outlive their connection-close callbacks), guaranteeing no
-     * {@code ws-sender-*} VT is left blocked on {@code queue.take()} after the context closes.
+     * <p>On a graceful Spring shutdown, sessions are already detached before this hook runs —
+     * either by {@code WorldWebSocketHandler.shutdownDetachAll} (its close-aware {@code @PreDestroy},
+     * which Spring fires first because WWSH constructor-depends on this bean) or by Jetty's
+     * {@code afterConnectionClosed} callbacks — so in the common path this finds an empty map. This
+     * hook covers ABRUPT teardown (a bean-destroy ordering where sessions outlive both), guaranteeing
+     * no {@code ws-sender-*} VT is left blocked on {@code queue.take()} after the context closes.
      */
     @PreDestroy
     public void shutdown() {

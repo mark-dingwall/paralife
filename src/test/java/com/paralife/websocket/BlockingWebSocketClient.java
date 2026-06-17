@@ -63,18 +63,24 @@ public class BlockingWebSocketClient {
      */
     public void connect(URI uri, Duration timeout) throws Exception {
         client = new WebSocketClient();
-        client.start();
-        ClientUpgradeRequest req = new ClientUpgradeRequest();
-        // D-33: server enforces permessage-deflate; advertise it on upgrade.
-        req.addExtensions("permessage-deflate; server_no_context_takeover");
-        Handler handler = new Handler();
-        Session opened = client.connect(handler, uri, req)
-                .get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-        // Defensive: ensure OnWebSocketOpen wired the session reference. Jetty 12 invokes
-        // @OnWebSocketOpen synchronously before completing the connect future, so this is
-        // a belt-and-braces assignment in case future Jetty versions reorder.
-        if (this.session == null) {
-            this.session = opened;
+        try {
+            client.start();
+            ClientUpgradeRequest req = new ClientUpgradeRequest();
+            // D-33: server enforces permessage-deflate; advertise it on upgrade.
+            req.addExtensions("permessage-deflate; server_no_context_takeover");
+            Handler handler = new Handler();
+            Session opened = client.connect(handler, uri, req)
+                    .get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            // Defensive: ensure OnWebSocketOpen wired the session reference. Jetty 12 invokes
+            // @OnWebSocketOpen synchronously before completing the connect future, so this is
+            // a belt-and-braces assignment in case future Jetty versions reorder.
+            if (this.session == null) {
+                this.session = opened;
+            }
+        } catch (Exception e) {
+            try { client.stop(); } catch (Exception ignored) {}
+            client = null;
+            throw e;
         }
     }
 
