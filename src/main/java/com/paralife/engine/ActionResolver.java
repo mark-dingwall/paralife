@@ -740,7 +740,7 @@ public class ActionResolver {
         }
 
         // Sort by raw Euclidean distance² (tie-break dy, then dx).
-        // Raw key is correct at this radius: |dx|,|dy| ≤ 5 < dim/2=8, so raw == toroidal-shortest.
+        // Raw key is correct at this radius: |dx|,|dy| ≤ 5 < dim/2 (128 prod / 8 test), so raw == toroidal-shortest.
         // DO NOT normalize per-loop in the lambda — loop variables are not effectively final
         // and would not compile as lambda captures.
         offsets.sort(Comparator
@@ -908,10 +908,11 @@ public class ActionResolver {
      * (Tech-debt: direction arg removal deferred to a later contract-cleanup phase.)
      *
      * <p>Sort key is raw {@code dx*dx + dy*dy, dy, dx} — no wrapped/relativeTo
-     * normalization in the comparator. At {@code MAX_REPRODUCER_SEARCH_RADIUS=5 < dim/2=8}
-     * every raw offset already equals the toroidal-shortest offset; a wrapped key would be
-     * byte-identical (no-op) and is intentionally omitted. Revisit if radius grows past
-     * {@code dim/2}. The torus is handled at the spawn site via {@code Math.floorMod} only.
+     * normalization in the comparator. Because {@code MAX_REPRODUCER_SEARCH_RADIUS=5 < dim/2}
+     * (dim/2 = 128 on the 256×256 production grid, 8 on the 16×16 test grid) every raw offset
+     * already equals the toroidal-shortest offset; a wrapped key would be byte-identical (no-op)
+     * and is intentionally omitted. Revisit if radius grows past {@code dim/2}. The torus is
+     * handled at the spawn site via {@code Math.floorMod} only.
      */
     private void resolveReproducerBud(ResolvedCompositeAction rca,
                                        CompositeRegistry.CompositeState composite,
