@@ -346,6 +346,11 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
     public void afterConnectionEstablished(WebSocketSession session) {
         sessionRegistry.register(session);
         if (outboundSender != null) {
+            // Phase 20 D-02 — WS:entity 1:1 is a deliberate architectural choice, not an
+            // optimisation gap. See 20-RUNTIME.md §1 (and 18-HARNESS.md §1, CLAUDE.md
+            // §Connection model). Tuning per-connection cost is the equivalent
+            // transport-level scale strategy (SCALE-08); collapsing entities onto a shared
+            // session would require explicit ADR per D-21 of Phase 18.
             outboundSender.attachSession(session, admissionConfig.backpressure().outboundQueueSize());
         }
 

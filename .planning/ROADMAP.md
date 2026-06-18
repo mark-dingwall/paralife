@@ -126,7 +126,7 @@ Plans:
 **Goal:** Reduce socket/process overhead and tune the runtime for sustained high bot counts without regressing the compact protocol semantics.
 **Depends on:** Phase 19 (world execution path must be in place before tuning transport overhead)
 **Requirements:** SCALE-08, SCALE-09
-**Plans:** 3/7 plans executed
+**Plans:** 8/8 plans complete
 **Success Criteria:**
 - Connection fan-in / multiplexing or an equivalent overhead-reduction path exists for high bot counts.
 - Virtual-thread or runtime tuning guidance is grounded in measured profiles rather than guesswork.
@@ -139,20 +139,21 @@ Plans:
 - [x] 20-01c-PLAN.md — Re-anchor baseline at HEAD 1818eeb with cap=1500 + saturation metrics (F1/F2/F6 remediation) (SCALE-09)
 - [x] 20-02-PLAN.md — paralife.runtime.jetty.* @ConfigurationProperties record + Jetty wiring (SCALE-09)
 - [x] 20-03-PLAN.md — paralife.runtime.app.* @ConfigurationProperties record (D-20 alongside-not-move) (SCALE-09)
-- [ ] 20-04-PLAN.md — JVM-flag presets + per-tier recipes in 20-RUNTIME.md (SCALE-09)
-- [ ] 20-05-PLAN.md — JFR-driven codec hot-path opts (or forced-fallback runtime knob tightening per B2) + tuned-state JFR (SCALE-08, SCALE-09)
-- [ ] 20-06-PLAN.md — 20-RUNTIME.md finalisation + D-02 three-place rationale (README/CLAUDE/inline) + 20-VALIDATION.md flip (SCALE-08, SCALE-09)
+- [x] 20-04-PLAN.md — JVM-flag presets + per-tier recipes in 20-RUNTIME.md (SCALE-09)
+- [x] 20-05-PLAN.md — JFR-driven codec hot-path triage per D-21 four-outcome tree + tuned-state JFR (resolved: outcome 3 documented null-result) (SCALE-08, SCALE-09)
+- [x] 20-06-PLAN.md — 20-RUNTIME.md finalisation + D-02 three-place rationale (README/CLAUDE/inline) + 20-VALIDATION.md flip (SCALE-08, SCALE-09)
 
 ### Phase 20.1: Restore Composite Vision (SENSOR-stitched perception)
-**Goal:** Restore the SENSOR-based stitched perception that Phase 12 designed and Phase 15's protocol overhaul dropped, so SENSOR role members produce tangible value to their composite — extended FOV that informs LOCOMOTOR voting and AUTHORITY_LITE tactical decisions, rather than rest-acting passively.
+**Goal:** Restore the SENSOR-based stitched perception that Phase 12 designed and Phase 15's protocol overhaul dropped, so SENSOR role members produce tangible value to their composite — an extended field of view, assembled from the union of SENSOR 5×5 windows, that informs LOCOMOTOR movement voting (the colony's only wide sight), rather than rest-acting passively. Adopts a sensory-organ model: only SENSORs are eyes; movement/action members see only their own 8-cell adjacency.
 **Depends on:** Phase 19 (golden-trace equivalence gate must exist before perception semantics change), Phase 20 (avoid colliding with transport tuning churn)
 **Requirements:** None — post-Phase-15 design recovery; no SCALE-* assignment
 **Plans:** 0/4 plans executed
 **Success Criteria:**
-- LOCOMOTOR's tick frame carries a stitched neighbourhood derived from the union of SENSOR member 5×5 cells, deduplicated and deterministically ordered.
-- Composite without any SENSOR member retains today's per-member FULL / AUTHORITY_LITE / PASSIVE behaviour (no regression).
-- D-10 byte-for-byte equivalence is intentionally re-baselined for scenarios containing composites with SENSORs; new golden-trace digests are regenerated and pinned.
-- Tests verify that adding a SENSOR strictly widens (never shrinks) LOCOMOTOR's visible cells, and that SENSORs themselves remain PASSIVE on the wire.
+- LOCOMOTOR's tick frame carries a stitched neighbourhood derived from the union of SENSOR member 5×5 cells, deduplicated and deterministically ordered. The union is LOCOMOTOR-exclusive — FEEDER/ATTACKER act on their own 8-cell adjacency only.
+- Per-role perception follows the sensory-organ model: LOCOMOTOR = own 8-cell ∪ SENSOR union; FEEDER/ATTACKER = own 8-cell; REPRODUCER/DEFENDER/SENSOR = passive (no vision block). A composite with no SENSOR is therefore near-blind — intended, restoring P12 D-20 evolutionary pressure for SENSORs. (Supersedes the prior "retains today's FULL/AUTHORITY_LITE/PASSIVE" criterion.)
+- D-10 byte-for-byte equivalence is intentionally re-baselined for scenarios containing composites with SENSORs: a new dedicated SENSOR scenario is pinned AND existing composite-bearing baselines are re-pinned (LOCOMOTOR frame shape changed); new golden-trace digests are regenerated and pinned.
+- Tests verify that adding a SENSOR strictly widens (never shrinks) LOCOMOTOR's visible cells, that SENSORs themselves remain PASSIVE on the wire, and that the bot HeuristicBrain demonstrably votes using SENSOR-derived cells (brain consumption is in scope).
+- REPRODUCER buds are server-auto-placed at the nearest free cell (toroidal Euclidean), with no bot-chosen direction — an interior REPRODUCER sheltered behind DEFENDERs still reproduces; OVERCROWDED is omitted from all composite-member frames (solo-entity-only).
 - Must land before M5 (Observability & Operations) so the live world visualiser exposes faithful colony perception, not a stub.
 
 Plans:

@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
-status: executing
-stopped_at: "Phase 20 plan-by-plan — 20-01 / 20-01c / 20-02 / 20-03 done (20-01b superseded); 20-04 / 20-05 / 20-06 pending"
-last_updated: "2026-06-03T07:55:00.000Z"
-last_activity: 2026-06-03 -- Plan 20-02 executed (JettyRuntimeConfig record + Jetty Configurable wiring + yaml block + tests); three-gate stack green; zero-behaviour-change defaults preserved
+status: verifying
+stopped_at: Phase 20.1 context gathered
+last_updated: "2026-06-10T22:47:00.043Z"
+last_activity: 2026-06-04 -- Plan 20-06 executed (Phase 20 deliverable finalised; gate green incl. TD-22-D flake rerun)
 progress:
   total_phases: 15
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 35
-  completed_plans: 33
-  percent: 94
+  completed_plans: 36
+  percent: 33
 ---
 
 # Project State
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md
 ## Current Position
 
 Milestone: v3.0 (Scale Engineering / M4) — active
-Phase: 20 (connection-multiplexing-runtime-tuning) — EXECUTING
-Plan: 4 of 7 executed (20-01, 20-01c, 20-02, 20-03 done; 20-01b superseded by 20-01c)
-Status: Ready to execute — next is 20-04 (JVM-flag presets + per-tier recipes in 20-RUNTIME.md)
-Last activity: 2026-06-03 -- Plan 20-02 executed (JettyRuntimeConfig + Jetty wiring + yaml + tests)
+Phase: 20 (connection-multiplexing-runtime-tuning) — plans complete, review in progress
+Plan: 7 of 7 executed (20-01, 20-01c, 20-02, 20-03, 20-04, 20-05, 20-06 done; 20-01b superseded by 20-01c)
+Status: Multi-review loop on 20-06 changes, then /gsd-verify-work 20
+Last activity: 2026-06-04 -- Plan 20-06 executed (Phase 20 deliverable finalised; gate green incl. TD-22-D flake rerun)
 
-Progress: [█████████░] 94% (33/35 plans)
+Progress: [██████████] 100% (35/35 plans)
 
 ## Deferred Items
 
@@ -76,10 +76,10 @@ Progress: [█████████░] 94% (33/35 plans)
 
 ## Session Continuity
 
-Last session: 2026-05-27 (session-drift reconciliation)
-Stopped at: Phase 20 plan-by-plan — 20-01 / 20-01c / 20-03 done (20-01b superseded); 20-01c hardened pass-2..4 (PR#1) + out-of-band diagnostics shipped (PR#2); 20-02 / 20-04 / 20-05 / 20-06 pending
-Resume file: .planning/phases/20-connection-multiplexing-runtime-tuning/.resume-state.md (refreshed 2026-05-27 — wave model retired, plan-by-plan now)
-Next command: `/gsd-execute-phase 20 --plan 20-02` (paralife.runtime.jetty.* @ConfigurationProperties + Jetty wiring) — citable baseline is now `profiles/*-baseline-1818eeb.*` (20-01c), not the c22e487 capture
+Last session: 2026-06-10T22:47:00.025Z
+Stopped at: Phase 20.1 context gathered
+Resume file: .planning/phases/20.1-restore-composite-vision-sensor-stitched-perception/20.1-CONTEXT.md
+Next command: multi-review of 20-06, then `/gsd-verify-work 20`
 
 ## Regression Alarm — fast-track P22.1 if any reappear during P20/P21
 

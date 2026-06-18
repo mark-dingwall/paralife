@@ -139,6 +139,35 @@ an explicit ADR with justification before any exception is considered.
 
 See `.planning/phases/18-external-load-harness-harness-identity/18-HARNESS.md` §1 for full
 rationale, exception policy, and the 5 000-connections-per-JVM design ceiling (D-02).
+
+### Runtime tuning (Phase 20)
+
+Per-connection overhead reduction at scale lives in `paralife.runtime.jetty.*` and
+`paralife.runtime.app.*` `@ConfigurationProperties` records (Phase 20 D-07 layers
+2 + 3, see `JettyRuntimeConfig` and `AppRuntimeConfig`). JVM flags ship as
+documented per-scale-tier presets in
+`.planning/phases/20-connection-multiplexing-runtime-tuning/20-RUNTIME.md` §3, NOT
+as wrapper scripts (D-08).
+
+**The WS:entity 1:1 model from §Connection model is non-negotiable.** Tuning
+reduces per-connection cost; it does not collapse connections. SCALE-08's "or
+equivalent transport-level scale strategy" escape hatch was intentionally taken.
+See `20-RUNTIME.md` §1 for the full rationale and §3 for per-tier recipes.
+
+The two metric gauges to watch when tuning are `paralife.tick.health.work-time-ms`
+(`AdmissionMetrics.java:70`) and `paralife.outbound.detach.timeout`
+(`AdmissionMetrics.java:79`, P19.1 D-18). Profile artifacts under
+`.planning/phases/20-connection-multiplexing-runtime-tuning/profiles/` are pinned
+to commit SHAs (e.g. `62c1b44` churn baseline, `103a615` active-scenario) for
+reproducibility per D-19. Headline-gauge
+values are sampled from `/actuator/metrics/{name}` into JSON sidecars at capture
+time (Pass-2 Concern #10) — `application.yml:15` exposes the `metrics` actuator
+endpoint that Plan 1c + Plan 5 capture from.
+
+D-20 keeps `paralife.admission.backpressure.outbound-queue-size` in
+`AdmissionConfig` rather than moving it under `paralife.runtime.app.*`; namespace
+consolidation is Phase 999.4. Codec hot-path opts (D-10, layer 4 of the tuning
+surface) are JFR-driven and never cross the wire — `15-SCHEMA.md` stays bit-exact.
 <!-- GSD:architecture-end -->
 
 <!-- GSD:skills-start -->

@@ -38,8 +38,10 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
 - `README.md` operator note codifying the WS:entity 1:1 deliberate-choice rationale
 - Inline code comments on the OutboundSender / WS upgrade sites pointing at the same
   rationale so future contributors do not "fix" the design
-- Verification: existing protocol + regression tests stay green (excluding 4 P22 `@Disabled`
-  tests held for P21/P22.1, see D-12); P19 D-10 golden-trace byte-equivalence gate plus the
+- Verification: existing protocol + regression tests stay green (excluding the P22 `@Disabled`
+  tests held for P21/P22.1, see D-12; *de-stale 2026-06-04: live inventory is 6 `@Disabled`
+  across 5 files — 3 P22-origin TD-22-A/B/C plus 3 pre-existing; TD-22-D HundredBot was never
+  disabled — see 20-VALIDATION.md Wave 0 intro*); P19 D-10 golden-trace byte-equivalence gate plus the
   new P19.1 D-11/D-12 gates stay green at fixed-seed scenarios; tuned config matrix shipped
   with measured before/after numbers
 
@@ -56,7 +58,8 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   surface — future bench-harness phase
 - Wire schema mutation — `15-SCHEMA.md` LOCKED; codec impl tuning never crosses the wire
   boundary
-- Re-enabling P22's `@Disabled` tests (TD-22-A..D) — P21 / P22.1 territory
+- Re-enabling P22's `@Disabled` tests (TD-22-A/B/C; *de-stale 2026-06-04: TD-22-D HundredBot
+  was never `@Disabled` — it runs in-suite with a known latch-race flake*) — P21 / P22.1 territory
 - Namespace migration of `paralife.admission.backpressure.outbound-queue-size` →
   `paralife.runtime.app.*` — deferred to backlog (D-20)
 - `/actuator/prometheus` wiring — M5
@@ -159,11 +162,14 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   in the full suite. P20 codec tuning re-runs the gate **in-suite** only; do not gate CI on
   isolated runs. P22.1 will revalidate after P20.
 
-- **D-12:** **Existing test suite stays green excluding the 4 `@Disabled` tests held for
+- **D-12:** **Existing test suite stays green excluding the `@Disabled` tests held for
   P21 / P22.1:** TD-22-A `MetabolismIntegrationTest` (read-lock starvation under tick-write
   pressure), TD-22-B `EncodeDeflatePerformanceGateTest` (real perf regression), TD-22-C
-  `PopulationDynamicsTest` (probabilistic flat-line), TD-22-D `HundredBotIntegrationTest`
-  (connect-latch race). **P20 MUST NOT re-enable any of these** — that's P21 / P22.1
+  `PopulationDynamicsTest` (probabilistic flat-line). *De-stale 2026-06-04: TD-22-D
+  `HundredBotIntegrationTest` (connect-latch race) was never `@Disabled` — it runs in-suite
+  with a known flake; live inventory is 6 `@Disabled` annotations across 5 files (3 P22-origin
+  above + Toxin×2 + CellularAutomaton perf-only) — see 20-VALIDATION.md Wave 0 intro.*
+  **P20 MUST NOT re-enable any of these** — that's P21 / P22.1
   territory. P20 tuning may incidentally resolve TD-22-A's read-lock starvation, but proving
   it is P21's job. Stale "166+ tests" figure dropped; current count is 136 test files.
 
@@ -171,7 +177,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   `20-RUNTIME.md` per-scale-tier section cites a baseline JFR + a tuned JFR with concrete
   metric deltas. **Headline gauges:**
   - `paralife.tick.health.work-time-ms` (P17 D-18 — primary scalar)
-  - `paralife.outbound.detach.timeout` (P19.1 D-13/D-14, `AdmissionMetrics.java:74` — direct
+  - `paralife.outbound.detach.timeout` (P19.1 D-13/D-14, `AdmissionMetrics.java:79` — direct
     signal of slow-client wedging the drain VT past close-aware detach budget)
 
   Recommendations without measurement are not shipped.
@@ -211,6 +217,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   `20-RUNTIME.md` profile-findings section. Reviewers and future agents (incl. P22.1) can
   `git checkout c22e487` and re-run the harness to reproduce. Reproducibility is cheap
   insurance for the project's "evidence over assertion" stance (D-05).
+  (re-anchored to `62c1b44` by Plan 1c F6; active-scenario evidence set `103a615`; tuned capture `424e06d` — see 20-RUNTIME.md §6)
 
 - **D-20 (was G-04):** **Layer `paralife.runtime.app.*` keys alongside the existing
   `paralife.admission.backpressure.outbound-queue-size`** rather than moving it.
@@ -223,6 +230,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   1. **Shipped codec opts** with JFR-cited delta on `paralife.tick.health.work-time-ms` or `paralife.outbound.detach.timeout` (D-10 / D-13).
   2. **JFR-justified runtime-knob tightening** (Plan 2 / Plan 3 record default change) with measured delta — same triage rigor as a codec opt (JFR signal + two-consecutive-green three-gate verification + tuned-state JFR delta documented).
   3. **Documented null-result** showing the c22e487 baseline is at the relevant performance floor at 1000 bots (e.g., `jdk.GCPhasePause` mean ≤1ms, `jdk.VirtualThreadPinned` count <10/min, codec stack ≤2% CPU, allocation steady-state). The tuning surface (Plan 2 + Plan 3 records + Plan 4 per-tier recipes + Plan 1/1b baseline JFRs + Plan 5 tuned-state equivalence capture) IS the SCALE-08 deliverable; a measured null-result is a measurement, not a no-op.
+     (superseded by Plan 1c re-anchor — see D-19 annotation; actual evidence set is `103a615` active + `424e06d` tuned)
   4. **Dominant pinning with backlog-handoff** (added pass-2 per Concern #9 — adopted OpenCode's reading) — JFR shows `jdk.VirtualThreadPinned` is the binding constraint at the relevant scale AND the `synchronized → ReentrantLock` conversion work is filed as Phase 999.6 (`vt-pinning-reentrantlock-conversion`) per pass-1 Concern #2 disposition AND the tuned-state JFR confirms equivalence (no regression introduced by Plan 5). Structurally identical to outcome 3: the system is at the performance floor for the work Plan 5 is permitted to do; the unresolved overhead path is documented and handed off to a backlog phase rather than masked by a forced-fallback knob change. **Codex's pass-2 reading (block-and-don't-claim-SCALE-08) is rejected per Concern #9 disposition:** the alternative would either downgrade SCALE-08 (rejected — D-21 rationale is sound) or expand Plan 5 scope to include the conversion (rejected — Phase 999.6 backlog is pass-1 #2 disposition).
 
   **Pinning-dominates supersedes runtime-knob tightening (do NOT manufacture a fallback delta on top of dominant pinning — outcome 4 is the correct disposition; outcome 2 is wrong when pinning is dominant).**
@@ -290,7 +298,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   D-11 / D-12 — `GoldenTraceWithActionsTest` + `LiveEntityRegistryInvariantTest` (D-11
   three-gate stack)
 - `.planning/phases/22-integration-test-resource-leak-audit/22-SUMMARY.md` — TD-22-A..D
-  `@Disabled` markers; D-12 inherits
+  tech-debt register (A/B/C `@Disabled`; D never disabled — in-suite flake); D-12 inherits
 
 ### In-tree code referenced as ground truth
 
@@ -300,9 +308,9 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   bounded queue; D-02 inline comment + outbound queue depth field is part of the new
   `paralife.runtime.app.*` record (note: lives under `com.paralife.admission`, NOT
   `com.paralife.websocket` as prior draft claimed)
-- `src/main/java/com/paralife/admission/AdmissionMetrics.java:65, :74, :175-176, :451` —
-  `paralife.tick.health.work-time-ms` and `paralife.outbound.detach.timeout` registration
-  sites
+- `src/main/java/com/paralife/admission/AdmissionMetrics.java:70, :79` (constants), `:167, :190`
+  (registration sites; *line refs de-staled 2026-06-04*) —
+  `paralife.tick.health.work-time-ms` and `paralife.outbound.detach.timeout`
 - `src/main/java/com/paralife/websocket/TickBroadcaster.java` — frame encode hot path
   candidate for D-10 codec opts
 - `src/main/java/com/paralife/codec/PerceptionCodec.java` (and `Base64Codec`) — primary
@@ -313,7 +321,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   `GridConfig.java`, `TickConfig.java` — `@ConfigurationProperties` precedent records the
   new `paralife.runtime.*` records mirror
 - `src/main/resources/application.yml` — config root; new `paralife.runtime.*` keys land
-  here with sensible defaults; **`management.endpoints.web.exposure.include: health,info,metrics` (line 15) exposes `/actuator/metrics/{name}` — Plan 1b + Plan 5 use this for headline-gauge JSON sidecar capture per pass-2 Concern #10 disposition**
+  here with sensible defaults; **`management.endpoints.web.exposure.include: health,info,metrics` (line 15) exposes `/actuator/metrics/{name}` — Plan 1c (originally Plan 1b, superseded) + Plan 5 use this for headline-gauge JSON sidecar capture per pass-2 Concern #10 disposition**
 - `build.gradle.kts:75-76` — `forkEvery=1` enforced unconditional (P22); D-06 notes profile
   runs are out-of-test so this does not apply
 - `src/test/resources/junit-platform.properties` — 5-min JUnit timeout (P22); same
@@ -325,6 +333,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   canonical operator/contributor doc
 - `.planning/phases/20-connection-multiplexing-runtime-tuning/profiles/` — D-05 committed
   JFR + flamegraph artifacts; baseline filenames cite `c22e487` per D-19; **per-tier metric sidecar JSON files (`metrics-{N}bots-baseline-c22e487.json` + `metrics-1000bots-tuned-{HEAD}.json`) added pass-2 per Concern #10 disposition**
+  (superseded by Plan 1c re-anchor — see D-19 annotation; shipped names use `62c1b44` churn baseline / `active-50xfood-103a615` active scenario / `active-50xfood-tuned-424e06d` tuned)
 
 </canonical_refs>
 
@@ -345,13 +354,13 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
 - **Three-gate equivalence stack** (P19 D-10 + P19.1 D-11 + P19.1 D-12) — already in repo;
   D-11 reuses unchanged. TD-19.5-A flake caveat: in-suite signal trustworthy, isolated runs
   not. **L1 detach-timeout counter** (`paralife.outbound.detach.timeout` at
-  `AdmissionMetrics.java:74`) — new headline gauge per D-18.
+  `AdmissionMetrics.java:79`) — new headline gauge per D-18.
 - **`paralife.simulation.spawn.seed` (SpawnConfig)** — D-06 profile runs use it for
   reproducibility; same precedent as Phase 19 D-06 placement-determinism contract.
 - **LoadHarness (Phase 18)** — the 1000-bot driver. Phase 20 profile runs invoke it directly
   via `loadHarnessJar` CLI (D-06); no harness-side code change. `--harness-id` and JSON run
   report give per-run attribution.
-- **Spring Boot Actuator at `/actuator/metrics/{name}`** (already wired via `application.yml:15`) — Plan 1b baseline capture + Plan 5 tuned capture poll the named meters via `curl` into JSON sidecars during the 180s load window. No code change required (pass-2 Concern #10 disposition).
+- **Spring Boot Actuator at `/actuator/metrics/{name}`** (already wired via `application.yml:15`) — Plan 1c baseline capture (originally Plan 1b, superseded by the `62c1b44` re-anchor) + Plan 5 tuned capture poll the named meters via `curl` into JSON sidecars during the load window (200 s churn / 90 s active / 180 s tuned). No code change required (pass-2 Concern #10 disposition).
 
 ### Established Patterns
 
@@ -463,6 +472,7 @@ Phase 21 owns the benchmark gate that consumes Phase 20's outputs. Closes SCALE-
   The original `c22e487`-anchored baseline (D-19) is intentionally frozen for
   reproducibility; this backlog item produces a fresh, post-MVP baseline so future tuning
   decisions compare against current reality, not the P19.1-close snapshot.
+  (superseded by Plan 1c re-anchor — see D-19 annotation; canonical frozen baseline is now `62c1b44`)
 
 ### Reviewed Todos (not folded)
 
