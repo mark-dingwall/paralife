@@ -368,9 +368,17 @@ class GoldenTraceEquivalenceTest {
      * <p>Reserved coords:
      * <ul>
      *   <li>LOCOMOTOR at (1, 1)</li>
-     *   <li>SENSOR at (1, 3) — 2 cells south, within LOCOMOTOR's radius-2 influence</li>
+     *   <li>SENSOR at (1, 3) — 2 cells south (adjacent composite member; D-01 made LOCOMOTOR radius-1)</li>
      *   <li>Nutrient at (1, 5) — inside SENSOR's 5x5 FOV but outside LOCOMOTOR's radius-1</li>
      * </ul>
+     *
+     * <p><b>Composite survival window:</b> pool starts 200/400 (50%) with a 2/tick drain
+     * (1 LOCOMOTOR + 1 SENSOR), so it crosses the 12% panic threshold ~tick 76 and dies by
+     * ~tick 100. The SENSOR-stitched union (and the D-04 OVERCROWDED omission) are therefore
+     * only encoded in the digest for those early ticks. If a future change to drain rates or
+     * criticalEnergyPercent shrinks this window toward zero, buildLocomotorCells stops running
+     * and this scenario silently re-pins an adjacency-only digest — re-verify the union is
+     * still present if either is retuned.
      *
      * <p>Side-effects: sets reservedLocoPos and reservedSensorPos for the post-loop check.
      */
@@ -382,7 +390,7 @@ class GoldenTraceEquivalenceTest {
         final String sensorSessId = "comp-sess-sensor-1";
 
         final int locoX = 1, locoY = 1;
-        final int sensorX = 1, sensorY = 3;   // 2 cells south — within LOCOMOTOR radius-2
+        final int sensorX = 1, sensorY = 3;   // 2 cells south of LOCOMOTOR (adjacent composite member; D-01 LOCOMOTOR radius-1)
         final int nutrientX = 1, nutrientY = 5; // inside SENSOR FOV (radius 2: y 1–5), outside LOCO radius-1 (y 0–2)
 
         // Place nutrient first (simple setEntity — no registration needed).

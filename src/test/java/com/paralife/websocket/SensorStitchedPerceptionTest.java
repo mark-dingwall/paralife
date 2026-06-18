@@ -1,8 +1,10 @@
 package com.paralife.websocket;
 
 import com.paralife.admission.OutboundSender;
+import com.paralife.codec.CellEntry;
 import com.paralife.codec.Coord;
 import com.paralife.codec.Frame;
+import com.paralife.codec.KindData;
 import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.AlarmQueue;
 import com.paralife.engine.BotRegistry;
@@ -22,8 +24,11 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalInt;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -197,29 +202,40 @@ class SensorStitchedPerceptionTest {
      * This test is the unit-level upper-bound sanity check on the multi-SENSOR scenario.
      */
     @Test
-    void maxSEntriesBound_locomotorWithMultipleSensors_withinCodecLimit() {
-        var loco = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.LOCOMOTOR, 50, 100);
-        var s1e = new CompositeMember("m2", "c1", ParticleType.MEMBRANE, Role.SENSOR, 50, 100);
-        var s2e = new CompositeMember("m3", "c1", ParticleType.SPORE, Role.SENSOR, 50, 100);
-        worldGrid.setEntity(8, 8, loco);
-        worldGrid.setEntity(8, 6, s1e);  // SENSOR north of LOCOMOTOR
-        worldGrid.setEntity(6, 8, s2e);  // SENSOR west of LOCOMOTOR
+    void maxSEntriesClamp_oversizedUnion_truncatesToLimitInSortedOrder() {
+        // The clamp path is unreachable on the 16x16 perception grid (a union of mutually
+        // adjacent SENSORs is ≈75 cells « 256), so it is tested directly against
+        // sortAndClamp with a synthetic oversized list. This pins BOTH the load-bearing
+        // (dy,dx) determinism guarantee AND the truncation behaviour.
+        List<CellEntry> oversized = new ArrayList<>();
+        for (int dy = -8; dy <= 8; dy++) {        // 17 x 17 = 289 distinct keys > MAX_S_ENTRIES (256)
+            for (int dx = -8; dx <= 8; dx++) {
+                oversized.add(new CellEntry(new Coord.Relative(dx, dy), 1,
+                        Optional.of(new KindData.Simple('F')), OptionalInt.empty(), OptionalInt.empty()));
+            }
+        }
 
-        compositeRegistry.register("c1", List.of("m1", "m2", "m3"),
-                Map.of("m1", new Position(8, 8),
-                       "m2", new Position(8, 6),
-                       "m3", new Position(6, 8)), 100, 200);
-        botRegistry.register("sl", "m1", new Position(8, 8));
+        List<CellEntry> result = broadcaster.sortAndClamp(oversized);
 
-        worldGrid.setEntity(8, 4, Nutrient.spawn("n"));  // inside s1e's 5x5
-        worldGrid.setEntity(4, 8, Nutrient.spawn("n"));  // inside s2e's 5x5
-
-        var bot = botRegistry.getBySession("sl").orElseThrow();
-        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
-
-        assertThat(frame.cells().size())
-                .as("MAX_S_ENTRIES BOUND: cells().size() must not exceed codec limit")
-                .isLessThanOrEqualTo(PerceptionCodec.MAX_S_ENTRIES);
+        assertThat(result)
+                .as("oversized union must be truncated to MAX_S_ENTRIES")
+                .hasSize(PerceptionCodec.MAX_S_ENTRIES);
+        // Sorted ascending by (dy, dx): each entry ≤ the next.
+        for (int i = 1; i < result.size(); i++) {
+            Coord.Relative prev = (Coord.Relative) result.get(i - 1).coord();
+            Coord.Relative cur  = (Coord.Relative) result.get(i).coord();
+            boolean ordered = prev.dy() < cur.dy() || (prev.dy() == cur.dy() && prev.dx() <= cur.dx());
+            assertThat(ordered)
+                    .as("entries must be sorted by (dy,dx): " + prev + " then " + cur)
+                    .isTrue();
+        }
+        // Truncation keeps the lowest (dy,dx) entries: global-min present, global-max dropped.
+        assertThat(result.get(0).coord())
+                .as("lowest (dy,dx) entry must survive")
+                .isEqualTo(new Coord.Relative(-8, -8));
+        assertThat(result.stream().map(CellEntry::coord))
+                .as("highest (dy,dx) entry must be truncated away")
+                .doesNotContain(new Coord.Relative(8, 8));
     }
 
     // ── NUMERIC-ORIGIN ────────────────────────────────────────────────────────
@@ -642,28 +658,47 @@ class SensorStitchedPerceptionTest {
     // ── MISSING-COMPOSITE FALLBACK ────────────────────────────────────────────
 
     /**
-     * A LOCOMOTOR whose composite registry entry is absent at frame-build time must
-     * return its own radius-1 adjacency WITHOUT throwing NoSuchElementException.
+     * A LOCOMOTOR whose composite registry entry is absent at frame-build time (the
+     * "composite dissolved mid-tick" production scenario) must return its own radius-1
+     * adjacency WITHOUT throwing — exercising the {@code coOpt.isEmpty()} guard in
+     * buildLocomotorCells, not a blind {@code .get()}.
      *
-     * <p>If the test harness cannot force an absent composite (deregistration not
-     * supported), this test pins the "single-member LOCOMOTOR" path and documents
-     * that the isEmpty() guard is verified by INSPECTION (the isEmpty() branch in
-     * buildLocomotorCells returns adjacency-only, not a blind .get()).
+     * <p>We register the composite, then {@code dissolve()} it (registry-only; the grid
+     * occupant stays), so the LOCOMOTOR member is still on the grid with compositeId "c1"
+     * while {@code getComposite("c1")} returns empty — directly hitting the guard rather
+     * than verifying it by inspection.
      */
     @Test
-    void missingCompositeFallback_locomotorWithSingleMemberComposite_noException() {
+    void missingCompositeFallback_dissolvedComposite_returnsAdjacencyOnly() {
         var loco = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.LOCOMOTOR, 50, 100);
         worldGrid.setEntity(5, 5, loco);
         compositeRegistry.register("c1", List.of("m1"),
                 Map.of("m1", new Position(5, 5)), 100, 200);
         botRegistry.register("s1", "m1", new Position(5, 5));
+        // Seed all 8 Moore neighbours so adjacency emits cells — keeps the assertion
+        // non-vacuous (a trivially-empty frame would pass <= 8 regardless).
+        worldGrid.setEntity(4, 4, Nutrient.spawn("n1"));
+        worldGrid.setEntity(5, 4, Nutrient.spawn("n2"));
+        worldGrid.setEntity(6, 4, Nutrient.spawn("n3"));
+        worldGrid.setEntity(4, 5, Nutrient.spawn("n4"));
+        worldGrid.setEntity(6, 5, Nutrient.spawn("n5"));
+        worldGrid.setEntity(4, 6, Nutrient.spawn("n6"));
+        worldGrid.setEntity(5, 6, Nutrient.spawn("n7"));
+        worldGrid.setEntity(6, 6, Nutrient.spawn("n8"));
+
+        // Force the absent-composite branch: registry entry gone, grid occupant remains.
+        compositeRegistry.dissolve("c1");
+        assertThat(compositeRegistry.getComposite("c1"))
+                .as("precondition: composite must be absent to exercise the isEmpty() guard")
+                .isEmpty();
 
         var bot = botRegistry.getBySession("s1").orElseThrow();
         Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
         assertThat(frame).isNotNull();
+        // Adjacency-only: the 8 seeded neighbours, no SENSOR union (composite is gone).
         assertThat(frame.cells().size())
-                .as("MISSING-COMPOSITE FALLBACK: single-member LOCOMOTOR gets adjacency-only (<=8)")
-                .isLessThanOrEqualTo(8);
+                .as("MISSING-COMPOSITE FALLBACK: dissolved-composite LOCOMOTOR gets adjacency-only (== 8)")
+                .isEqualTo(8);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

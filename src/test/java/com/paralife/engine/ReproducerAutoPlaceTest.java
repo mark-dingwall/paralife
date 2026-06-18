@@ -245,11 +245,16 @@ class ReproducerAutoPlaceTest {
      * Tie-break: when two candidates are equidistant, the (dx²+dy², dy, dx) raw
      * sort picks the cell with the lower-dy (then lower-dx) offset.
      *
-     * <p>REPRODUCER at (6,6). Block all distance-1 cells. At distance-√2, two diagonal
-     * candidates remain equidistant: offset (-1,-1) → (5,5) and offset (+1,-1) → (7,5).
-     * Both have dy=-1 so the next key is dx: -1 < +1, so (5,5) wins (dx=-1).
-     * Block (7,5) explicitly so exactly one survives; separately assert (7,5) would
-     * have the worse key — the test documents the tie-break ordering.
+     * <p>REPRODUCER at (6,6). Block all distance-1 cells and two of the four distance-√2
+     * diagonals, leaving exactly TWO equidistant candidates free that differ in BOTH
+     * coordinates so the (dy,dx) ordering can be distinguished from (dx,dy):
+     * <ul>
+     *   <li>offset (+1,-1) → (7,5): dy=-1, dx=+1</li>
+     *   <li>offset (-1,+1) → (5,7): dy=+1, dx=-1</li>
+     * </ul>
+     * The correct (dy,dx) comparator picks (7,5) (dy=-1 &lt; +1). A buggy (dx,dy) comparator
+     * would pick (5,7) (dx=-1 &lt; +1). Asserting (7,5) occupied AND (5,7) empty catches the
+     * wrong ordering — which the prior single-survivor version could not.
      */
     @Test
     void tieBreak_lowerDyThenLowerDx_wins() {
@@ -265,37 +270,37 @@ class ReproducerAutoPlaceTest {
         occupy(7, 6); // (+1,0)
         occupy(5, 6); // (-1,0)
 
-        // At distance √2: (+1,+1),(+1,-1),(-1,+1),(-1,-1)
-        // Keep (-1,-1) → (5,5): dy=-1, dx=-1
-        // Block the others to isolate the winner
-        occupy(7, 7); // (+1,+1) dy=+1
-        occupy(7, 5); // (+1,-1) dy=-1, dx=+1 — worse than dx=-1
-        occupy(5, 7); // (-1,+1) dy=+1
+        // At distance √2, block two diagonals; leave (7,5) and (5,7) free (differ in both coords).
+        occupy(7, 7); // (+1,+1)
+        occupy(5, 5); // (-1,-1)
 
         resolver.resolveActions(1, Map.of("s-tie", reproduce('5')));
 
-        // Winner: offset (-1,-1) → (5,5) — lower dx=-1 vs +1 for same dy=-1
-        assertThat(worldGrid.getCell(5, 5).occupant())
-                .as("tie-break: (dx=-1,dy=-1) beats (dx=+1,dy=-1) by lower dx")
+        // Correct (dy,dx) ordering: (+1,-1)→(7,5) wins (dy=-1 < +1). A (dx,dy) impl would pick (5,7).
+        assertThat(worldGrid.getCell(7, 5).occupant())
+                .as("tie-break: (dy=-1,dx=+1)→(7,5) beats (dy=+1,dx=-1)→(5,7) by lower dy first")
                 .isInstanceOf(Particle.class);
+        assertThat(worldGrid.getCell(5, 7).occupant())
+                .as("(5,7) must remain empty — a (dx,dy) ordering bug would place the bud here")
+                .isNull();
     }
 
     /**
      * Edge-adjacent determinism + spawn-wrap: a REPRODUCER placed near the torus
      * seam so that the nearest free cell is on the other side of the wrap.
      *
-     * <p>REPRODUCER at (1,1). Block the immediately adjacent inner cells so the
-     * nearest free cell is reached via {@code Math.floorMod} wrap (e.g. at x=0 or y=0,
-     * which wraps to the far edge). Two identical runs produce the same bud cell.
-     *
-     * <p>NOTE: this test asserts spawn-wrap correctness and dual-run determinism. It
-     * does NOT claim that a raw sort key differs from a wrapped sort key — at
-     * maxRadius=5, dim=16 they are provably identical (all offsets ≤ 5 < 8 = dim/2).
+     * <p>REPRODUCER at (0,0) — on the seam. Block the two non-wrapping distance-1
+     * neighbours (1,0) and (0,1). The two remaining distance-1 candidates are reached
+     * only via {@code Math.floorMod}: offset (-1,0)→(15,0) and offset (0,-1)→(0,15).
+     * The (dy,dx) comparator picks (0,15) (dy=-1 &lt; 0). We assert the bud lands at that
+     * exact wrapped cell — a subtraction-based impl (origin.y-1 = -1, no floorMod) would
+     * produce an invalid/different cell, so this genuinely pins floorMod correctness
+     * rather than only dual-run determinism.
      */
     @Test
     void edgeAdjacent_spawnWrap_deterministic() {
-        // REPRODUCER at (1,1) — within 5 cells of the (0,y) and (x,0) seams
-        Position reproducerPos = new Position(1, 1);
+        // REPRODUCER at (0,0) — the corner seam, so nearest free cells wrap.
+        Position reproducerPos = new Position(0, 0);
 
         // Run 1
         WorldGrid grid1 = new WorldGrid(new GridConfig(DIM, DIM));
@@ -310,24 +315,25 @@ class ReproducerAutoPlaceTest {
 
         CompositeMember cm1 = new CompositeMember("ecm1", "ecomp1", ParticleType.SPORE,
                 Role.REPRODUCER, 50, 100);
-        grid1.setEntity(1, 1, cm1);
+        grid1.setEntity(0, 0, cm1);
         bots1.register("es1", "ecm1", reproducerPos);
         creg1.register("ecomp1", List.of("ecm1"), Map.of("ecm1", reproducerPos),
                 ActionResolver.REPRODUCE_ENERGY_COST + 10, 200);
 
-        // Block the nearest inner cells (offsets (+1,0) and (0,+1))
-        grid1.setEntity(2, 1, new Particle("eb1", ParticleType.CATALYST, 10, 40));
-        grid1.setEntity(1, 2, new Particle("eb2", ParticleType.CATALYST, 10, 40));
-        // Leave (0,1) = offset(-1,0) free; floorMod(-1,16)=15 — wraps to x=15
+        // Block the two non-wrapping distance-1 cells: (1,0)=offset(+1,0) and (0,1)=offset(0,+1).
+        grid1.setEntity(1, 0, new Particle("eb1", ParticleType.CATALYST, 10, 40));
+        grid1.setEntity(0, 1, new Particle("eb2", ParticleType.CATALYST, 10, 40));
+        // Remaining distance-1 candidates both wrap: (-1,0)→(15,0) and (0,-1)→(0,15).
+        // (dy,dx) ordering picks (0,15) (dy=-1 < 0).
 
         ActionResolver res1 = new ActionResolver(grid1, bots1, sess1, config,
                 creg1, compositeConfig, legacyProfile());
         res1.resolveActions(1, Map.of("es1", reproduce('5')));
 
         Position budRun1 = findBudPosition(grid1, reproducerPos);
-        assertThat(budRun1).as("edge-adjacent bud must spawn somewhere in run 1").isNotNull();
-        // Confirm floorMod wrap: one valid candidate is at x=0 or y=0 (inner grid boundary)
-        // The exact cell depends on offset ordering; just assert determinism below.
+        assertThat(budRun1)
+                .as("spawn-wrap: bud must land at the floorMod-wrapped cell (0,15)")
+                .isEqualTo(new Position(0, 15));
 
         // Run 2: identical
         WorldGrid grid2 = new WorldGrid(new GridConfig(DIM, DIM));
@@ -342,23 +348,25 @@ class ReproducerAutoPlaceTest {
 
         CompositeMember cm2 = new CompositeMember("ecm2", "ecomp2", ParticleType.SPORE,
                 Role.REPRODUCER, 50, 100);
-        grid2.setEntity(1, 1, cm2);
+        grid2.setEntity(0, 0, cm2);
         bots2.register("es2", "ecm2", reproducerPos);
         creg2.register("ecomp2", List.of("ecm2"), Map.of("ecm2", reproducerPos),
                 ActionResolver.REPRODUCE_ENERGY_COST + 10, 200);
 
-        grid2.setEntity(2, 1, new Particle("eb3", ParticleType.CATALYST, 10, 40));
-        grid2.setEntity(1, 2, new Particle("eb4", ParticleType.CATALYST, 10, 40));
+        grid2.setEntity(1, 0, new Particle("eb3", ParticleType.CATALYST, 10, 40));
+        grid2.setEntity(0, 1, new Particle("eb4", ParticleType.CATALYST, 10, 40));
 
         ActionResolver res2 = new ActionResolver(grid2, bots2, sess2, config,
                 creg2, compositeConfig, legacyProfile());
         res2.resolveActions(1, Map.of("es2", reproduce('5')));
 
         Position budRun2 = findBudPosition(grid2, reproducerPos);
-        assertThat(budRun2).as("edge-adjacent bud must spawn somewhere in run 2").isNotNull();
+        assertThat(budRun2)
+                .as("spawn-wrap: run 2 must also land at (0,15)")
+                .isEqualTo(new Position(0, 15));
 
         assertThat(budRun1)
-                .as("edge-adjacent dual-run: identical setup must produce same bud cell (spawn-wrap determinism)")
+                .as("edge-adjacent dual-run: identical setup must produce same wrapped bud cell")
                 .isEqualTo(budRun2);
     }
 

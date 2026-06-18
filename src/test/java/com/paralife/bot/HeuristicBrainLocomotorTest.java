@@ -100,22 +100,25 @@ class HeuristicBrainLocomotorTest {
     }
 
     // ================================================================
-    // (1) SENSOR-FOOD-STEER — LOCOMOTOR top rank points toward SENSOR-only-visible nutrient.
-    //     Coord.Relative(0,-2) is NORTH of LOCOMOTOR — outside radius-1 adjacency (dist=2),
-    //     inside a SENSOR 5x5 window. Expected top rank: '8' (north).
+    // (1) SENSOR-FOOD-STEER — LOCOMOTOR top rank points toward SENSOR-ONLY-visible nutrient.
+    //     Coord.Relative(0,-4) is NORTH of LOCOMOTOR at Chebyshev dist=4. The frame's
+    //     sensorRadius=2 (5x5 native window covers ±2), so dist=4 is OUTSIDE the LOCOMOTOR's
+    //     own field entirely — the cell can ONLY reach the frame via SENSOR stitching.
+    //     A regression that dropped SENSOR-derived cells would lose this nutrient and the
+    //     top rank would no longer be '8'. Expected top rank: '8' (north).
     // ================================================================
 
     @Test
     void sensorFoodSteer_topRankTowardNorthNutrient() {
-        // SENSOR-visible nutrient at (0,-2) — north, dist=2 (outside own 8-cell adjacency).
-        Frame.TickFrame frame = locomotorFrame(List.of(nutrientAt(0, -2)));
+        // SENSOR-ONLY nutrient at (0,-4): dist=4 > native radius 2 → reachable only via stitched union.
+        Frame.TickFrame frame = locomotorFrame(List.of(nutrientAt(0, -4)));
         Frame.ActionFrame action = BRAIN.decide(frame, locomotorState(), new Random(42));
 
         assertCodecValid(action);
         String ballot = action.arg().orElseThrow();
-        // Top rank must be '8' (north), the direction toward (0,-2).
+        // Top rank must be '8' (north), the direction toward (0,-4).
         assertThat(ballot.charAt(0))
-                .as("top rank must point north ('8') toward SENSOR-visible nutrient at (0,-2)")
+                .as("top rank must point north ('8') toward SENSOR-only-visible nutrient at (0,-4)")
                 .isEqualTo('8');
     }
 
