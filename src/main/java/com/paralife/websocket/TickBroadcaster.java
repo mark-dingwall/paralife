@@ -664,14 +664,17 @@ public class TickBroadcaster {
      * (SENSOR union) entries by deriving a canonical (dy,dx) from each — same derivation used
      * for the dedup key above.
      */
-    private List<CellEntry> sortAndClamp(List<CellEntry> cells) {
+    // Package-private (not private) so the clamp/truncation path — unreachable on the
+    // perception test's 16x16 grid — can be exercised directly by a unit test.
+    List<CellEntry> sortAndClamp(List<CellEntry> cells) {
         cells.sort(Comparator
                 .comparingInt((CellEntry e) -> coordToDy(e.coord()))
                 .thenComparingInt(e -> coordToDx(e.coord())));
         if (cells.size() > PerceptionCodec.MAX_S_ENTRIES) {
             log.warn("buildLocomotorCells: union exceeds MAX_S_ENTRIES={}; truncating {} cells",
                     PerceptionCodec.MAX_S_ENTRIES, cells.size() - PerceptionCodec.MAX_S_ENTRIES);
-            return cells.subList(0, PerceptionCodec.MAX_S_ENTRIES);
+            // Defensive copy — subList is a view backed by the caller's list (immutable-frame convention).
+            return List.copyOf(cells.subList(0, PerceptionCodec.MAX_S_ENTRIES));
         }
         return cells;
     }
@@ -1088,7 +1091,12 @@ public class TickBroadcaster {
             Position mp = state.getPositionForMember(memberId);
             if (mp == null) continue;
             Cell memberCell = worldGrid.getCell(mp.x(), mp.y());
-            if (!(memberCell.occupant() instanceof CompositeMember mem)) continue;
+            // Cross-composite guard — mirrors the s-block SENSOR-union guard. A stale
+            // registry position now holding a foreign composite's member must not be
+            // emitted in this composite's roster (zero-trust; relies on more than the
+            // single-threaded tick ordering invariant).
+            if (!(memberCell.occupant() instanceof CompositeMember mem)
+                    || !mem.compositeId().equals(cm.compositeId())) continue;
             Position rel = relativeTo(botPos, mp);
             // Clamp to [-63, 63] before coord creation (Coord.Relative enforces).
             int clampedDx = Math.max(-63, Math.min(63, rel.x()));
