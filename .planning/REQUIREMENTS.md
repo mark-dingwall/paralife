@@ -29,8 +29,8 @@ Prove the architecture handles large-scale externally driven load without losing
 
 ### Transport & Runtime Efficiency
 
-- [ ] **SCALE-08**: High bot-count runs reduce socket or process overhead through connection multiplexing or an equivalent transport-level scale strategy.
-- [ ] **SCALE-09**: Runtime tuning for virtual threads and the compact protocol is measured and documented from real benchmark profiles rather than guesswork.
+- [x] **SCALE-08**: High bot-count runs reduce socket or process overhead through connection multiplexing or an equivalent transport-level scale strategy.
+- [x] **SCALE-09**: Runtime tuning for virtual threads and the compact protocol is measured and documented from real benchmark profiles rather than guesswork.
 
 ### Benchmark Gate
 
@@ -60,8 +60,8 @@ Prove the architecture handles large-scale externally driven load without losing
 | SCALE-05 | Phase 18 | Pending |
 | SCALE-06 | Phase 19 | Complete |
 | SCALE-07 | Phase 19 | Complete |
-| SCALE-08 | Phase 20 | Pending |
-| SCALE-09 | Phase 20 | Pending |
+| SCALE-08 | Phase 20 | Complete |
+| SCALE-09 | Phase 20 | Complete |
 | SCALE-10 | Phase 21 | Pending |
 
 **Coverage:**
