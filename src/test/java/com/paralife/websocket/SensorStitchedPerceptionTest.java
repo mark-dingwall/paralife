@@ -10,11 +10,13 @@ import com.paralife.engine.AlarmQueue;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.BuffRegistry;
 import com.paralife.engine.CompositeRegistry;
+import com.paralife.engine.Direction;
 import com.paralife.engine.EnvironmentEngine;
 import com.paralife.engine.SimulationConfig;
 import com.paralife.metrics.WebSocketMetrics;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Nutrient;
+import com.paralife.world.Entity.Rock;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Entity.Role;
 import com.paralife.world.GridConfig;
@@ -475,7 +477,8 @@ class SensorStitchedPerceptionTest {
         worldGrid.setEntity(5, 5, loco);
         worldGrid.setEntity(5, 4, sensor); // SENSOR 1 north of LOCOMOTOR
 
-        // Cell (6,4): in LOCO adjacency as Numpad '9' AND in SENSOR's 5x5 as Relative(+1,0) re-expressed
+        // Cell (6,4): LOCO-relative (+1,-1) = Numpad '9' (adjacency); also in SENSOR's 5x5
+        // (SENSOR-relative (+1,0)), which re-expresses to the same LOCO-relative (+1,-1).
         worldGrid.setEntity(6, 4, Nutrient.spawn("n"));
 
         compositeRegistry.register("c1", List.of("m1", "m2"),
@@ -701,7 +704,86 @@ class SensorStitchedPerceptionTest {
                 .isEqualTo(8);
     }
 
+    // ── RLE ROCK-RUN STITCH (cell-granularity dedup) ──────────────────────────
+
+    /**
+     * A SENSOR-only rock that is part of a rock RUN whose starter coincides with a
+     * LOCOMOTOR adjacency cell must still appear in the LOCOMOTOR frame.
+     *
+     * <p>Regression for the run-starter dedup defect: the union deduped whole
+     * {@link KindData.RockRun} entries by their starter coord only, so a SENSOR run
+     * colliding on its starter was dropped wholesale — taking its SENSOR-only tail
+     * cells with it. The fix dedups at CELL granularity then RLE-encodes once.
+     *
+     * <p>LOCOMOTOR (5,5), SENSOR (8,5). Rocks at (6,5) [LOCO-adjacent, (+1,0)] and
+     * (7,5) [SENSOR-only, (+2,0)]. The SENSOR sees both as one east-run starting at
+     * (6,5); (6,5) is also a LOCO adjacency cell, so the run starter collides. The
+     * tail (7,5)→(+2,0) must remain visible, and the shared cell must appear once.
+     */
+    @Test
+    void rockRunStitch_sensorOnlyRunTail_notDroppedByStarterCollision() {
+        var loco = new CompositeMember("m1", "c1", ParticleType.CATALYST, Role.LOCOMOTOR, 50, 100);
+        var sensor = new CompositeMember("m2", "c1", ParticleType.SPORE, Role.SENSOR, 50, 100);
+        worldGrid.setEntity(5, 5, loco);
+        worldGrid.setEntity(8, 5, sensor);
+        worldGrid.setEntity(6, 5, new Rock("r1")); // LOCO-relative (+1,0): adjacency AND SENSOR
+        worldGrid.setEntity(7, 5, new Rock("r2")); // LOCO-relative (+2,0): SENSOR-only
+
+        compositeRegistry.register("c1", List.of("m1", "m2"),
+                Map.of("m1", new Position(5, 5), "m2", new Position(8, 5)), 100, 200);
+        botRegistry.register("s1", "m1", new Position(5, 5));
+
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
+
+        List<int[]> rocks = coveredRockCells(frame);
+
+        boolean tailVisible = rocks.stream().anyMatch(c -> c[0] == 2 && c[1] == 0);
+        assertThat(tailVisible)
+                .as("RLE-STITCH: SENSOR-only rock-run tail (+2,0) must be visible in LOCOMOTOR frame")
+                .isTrue();
+
+        long sharedCount = rocks.stream().filter(c -> c[0] == 1 && c[1] == 0).count();
+        assertThat(sharedCount)
+                .as("RLE-STITCH: shared rock (+1,0) covered exactly once (no duplicate-on-wire)")
+                .isEqualTo(1);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /** Expand every rock cell (solo + run) in the frame into LOCOMOTOR-relative (dx,dy) pairs. */
+    private static List<int[]> coveredRockCells(Frame.TickFrame frame) {
+        List<int[]> out = new ArrayList<>();
+        for (CellEntry e : frame.cells()) {
+            if (e.kind().isEmpty()) continue;
+            KindData kd = e.kind().get();
+            int[] base = coordToDxDy(e.coord());
+            if (kd instanceof KindData.RockSolo) {
+                out.add(base);
+            } else if (kd instanceof KindData.RockRun run) {
+                out.add(base);
+                Direction dir = Direction.fromNumpad(run.direction());
+                int cx = base[0], cy = base[1];
+                for (int i = 0; i < run.additionalCount(); i++) {
+                    cx += dir.dx();
+                    cy += dir.dy();
+                    out.add(new int[] { cx, cy });
+                }
+            }
+        }
+        return out;
+    }
+
+    private static int[] coordToDxDy(Coord coord) {
+        return switch (coord) {
+            case Coord.Relative r -> new int[] { r.dx(), r.dy() };
+            case Coord.Numpad n -> {
+                Direction d = Direction.fromNumpad(n.digit());
+                yield new int[] { d.dx(), d.dy() };
+            }
+            case Coord.Absolute a -> new int[] { 0, 0 };
+        };
+    }
 
     private static boolean isZeroZero(Coord coord) {
         return switch (coord) {

@@ -41,11 +41,13 @@ import org.springframework.web.socket.WebSocketSession;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -584,24 +586,21 @@ public class TickBroadcaster {
         int gridW = worldGrid.getWidth();
         int gridH = worldGrid.getHeight();
 
-        // Start with the LOCOMOTOR's own radius-1 adjacency (8-cell Moore ring).
-        // D-04: isCompositeMember=true so OVERCROWDED bit is always 0.
-        List<CellEntry> adjacency = buildCellEntries(locoPos, 1, /*isCompositeMember=*/ true);
+        // Dedup the vision union at CELL granularity (not RLE-entry granularity): map keyed by
+        // canonical LOCOMOTOR-relative (dx,dy) as a Coord.Relative record (value-equal). RLE
+        // encoding happens once, AFTER the union is complete (see rleEncodeUnion) — encoding
+        // earlier would let a multi-cell RockRun be deduped by its starter alone, silently
+        // dropping or duplicating its SENSOR-only tail cells.
+        LinkedHashMap<Coord.Relative, CellData> union = new LinkedHashMap<>();
 
-        // Dedup map keyed by canonical (dx,dy) as a Coord.Relative record (value-equal).
-        // Adjacency entries' effective (dx,dy) are derived from their Coord.Numpad digit for
-        // keying so that a Numpad and a Relative at the same absolute position collide correctly.
-        // Values may stay as their original coord type (Numpad for adjacency — compact on wire).
-        LinkedHashMap<Coord.Relative, CellEntry> union = new LinkedHashMap<>();
-        for (CellEntry e : adjacency) {
-            Coord.Relative key = numpadToRelativeKey(e.coord(), locoPos, gridW, gridH);
-            union.putIfAbsent(key, e);
-        }
+        // LOCOMOTOR's own radius-1 adjacency (8-cell Moore ring).
+        // D-04: isCompositeMember=true so OVERCROWDED bit is always 0.
+        gatherLocoRelativeCells(locoPos, 1, locoPos, gridW, gridH, union);
 
         // Guard: if composite is absent, return adjacency-only without crashing (T-20.1-11).
         Optional<CompositeRegistry.CompositeState> coOpt = compositeRegistry.getComposite(compositeId);
         if (coOpt.isEmpty()) {
-            return sortAndClamp(new ArrayList<>(union.values()));
+            return sortAndClamp(rleEncodeUnion(union));
         }
         CompositeRegistry.CompositeState co = coOpt.get();
 
@@ -616,43 +615,122 @@ public class TickBroadcaster {
             if (mem.role() != Role.SENSOR) continue;
             if (!mem.compositeId().equals(compositeId)) continue;
 
-            // Build SENSOR's 5x5 window. D-04: isCompositeMember=true.
-            List<CellEntry> sensorEntries = buildCellEntries(sensorPos, PERCEPTION_RADIUS, /*isCompositeMember=*/ true);
-
-            for (CellEntry entry : sensorEntries) {
-                // Re-express the SENSOR-relative coord to a LOCOMOTOR-relative (dx,dy)
-                // via the DIRECT path: compute cell's absolute position, then relativeTo(loco, cellAbs).
-                int[] sensorOffset = sensorCoordToDxDy(entry.coord());
-                if (sensorOffset == null) continue; // Absolute coord — skip (should not occur)
-
-                int cellAbsX = Math.floorMod(sensorPos.x() + sensorOffset[0], gridW);
-                int cellAbsY = Math.floorMod(sensorPos.y() + sensorOffset[1], gridH);
-                Position cellAbsPos = new Position(cellAbsX, cellAbsY);
-
-                // DIRECT relativeTo — NOT offset-composition (cross-seam invariant).
-                Position locoRel = relativeTo(locoPos, cellAbsPos);
-                int rawDx = locoRel.x();
-                int rawDy = locoRel.y();
-
-                // Self-cell filter: (0,0) would be the LOCOMOTOR's own cell.
-                if (rawDx == 0 && rawDy == 0) continue;
-
-                // Clamp to ±63 SILENTLY (same as buildRosterIfChanged lines 877-878).
-                int wrappedDx = Math.max(-63, Math.min(63, rawDx));
-                int wrappedDy = Math.max(-63, Math.min(63, rawDy));
-
-                Coord.Relative key = new Coord.Relative(wrappedDx, wrappedDy);
-                // Union VALUE is a NEW CellEntry with re-expressed coord; copies presence/kind/entityState/envState verbatim.
-                // Do NOT reuse the SENSOR CellEntry — its coord is SENSOR-relative (broken frames).
-                // Do NOT drop kind/entityState — Plan 03 classifies SENSOR-union cells by kind.
-                CellEntry reExpressed = new CellEntry(
-                        new Coord.Relative(wrappedDx, wrappedDy),
-                        entry.presence(), entry.kind(), entry.entityState(), entry.envState());
-                union.putIfAbsent(key, reExpressed);
-            }
+            // Stitch the SENSOR's 5x5 window. D-04: isCompositeMember=true.
+            gatherLocoRelativeCells(sensorPos, PERCEPTION_RADIUS, locoPos, gridW, gridH, union);
         }
 
-        return sortAndClamp(new ArrayList<>(union.values()));
+        return sortAndClamp(rleEncodeUnion(union));
+    }
+
+    /**
+     * Gather non-empty cells in {@code centerPos}'s radius window, re-expressed to
+     * LOCOMOTOR-relative (dx,dy), into {@code union} (cell-granularity, first-writer-wins).
+     *
+     * <p>Re-expression uses the DIRECT path — compute the cell's absolute position then
+     * {@link #relativeTo(Position, Position) relativeTo(locoPos, cellAbs)} — not offset
+     * composition, which is wrong across the torus seam. The LOCOMOTOR's own cell
+     * (re-expressed (0,0)) is filtered. Coords are clamped to ±63 (wire limit), matching
+     * {@link #buildRosterIfChanged}.
+     */
+    private void gatherLocoRelativeCells(Position centerPos, int radius, Position locoPos,
+                                          int gridW, int gridH,
+                                          LinkedHashMap<Coord.Relative, CellData> union) {
+        for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                if (dx == 0 && dy == 0) continue; // center's own cell
+                int cx = Math.floorMod(centerPos.x() + dx, gridW);
+                int cy = Math.floorMod(centerPos.y() + dy, gridH);
+                Position cellPos = new Position(cx, cy);
+                Entity occ = worldGrid.getCell(cx, cy).occupant();
+                Character kind = kindCodeFor(occ);
+                int envState = envStateFor(cellPos, centerPos, radius, /*isCompositeMember=*/ true) & 0xFF;
+                // SCHEMA §8.1: empty cells (no kind, no env) are NOT emitted.
+                if (kind == null && envState == 0) continue;
+
+                Position locoRel = relativeTo(locoPos, cellPos);
+                int rawDx = locoRel.x();
+                int rawDy = locoRel.y();
+                if (rawDx == 0 && rawDy == 0) continue; // LOCOMOTOR's own cell
+
+                int wrappedDx = Math.max(-63, Math.min(63, rawDx));
+                int wrappedDy = Math.max(-63, Math.min(63, rawDy));
+                Coord.Relative key = new Coord.Relative(wrappedDx, wrappedDy);
+                union.putIfAbsent(key, new CellData(
+                        wrappedDx, wrappedDy, kind, entityStateOf(occ), envState, occ));
+            }
+        }
+    }
+
+    /**
+     * RLE-encode the completed LOCOMOTOR-relative cell union into wire entries. Rock cells are
+     * collapsed into {@link KindData.RockRun} starters (same numpad-step table as
+     * {@link #buildCellEntries}); all other cells emit solo. Emission is in stable (dy,dx) order
+     * so output is deterministic. Runs may now span the adjacency∪SENSOR boundary.
+     */
+    private List<CellEntry> rleEncodeUnion(LinkedHashMap<Coord.Relative, CellData> union) {
+        List<Coord.Relative> order = new ArrayList<>(union.keySet());
+        order.sort(Comparator.comparingInt(Coord.Relative::dy).thenComparingInt(Coord.Relative::dx));
+
+        List<CellEntry> out = new ArrayList<>();
+        Set<Coord.Relative> consumed = new HashSet<>();
+        for (Coord.Relative pos : order) {
+            if (consumed.contains(pos)) continue;
+            CellData d = union.get(pos);
+
+            if (d.kind() != null && d.kind() == 'R') {
+                int bestDir = 0;
+                int bestLen = 0;
+                for (int[] step : RLE_STEPS) {
+                    int len = measureRockRunUnion(union, consumed, pos, step[0], step[1], d.envState());
+                    if (len > bestLen) {
+                        bestLen = len;
+                        bestDir = step[2];
+                    }
+                }
+                if (bestLen >= 1 && bestDir != 0) {
+                    consumed.add(pos);
+                    int[] step = stepForDir(bestDir);
+                    int cx = pos.dx();
+                    int cy = pos.dy();
+                    for (int i = 0; i < bestLen; i++) {
+                        cx += step[0];
+                        cy += step[1];
+                        consumed.add(new Coord.Relative(cx, cy));
+                    }
+                    out.add(buildRockEntry(d, (char) ('0' + bestDir), bestLen));
+                    continue;
+                }
+            }
+
+            consumed.add(pos);
+            out.add(buildCellEntry(d));
+        }
+        return out;
+    }
+
+    /**
+     * Walk the union from {@code start} in (stepX,stepY), counting additional same-env rocks not
+     * yet consumed. Runs cap at 63 (wire limit per {@link KindData.RockRun}). Map analogue of
+     * {@link #measureRockRun} — neighbour absence (off-window or empty) terminates the run.
+     */
+    private static int measureRockRunUnion(LinkedHashMap<Coord.Relative, CellData> union,
+                                           Set<Coord.Relative> consumed, Coord.Relative start,
+                                           int stepX, int stepY, int starterEnvState) {
+        int count = 0;
+        int sx = start.dx() + stepX;
+        int sy = start.dy() + stepY;
+        while (count < 63) {
+            Coord.Relative key = new Coord.Relative(sx, sy);
+            CellData n = union.get(key);
+            if (n == null) break;                          // off-window or empty
+            if (consumed.contains(key)) break;
+            if (n.kind() == null || n.kind() != 'R') break; // non-rock breaks
+            if (n.envState() != starterEnvState) break;     // env differs — split
+            count++;
+            sx += stepX;
+            sy += stepY;
+        }
+        return count;
     }
 
     /**
@@ -680,23 +758,6 @@ public class TickBroadcaster {
     }
 
     /**
-     * Convert a {@link Coord} in a SENSOR CellEntry to its (dx,dy) offset relative to the SENSOR.
-     *
-     * <p>Supports Numpad (radius-1 directional) and Relative (radius>=2) — the two types
-     * {@link #buildCellEntries} emits. Returns {@code null} for Absolute (should not occur).
-     */
-    private static int[] sensorCoordToDxDy(Coord coord) {
-        return switch (coord) {
-            case Coord.Numpad n -> {
-                Direction d = Direction.fromNumpad(n.digit());
-                yield d == null ? null : new int[] { d.dx(), d.dy() };
-            }
-            case Coord.Relative r -> new int[] { r.dx(), r.dy() };
-            case Coord.Absolute ignored -> null;
-        };
-    }
-
-    /**
      * Convert a Coord to its canonical dy (for sort key). Numpad uses Direction; Relative uses dy().
      * Absolute is not present in LOCOMOTOR union (returns 0 as fallback).
      */
@@ -721,20 +782,6 @@ public class TickBroadcaster {
             case Coord.Relative r -> r.dx();
             case Coord.Absolute a -> 0;
         };
-    }
-
-    /**
-     * Convert a CellEntry's coord to a {@link Coord.Relative} dedup key for the LOCOMOTOR union.
-     *
-     * <p>For Numpad entries (adjacency), the key is derived from the numpad (dx,dy) so that
-     * a Numpad('9') and a Relative(+1,-1) at the same absolute cell produce the SAME key and dedup.
-     * Without this canonicalization a Numpad and a Relative for the same cell would hash differently
-     * and the cell would appear twice on the wire.
-     */
-    private static Coord.Relative numpadToRelativeKey(Coord coord, Position botPos, int gridW, int gridH) {
-        int[] dxy = sensorCoordToDxDy(coord);
-        if (dxy == null) return new Coord.Relative(0, 0); // fallback — should not occur
-        return new Coord.Relative(dxy[0], dxy[1]);
     }
 
     /** Numpad direction step table: [dx, dy, numpadDigit]. 5 excluded (=self). */
