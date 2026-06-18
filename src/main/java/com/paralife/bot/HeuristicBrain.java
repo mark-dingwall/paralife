@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Random;
@@ -249,13 +250,128 @@ public class HeuristicBrain {
     // ================================================================
 
     private Frame.ActionFrame decideLocomotor(Frame.TickFrame frame, BotState state, Random rng) {
-        // For Phase 15, simplified LOCOMOTOR voting: top-3 numpad digits from
-        // the walk pool shuffled via the injected rng. Real-world direction
-        // scoring would consult composite roster + pool, but authority-lite
-        // voting heuristics are out of scope for this phase.
-        char[] ranks = topThreeDirections(rng);
+        // D-06: rank directions from frame.cells() (own adjacency + SENSOR union) via
+        // the named rankDirections helper. Fill any unfilled ballot slots with the
+        // topThreeDirections fallback (guaranteed-distinct, uses passed-in rng).
+        List<Direction> ranked = rankDirections(frame, state, rng);
+
+        // Build a 3-distinct-char ballot: take up to 3 from ranked, fill remainder
+        // from topThreeDirections(rng) skipping already-chosen directions.
+        LinkedHashSet<Direction> ballot = new LinkedHashSet<>();
+        for (Direction d : ranked) {
+            if (ballot.size() == 3) break;
+            ballot.add(d);
+        }
+        if (ballot.size() < 3) {
+            char[] fallback = topThreeDirections(rng);
+            for (char c : fallback) {
+                if (ballot.size() == 3) break;
+                Direction d = Direction.fromNumpad(c);
+                if (d != null) ballot.add(d);
+            }
+        }
+
+        // Guarantee exactly 3 distinct directions (ballot is a LinkedHashSet — no dups).
+        Direction[] dirs = ballot.toArray(new Direction[0]);
+        char r0 = Direction.numpadOf(dirs[0]);
+        char r1 = Direction.numpadOf(dirs[1]);
+        char r2 = Direction.numpadOf(dirs[2]);
         return new Frame.ActionFrame('V',
-                Optional.of(String.valueOf(ranks[0]) + ranks[1] + ranks[2]));
+                Optional.of(String.valueOf(r0) + r1 + r2));
+    }
+
+    /**
+     * D-06 ranking helper: scans frame.cells() (own adjacency + SENSOR union cells) and
+     * returns a DIRECTION-ONLY preference list in priority order.
+     *
+     * <p>Contract (pinned by HeuristicBrainLocomotorTest):
+     * <ul>
+     *   <li>DIRECTION RANKING ONLY — does NOT emit A/E/M action verbs.</li>
+     *   <li>Reuses decideFullAuthority's classification + distance scoring (copied,
+     *       not extracted, to avoid regressing the full-authority cascade).</li>
+     *   <li>Predators (dist=1, flee gate) → their OPPOSITE direction is the top preference.</li>
+     *   <li>Prey/nutrient → ordered by -distance (nearer = higher priority).</li>
+     *   <li>DISTINCT directions: the direction stream is accumulated into a LinkedHashSet
+     *       (first-seen / highest-priority wins) BEFORE the result is returned, so multiple
+     *       targets sharing a direction produce ONE rank entry — never '888'.</li>
+     *   <li>May return fewer than 3 directions; decideLocomotor fills the remainder.</li>
+     *   <li>NO fresh new Random — uses only the passed-in rng argument.</li>
+     * </ul>
+     *
+     * <p>ACCEPTED TECH DEBT — SENSOR-DISTANCE THREAT AVOIDANCE: the flee gate is
+     * {@code adjacent(predators, 1)}, so a predator visible only via a SENSOR (dist>=2)
+     * is NOT treated as an immediate threat. The LOCOMOTOR will not strongly flee a
+     * predator currently near a far SENSOR. This is accepted for Phase 20.1; the
+     * ROADMAP success criteria require SENSOR-stitched FOV, not threat-via-SENSOR.
+     * See PLAN.md §accepted-tech-debt for full rationale.
+     */
+    private List<Direction> rankDirections(Frame.TickFrame frame, BotState state, Random rng) {
+        ParticleType myType = speciesToParticleType(state.species());
+        ParticleType preyType = myType.prey();
+        ParticleType predatorType = myType.predator();
+
+        boolean lowEnergy = frame.maxEnergy() > 0
+                && frame.energy() < TOXIC_AVOIDANCE_ENERGY_FRACTION * frame.maxEnergy();
+
+        List<DirectionInfo> predators = new ArrayList<>();
+        List<ScoredTarget> prey = new ArrayList<>();
+        List<DirectionInfo> nutrients = new ArrayList<>();
+
+        for (CellEntry cell : frame.cells()) {
+            DirectionInfo di = toDirectionInfo(cell);
+            if (di == null) continue;
+
+            int cellStatus = cell.envState().orElse(0);
+            boolean toxic = (cellStatus & CELL_STATUS_TOXIN_PRESENT) != 0;
+
+            Optional<Character> kindChar = simpleKindCode(cell);
+            if (kindChar.isEmpty()) continue;  // env-only cell: skip (no movement target)
+
+            char kc = kindChar.get();
+            if (kc == 'F') {
+                if (!(lowEnergy && toxic)) {
+                    nutrients.add(di);
+                }
+            } else if (kc == speciesOf(preyType)) {
+                int entityStatus = cell.entityState().orElse(0);
+                int priority = -di.distance;
+                if ((entityStatus & ENTITY_STATUS_STARVING) != 0) priority += 2;
+                if ((entityStatus & ENTITY_STATUS_MUTATING) != 0) priority -= 1;
+                if ((entityStatus & ENTITY_STATUS_BUFFED) != 0) priority -= 1;
+                prey.add(new ScoredTarget(di.direction, di.distance, priority));
+            } else if (kc == speciesOf(predatorType)) {
+                predators.add(di);
+            }
+        }
+
+        // Accumulate preferred directions in priority order, deduplicating via LinkedHashSet.
+        LinkedHashSet<Direction> preferred = new LinkedHashSet<>();
+
+        // Priority 1: flee adjacent predators — prefer OPPOSITE direction of each predator.
+        List<DirectionInfo> adjPredators = adjacent(predators, 1);
+        for (DirectionInfo p : adjPredators) {
+            // Opposite direction: negate the predator's dx/dy.
+            Direction opposite = fromDxDy(-p.direction.dx(), -p.direction.dy());
+            if (opposite != null) preferred.add(opposite);
+        }
+
+        // Priority 2: chase/consume prey ordered by priority (higher = better).
+        List<ScoredTarget> sortedPrey = prey.stream()
+                .sorted((a, b) -> Integer.compare(b.priority, a.priority))
+                .toList();
+        for (ScoredTarget t : sortedPrey) {
+            preferred.add(t.direction);
+        }
+
+        // Priority 3: move toward nutrients ordered by distance (nearer = better).
+        List<DirectionInfo> sortedNutrients = nutrients.stream()
+                .sorted((a, b) -> Integer.compare(a.distance, b.distance))
+                .toList();
+        for (DirectionInfo n : sortedNutrients) {
+            preferred.add(n.direction);
+        }
+
+        return List.copyOf(preferred);
     }
 
     private static char[] topThreeDirections(Random rng) {
