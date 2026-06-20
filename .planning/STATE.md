@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Scale Engineering
 status: ready_to_plan
-stopped_at: Phase 20 complete (8/8) — ready to discuss Phase 20.1
-last_updated: 2026-06-18T05:50:30.666Z
-last_activity: 2026-06-04 -- Plan 20-06 executed (Phase 20 deliverable finalised; gate green incl. TD-22-D flake rerun)
+stopped_at: Phase 20.1 complete (4/4) — ready to discuss Phase 22
+last_updated: 2026-06-18T07:23:16.169Z
+last_activity: 2026-06-18 -- Phase 20.1 execution started
 progress:
   total_phases: 15
   completed_phases: 5
-  total_plans: 35
-  completed_plans: 85
+  total_plans: 39
+  completed_plans: 89
   percent: 33
 ---
 
@@ -21,12 +21,12 @@ progress:
 See: .planning/PROJECT.md
 
 **Core value:** Emergent spatial behaviour from simple local rules — a testbed for evolving entity intelligence.
-**Current focus:** Phase 20.1 — restore composite vision sensor stitched perception
+**Current focus:** Phase 22 — integration test resource leak audit
 
 ## Current Position
 
 Milestone: v3.0 (Scale Engineering / M4) — active
-Phase: 20.1
+Phase: 22
 Plan: Not started
 Status: Ready to plan
 Last activity: 2026-06-18

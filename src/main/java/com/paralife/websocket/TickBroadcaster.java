@@ -15,6 +15,7 @@ import com.paralife.engine.AlarmQueue;
 import com.paralife.engine.BotRegistry;
 import com.paralife.engine.BuffRegistry;
 import com.paralife.engine.CompositeRegistry;
+import com.paralife.engine.Direction;
 import com.paralife.engine.EnvironmentEngine;
 import com.paralife.engine.SimulationConfig;
 import com.paralife.engine.TickEvent;
@@ -39,10 +40,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -52,12 +57,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * compact text encoding → WebSocket TextMessage. Jackson is gone; the
  * {@code Messages.*} record family is NOT imported (plan 15-11 deletes it).
  *
- * <p><b>Authority tiers (SCHEMA §7).</b>
+ * <p><b>Authority tiers (SCHEMA §7) — updated Phase 20.1 D-01.</b>
  * <ul>
- *   <li><b>Full</b> — solo Particle, BondedPair, composite LOCOMOTOR:
- *       sensorRadius = 2 (3 with {@code SENSOR_PLUS_1}).</li>
- *   <li><b>Authority-lite</b> — FEEDER / ATTACKER / REPRODUCER: sensorRadius = 1.</li>
- *   <li><b>Passive</b> — SENSOR / DEFENDER: {@link Frame.TickFrame} minimal form
+ *   <li><b>Full</b> — solo Particle, BondedPair: sensorRadius=2 (3 with {@code SENSOR_PLUS_1}).
+ *       Composite LOCOMOTOR: sensorRadius=1; union cells extend beyond radius-1.</li>
+ *   <li><b>Authority-lite</b> — FEEDER / ATTACKER: sensorRadius=1, own 8-cell adjacency only.</li>
+ *   <li><b>Passive</b> — SENSOR / DEFENDER / REPRODUCER: {@link Frame.TickFrame} minimal form
  *       (sensorRadius = 0 — alive + energy + own events only per §6.3.2).</li>
  * </ul>
  *
@@ -371,7 +376,7 @@ public class TickBroadcaster {
             maxEnergy = 0;
         }
 
-        // Minimal (passive) form: SENSOR / DEFENDER receive alive + energy + own events only.
+        // Minimal (passive) form: SENSOR / DEFENDER / REPRODUCER receive alive + energy + own events only.
         if (tier == AuthorityTier.PASSIVE) {
             List<Event> events = buildEventsForBot(bot, occupant, tickId, tier);
             return new Frame.TickFrame(tickId, curX, curY, energy, maxEnergy,
@@ -383,7 +388,19 @@ public class TickBroadcaster {
         int radius = sensorRadiusFor(tier, bot.entityId());
 
         // s block — vision cells with kind-code mapping + env state bitmasks.
-        List<CellEntry> cells = buildCellEntries(pos, radius);
+        // Phase 20.1 D-01: LOCOMOTOR composite members use buildLocomotorCells (radius-1 adjacency
+        // + SENSOR union). FEEDER/ATTACKER use the generic buildCellEntries(radius=1, isCompositeMember).
+        // Solo/bonded use buildCellEntries(radius=2/3, isCompositeMember=false).
+        boolean isCompositeMember = occupant instanceof CompositeMember;
+        List<CellEntry> cells;
+        if (occupant instanceof CompositeMember cm && cm.role() == Role.LOCOMOTOR) {
+            // D-01: LOCOMOTOR sensorRadius signal = 1 (union cells extend beyond radius-1 but
+            // sensorRadius is a role signal, not a radius bound on emitted cells).
+            radius = 1;
+            cells = buildLocomotorCells(pos, cm.compositeId());
+        } else {
+            cells = buildCellEntries(pos, radius, isCompositeMember);
+        }
 
         // c block — state-change transitions are currently produced by the
         // engine via paths that don't yet surface here; leave empty. Plan 15-08
@@ -414,17 +431,21 @@ public class TickBroadcaster {
     enum AuthorityTier { FULL, AUTHORITY_LITE, PASSIVE }
 
     /**
-     * Determine authority tier from the occupant. Solo Particle / BondedPair /
-     * composite LOCOMOTOR = FULL. FEEDER / ATTACKER / REPRODUCER = AUTHORITY_LITE.
-     * SENSOR / DEFENDER = PASSIVE. Null/dead occupant defaults to FULL so the
-     * bot still receives an alive-check frame with radius 2 (empty vision).
+     * Determine authority tier from the occupant.
+     * <ul>
+     *   <li>Solo Particle / BondedPair / composite LOCOMOTOR = FULL.</li>
+     *   <li>FEEDER / ATTACKER = AUTHORITY_LITE (8-cell adjacency, radius-1).</li>
+     *   <li>SENSOR / DEFENDER / REPRODUCER = PASSIVE (Phase 20.1 D-01: REPRODUCER is passive).</li>
+     *   <li>Null/dead occupant defaults to FULL so the bot still receives an alive-check frame.</li>
+     * </ul>
      */
     private AuthorityTier tierOf(Entity occupant, String botEntityId) {
         if (occupant instanceof CompositeMember cm) {
             return switch (cm.role()) {
                 case LOCOMOTOR -> AuthorityTier.FULL;
-                case FEEDER, ATTACKER, REPRODUCER -> AuthorityTier.AUTHORITY_LITE;
-                case SENSOR, DEFENDER -> AuthorityTier.PASSIVE;
+                case FEEDER, ATTACKER -> AuthorityTier.AUTHORITY_LITE;
+                // Phase 20.1 D-01: REPRODUCER moves to PASSIVE (minimal form, no s block).
+                case SENSOR, DEFENDER, REPRODUCER -> AuthorityTier.PASSIVE;
             };
         }
         // Solo, bonded, or dead/displaced — treat as full.
@@ -454,8 +475,10 @@ public class TickBroadcaster {
      * single {@link KindData.RockRun} starter entry when no env-state varies
      * along the run. When env differs, the run is split (starter entry + later
      * env-only supplement entries per SCHEMA §8.1.4).
+     *
+     * @param isCompositeMember when true, D-04 applies: OVERCROWDED bit 0 is always 0.
      */
-    private List<CellEntry> buildCellEntries(Position botPos, int radius) {
+    private List<CellEntry> buildCellEntries(Position botPos, int radius, boolean isCompositeMember) {
         int gridW = worldGrid.getWidth();
         int gridH = worldGrid.getHeight();
 
@@ -472,7 +495,7 @@ public class TickBroadcaster {
                 Entity occ = cell.occupant();
                 Character kind = kindCodeFor(occ);
                 int entityState = entityStateOf(occ);
-                int envState = envStateFor(cellPos, botPos, radius) & 0xFF;
+                int envState = envStateFor(cellPos, botPos, radius, isCompositeMember) & 0xFF;
                 grid[dx + radius][dy + radius] = new CellData(dx, dy, kind, entityState, envState, occ);
             }
         }
@@ -528,6 +551,237 @@ public class TickBroadcaster {
         }
 
         return out;
+    }
+
+    /**
+     * Phase 20.1 D-01/D-03: build the LOCOMOTOR composite member's cell list.
+     *
+     * <p>Result = own radius-1 adjacency ∪ each SENSOR member's radius-2 (5×5) window,
+     * deduplicated by canonical LOCOMOTOR-relative (dx,dy) key, sorted by (wrappedDy, wrappedDx),
+     * and clamped to {@link PerceptionCodec#MAX_S_ENTRIES}.
+     *
+     * <p><b>Direct-relativeTo re-expression (C2b):</b> each SENSOR CellEntry coord is
+     * re-expressed to a LOCOMOTOR-relative (dx,dy) by computing the cell's ABSOLUTE position
+     * (SENSOR abs pos + SENSOR-relative offset) then calling {@link #relativeTo(Position, Position)
+     * relativeTo(locoPos, cellAbsPos)} directly. Offset-composition ({@code sensorCellRel +
+     * relativeTo(loco, sensor)}) is WRONG across the torus seam — use the direct path only.
+     *
+     * <p><b>Self-cell filter:</b> a SENSOR adjacent to the LOCOMOTOR includes the LOCOMOTOR's
+     * own cell in its 5×5; re-expressed that is (0,0) which is filtered out.
+     *
+     * <p><b>D-04:</b> both buildCellEntries call sites pass {@code isCompositeMember=true}.
+     *
+     * <p><b>Cross-composite guard (T-20.1-10):</b> a SENSOR's grid cell must contain a
+     * {@link CompositeMember} whose {@code role()==SENSOR} AND
+     * {@code compositeId().equals(compositeId)} — a foreign composite's SENSOR is excluded.
+     *
+     * <p><b>Optional guard (T-20.1-11):</b> if the composite is absent from the registry
+     * (momentarily out-of-sync), falls back to the LOCOMOTOR's own adjacency-only without
+     * throwing — no blind {@code .get()}.
+     *
+     * <p>SENSOR_PLUS_1 widening of SENSOR contribution radius is intentionally out of scope
+     * per D-03 (future extension point).
+     */
+    private List<CellEntry> buildLocomotorCells(Position locoPos, String compositeId) {
+        int gridW = worldGrid.getWidth();
+        int gridH = worldGrid.getHeight();
+
+        // Dedup the vision union at CELL granularity (not RLE-entry granularity): map keyed by
+        // canonical LOCOMOTOR-relative (dx,dy) as a Coord.Relative record (value-equal). RLE
+        // encoding happens once, AFTER the union is complete (see rleEncodeUnion) — encoding
+        // earlier would let a multi-cell RockRun be deduped by its starter alone, silently
+        // dropping or duplicating its SENSOR-only tail cells.
+        LinkedHashMap<Coord.Relative, CellData> union = new LinkedHashMap<>();
+
+        // LOCOMOTOR's own radius-1 adjacency (8-cell Moore ring).
+        // D-04: isCompositeMember=true so OVERCROWDED bit is always 0.
+        gatherLocoRelativeCells(locoPos, 1, locoPos, gridW, gridH, union);
+
+        // Guard: if composite is absent, return adjacency-only without crashing (T-20.1-11).
+        Optional<CompositeRegistry.CompositeState> coOpt = compositeRegistry.getComposite(compositeId);
+        if (coOpt.isEmpty()) {
+            return sortAndClamp(rleEncodeUnion(union));
+        }
+        CompositeRegistry.CompositeState co = coOpt.get();
+
+        // Enumerate SENSOR members and stitch their 5x5 windows.
+        for (String memberId : co.getMemberIds()) {
+            Position sensorPos = co.getPositionForMember(memberId);
+            if (sensorPos == null) continue;
+
+            // Occupant-identity + role + cross-composite guard (T-20.1-10).
+            Cell sensorCell = worldGrid.getCell(sensorPos.x(), sensorPos.y());
+            if (!(sensorCell.occupant() instanceof CompositeMember mem)) continue;
+            if (mem.role() != Role.SENSOR) continue;
+            if (!mem.compositeId().equals(compositeId)) continue;
+
+            // Stitch the SENSOR's 5x5 window. D-04: isCompositeMember=true.
+            gatherLocoRelativeCells(sensorPos, PERCEPTION_RADIUS, locoPos, gridW, gridH, union);
+        }
+
+        return sortAndClamp(rleEncodeUnion(union));
+    }
+
+    /**
+     * Gather non-empty cells in {@code centerPos}'s radius window, re-expressed to
+     * LOCOMOTOR-relative (dx,dy), into {@code union} (cell-granularity, first-writer-wins).
+     *
+     * <p>Re-expression uses the DIRECT path — compute the cell's absolute position then
+     * {@link #relativeTo(Position, Position) relativeTo(locoPos, cellAbs)} — not offset
+     * composition, which is wrong across the torus seam. The LOCOMOTOR's own cell
+     * (re-expressed (0,0)) is filtered. Coords are clamped to ±63 (wire limit), matching
+     * {@link #buildRosterIfChanged}.
+     */
+    private void gatherLocoRelativeCells(Position centerPos, int radius, Position locoPos,
+                                          int gridW, int gridH,
+                                          LinkedHashMap<Coord.Relative, CellData> union) {
+        for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                if (dx == 0 && dy == 0) continue; // center's own cell
+                int cx = Math.floorMod(centerPos.x() + dx, gridW);
+                int cy = Math.floorMod(centerPos.y() + dy, gridH);
+                Position cellPos = new Position(cx, cy);
+                Entity occ = worldGrid.getCell(cx, cy).occupant();
+                Character kind = kindCodeFor(occ);
+                int envState = envStateFor(cellPos, centerPos, radius, /*isCompositeMember=*/ true) & 0xFF;
+                // SCHEMA §8.1: empty cells (no kind, no env) are NOT emitted.
+                if (kind == null && envState == 0) continue;
+
+                Position locoRel = relativeTo(locoPos, cellPos);
+                int rawDx = locoRel.x();
+                int rawDy = locoRel.y();
+                if (rawDx == 0 && rawDy == 0) continue; // LOCOMOTOR's own cell
+
+                int wrappedDx = Math.max(-63, Math.min(63, rawDx));
+                int wrappedDy = Math.max(-63, Math.min(63, rawDy));
+                Coord.Relative key = new Coord.Relative(wrappedDx, wrappedDy);
+                union.putIfAbsent(key, new CellData(
+                        wrappedDx, wrappedDy, kind, entityStateOf(occ), envState, occ));
+            }
+        }
+    }
+
+    /**
+     * RLE-encode the completed LOCOMOTOR-relative cell union into wire entries. Rock cells are
+     * collapsed into {@link KindData.RockRun} starters (same numpad-step table as
+     * {@link #buildCellEntries}); all other cells emit solo. Emission is in stable (dy,dx) order
+     * so output is deterministic. Runs may now span the adjacency∪SENSOR boundary.
+     */
+    private List<CellEntry> rleEncodeUnion(LinkedHashMap<Coord.Relative, CellData> union) {
+        List<Coord.Relative> order = new ArrayList<>(union.keySet());
+        order.sort(Comparator.comparingInt(Coord.Relative::dy).thenComparingInt(Coord.Relative::dx));
+
+        List<CellEntry> out = new ArrayList<>();
+        Set<Coord.Relative> consumed = new HashSet<>();
+        for (Coord.Relative pos : order) {
+            if (consumed.contains(pos)) continue;
+            CellData d = union.get(pos);
+
+            if (d.kind() != null && d.kind() == 'R') {
+                int bestDir = 0;
+                int bestLen = 0;
+                for (int[] step : RLE_STEPS) {
+                    int len = measureRockRunUnion(union, consumed, pos, step[0], step[1], d.envState());
+                    if (len > bestLen) {
+                        bestLen = len;
+                        bestDir = step[2];
+                    }
+                }
+                if (bestLen >= 1 && bestDir != 0) {
+                    consumed.add(pos);
+                    int[] step = stepForDir(bestDir);
+                    int cx = pos.dx();
+                    int cy = pos.dy();
+                    for (int i = 0; i < bestLen; i++) {
+                        cx += step[0];
+                        cy += step[1];
+                        consumed.add(new Coord.Relative(cx, cy));
+                    }
+                    out.add(buildRockEntry(d, (char) ('0' + bestDir), bestLen));
+                    continue;
+                }
+            }
+
+            consumed.add(pos);
+            out.add(buildCellEntry(d));
+        }
+        return out;
+    }
+
+    /**
+     * Walk the union from {@code start} in (stepX,stepY), counting additional same-env rocks not
+     * yet consumed. Runs cap at 63 (wire limit per {@link KindData.RockRun}). Map analogue of
+     * {@link #measureRockRun} — neighbour absence (off-window or empty) terminates the run.
+     */
+    private static int measureRockRunUnion(LinkedHashMap<Coord.Relative, CellData> union,
+                                           Set<Coord.Relative> consumed, Coord.Relative start,
+                                           int stepX, int stepY, int starterEnvState) {
+        int count = 0;
+        int sx = start.dx() + stepX;
+        int sy = start.dy() + stepY;
+        while (count < 63) {
+            Coord.Relative key = new Coord.Relative(sx, sy);
+            CellData n = union.get(key);
+            if (n == null) break;                          // off-window or empty
+            if (consumed.contains(key)) break;
+            if (n.kind() == null || n.kind() != 'R') break; // non-rock breaks
+            if (n.envState() != starterEnvState) break;     // env differs — split
+            count++;
+            sx += stepX;
+            sy += stepY;
+        }
+        return count;
+    }
+
+    /**
+     * Sort cells by (wrappedDy, wrappedDx) derived from each cell's coord, then clamp to
+     * {@link PerceptionCodec#MAX_S_ENTRIES}. This is the load-bearing determinism guarantee
+     * (intentionally supersedes prior row-major adjacency order — Plan 04 re-baselines it).
+     *
+     * <p>The sort must handle both {@link Coord.Numpad} (adjacency) and {@link Coord.Relative}
+     * (SENSOR union) entries by deriving a canonical (dy,dx) from each — same derivation used
+     * for the dedup key above.
+     */
+    // Package-private (not private) so the clamp/truncation path — unreachable on the
+    // perception test's 16x16 grid — can be exercised directly by a unit test.
+    List<CellEntry> sortAndClamp(List<CellEntry> cells) {
+        cells.sort(Comparator
+                .comparingInt((CellEntry e) -> coordToDy(e.coord()))
+                .thenComparingInt(e -> coordToDx(e.coord())));
+        if (cells.size() > PerceptionCodec.MAX_S_ENTRIES) {
+            log.warn("buildLocomotorCells: union exceeds MAX_S_ENTRIES={}; truncating {} cells",
+                    PerceptionCodec.MAX_S_ENTRIES, cells.size() - PerceptionCodec.MAX_S_ENTRIES);
+            // Defensive copy — subList is a view backed by the caller's list (immutable-frame convention).
+            return List.copyOf(cells.subList(0, PerceptionCodec.MAX_S_ENTRIES));
+        }
+        return cells;
+    }
+
+    /**
+     * Convert a Coord to its canonical dy (for sort key). Numpad uses Direction; Relative uses dy().
+     * Absolute is not present in LOCOMOTOR union (returns 0 as fallback).
+     */
+    private static int coordToDy(Coord coord) {
+        return switch (coord) {
+            case Coord.Numpad n -> {
+                Direction d = Direction.fromNumpad(n.digit());
+                yield d == null ? 0 : d.dy();
+            }
+            case Coord.Relative r -> r.dy();
+            case Coord.Absolute a -> 0;
+        };
+    }
+
+    /** Canonical dx for sort key. See {@link #coordToDy}. */
+    private static int coordToDx(Coord coord) {
+        return switch (coord) {
+            case Coord.Numpad n -> {
+                Direction d = Direction.fromNumpad(n.digit());
+                yield d == null ? 0 : d.dx();
+            }
+            case Coord.Relative r -> r.dx();
+            case Coord.Absolute a -> 0;
+        };
     }
 
     /** Numpad direction step table: [dx, dy, numpadDigit]. 5 excluded (=self). */
@@ -691,14 +945,27 @@ public class TickBroadcaster {
      * grep-anchored by the plan's verify gate and pinned by
      * {@code VisionScopedOvercrowdingTest}. Do not refactor into a helper
      * method that would hide it.
+     *
+     * <p><b>Phase 20.1 D-04:</b> when {@code isCompositeMember=true}, OVERCROWDED bit 0
+     * is always 0 — skip the per-bot recompute and return {@code cached & ~BIT_OVERCROWDED}
+     * directly. Non-composite callers retain the full D-40 expression unchanged.
      */
-    byte envStateFor(Position cellPos, Position botPos, int radius) {
+    byte envStateFor(Position cellPos, Position botPos, int radius, boolean isCompositeMember) {
         byte cached = environmentEngine != null ? environmentEngine.getCellStatus(cellPos) : (byte) 0;
+        if (isCompositeMember) {
+            // D-04: composite-member frames always omit OVERCROWDED — return cached with bit 0 zeroed.
+            return (byte) (cached & ~BIT_OVERCROWDED);
+        }
         byte perBotOvercrowdedBit = computeVisionScopedOvercrowded(
                 worldGrid, cellPos, botPos, radius, simulationConfig.overcrowdingThreshold())
                 ? BIT_OVERCROWDED : 0x00;
         byte cellStatus = (byte) ((cached & ~BIT_OVERCROWDED) | perBotOvercrowdedBit);
         return cellStatus;
+    }
+
+    /** Package-private overload retained for VisionScopedOvercrowdingTest compatibility (non-composite). */
+    byte envStateFor(Position cellPos, Position botPos, int radius) {
+        return envStateFor(cellPos, botPos, radius, /*isCompositeMember=*/ false);
     }
 
     /**
@@ -871,7 +1138,12 @@ public class TickBroadcaster {
             Position mp = state.getPositionForMember(memberId);
             if (mp == null) continue;
             Cell memberCell = worldGrid.getCell(mp.x(), mp.y());
-            if (!(memberCell.occupant() instanceof CompositeMember mem)) continue;
+            // Cross-composite guard — mirrors the s-block SENSOR-union guard. A stale
+            // registry position now holding a foreign composite's member must not be
+            // emitted in this composite's roster (zero-trust; relies on more than the
+            // single-threaded tick ordering invariant).
+            if (!(memberCell.occupant() instanceof CompositeMember mem)
+                    || !mem.compositeId().equals(cm.compositeId())) continue;
             Position rel = relativeTo(botPos, mp);
             // Clamp to [-63, 63] before coord creation (Coord.Relative enforces).
             int clampedDx = Math.max(-63, Math.min(63, rel.x()));

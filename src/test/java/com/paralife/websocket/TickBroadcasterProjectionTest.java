@@ -312,9 +312,11 @@ class TickBroadcasterProjectionTest {
         var bot = botRegistry.getBySession("s1").orElseThrow();
         Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
 
+        // Phase 20.1 D-01: LOCOMOTOR sensorRadius = 1 (union cells extend beyond radius-1,
+        // but the sensorRadius field is a role signal, not a radius bound on emitted cells).
         assertThat(frame.sensorRadius())
-                .as("LOCOMOTOR = FULL tier → radius 2 default")
-                .isEqualTo(TickBroadcaster.PERCEPTION_RADIUS);
+                .as("LOCOMOTOR D-01 → sensorRadius == 1")
+                .isEqualTo(1);
         assertThat(frame.pool())
                 .as("LOCOMOTOR carries pool snapshot")
                 .isPresent();

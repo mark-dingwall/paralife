@@ -712,6 +712,54 @@ public class ActionResolver {
         return null;
     }
 
+    /**
+     * D-02: return the nearest free, unclaimed cell within {@link #MAX_REPRODUCER_SEARCH_RADIUS}
+     * of {@code origin}, or {@code null} if no such cell exists.
+     *
+     * <p>Candidates are generated and sorted PER CALL (per-call generate-and-sort, Pattern 2).
+     * At ~120 elements this is negligible; a static offset cache is forbidden (cross-test
+     * correctness hazard — see {@link #MAX_REPRODUCER_SEARCH_RADIUS} javadoc).
+     *
+     * <p>Sort key: raw {@code dx*dx + dy*dy}, tie-break {@code dy}, then {@code dx}.
+     * No wrapped-offset normalization in the comparator — at this radius the raw offset
+     * equals the toroidal-shortest offset for every candidate (see class-level javadoc).
+     * Torus handling ({@code Math.floorMod}) applies only at the spawn-target computation.
+     */
+    private Position nearestFreeCell(Position origin, Set<Position> claimedCells) {
+        int w = worldGrid.getWidth();
+        int h = worldGrid.getHeight();
+        int r = MAX_REPRODUCER_SEARCH_RADIUS;
+
+        // Build candidate offsets over [-r,r]² minus (0,0) — per call, no static cache.
+        List<int[]> offsets = new ArrayList<>((2 * r + 1) * (2 * r + 1) - 1);
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dy = -r; dy <= r; dy++) {
+                if (dx == 0 && dy == 0) continue;
+                offsets.add(new int[]{dx, dy});
+            }
+        }
+
+        // Sort by raw Euclidean distance² (tie-break dy, then dx).
+        // Raw key is correct at this radius: |dx|,|dy| ≤ 5 < dim/2 (128 prod / 8 test), so raw == toroidal-shortest.
+        // DO NOT normalize per-loop in the lambda — loop variables are not effectively final
+        // and would not compile as lambda captures.
+        offsets.sort(Comparator
+                .comparingInt((int[] o) -> o[0] * o[0] + o[1] * o[1])
+                .thenComparingInt(o -> o[1])
+                .thenComparingInt(o -> o[0]));
+
+        for (int[] o : offsets) {
+            // Torus wrap applies at the spawn site — not in the sort key.
+            int tx = Math.floorMod(origin.x() + o[0], w);
+            int ty = Math.floorMod(origin.y() + o[1], h);
+            Position candidate = new Position(tx, ty);
+            if (!claimedCells.contains(candidate) && !worldGrid.getCell(tx, ty).hasOccupant()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
     // ── Composite reactive role actions ─────────────────────────
 
     /**
@@ -843,7 +891,29 @@ public class ActionResolver {
         return null;
     }
 
-    /** REPRODUCER bud: spawn a solo Particle into an adjacent empty cell (D-32). */
+    /**
+     * D-02 bound: maximum search radius for REPRODUCER nearest-free-cell scan.
+     * At radius 5 the candidate box has ≤120 offsets — trivially cheap on a dormant path.
+     * This is a scalar bound constant, NOT an offset cache; static caching of (dx,dy)
+     * offsets is explicitly forbidden (frozen against first grid dims in JVM = cross-test
+     * correctness hazard).
+     */
+    static final int MAX_REPRODUCER_SEARCH_RADIUS = 5;
+
+    /**
+     * D-02: REPRODUCER bud auto-places at the nearest free cell (server-owned placement).
+     *
+     * <p>The bot still sends {@code a|R|<numpad>} and the direction arg is
+     * read-and-discarded server-side — placement is server-derived, not echoed.
+     * (Tech-debt: direction arg removal deferred to a later contract-cleanup phase.)
+     *
+     * <p>Sort key is raw {@code dx*dx + dy*dy, dy, dx} — no wrapped/relativeTo
+     * normalization in the comparator. Because {@code MAX_REPRODUCER_SEARCH_RADIUS=5 < dim/2}
+     * (dim/2 = 128 on the 256×256 production grid, 8 on the 16×16 test grid) every raw offset
+     * already equals the toroidal-shortest offset; a wrapped key would be byte-identical (no-op)
+     * and is intentionally omitted. Revisit if radius grows past {@code dim/2}. The torus is
+     * handled at the spawn site via {@code Math.floorMod} only.
+     */
     private void resolveReproducerBud(ResolvedCompositeAction rca,
                                        CompositeRegistry.CompositeState composite,
                                        Set<Position> claimedCells) {
@@ -857,14 +927,9 @@ public class ActionResolver {
                 (int) (profile.starvationThreshold() / 100.0 * composite.getMaxPoolEnergy());
         if (poolAfterCost < poolStarvationFloor) return;
 
-        Direction dir = directionOf(rca.action);
-        if (dir == null) return;
-
-        Position target = dir.apply(rca.bot.position(), worldGrid.getWidth(), worldGrid.getHeight());
-        if (claimedCells.contains(target)) return;
-
-        Cell targetCell = worldGrid.getCell(target.x(), target.y());
-        if (targetCell.hasOccupant()) return;
+        // D-02: server auto-places bud at nearest free cell; bot direction arg is ignored.
+        Position target = nearestFreeCell(rca.bot.position(), claimedCells);
+        if (target == null) return;   // bounded skip — no free cell within radius; no pool draw
 
         claimedCells.add(target);
         String childId = "child-" + childIdCounter.incrementAndGet();

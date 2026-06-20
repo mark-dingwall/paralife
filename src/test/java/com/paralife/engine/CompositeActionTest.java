@@ -208,6 +208,9 @@ class CompositeActionTest {
 
     @Test
     void reproducerBudsParticle() {
+        // D-02: server auto-places bud at nearest free cell — direction arg is ignored.
+        // REPRODUCER at (3,3); nearest free cell with all neighbours empty is (3,2)
+        // (offset (0,-1), d²=1, lowest dy=-1 in raw sort).
         mockSession("s-reproducer");
         placeCompositeMember("s-reproducer", "cm-reproducer", "comp1", ParticleType.SPORE,
                 Role.REPRODUCER, new Position(3, 3), 50);
@@ -216,9 +219,10 @@ class CompositeActionTest {
 
         int poolBefore = compositeRegistry.getSharedEnergy("comp1");
 
-        resolver.resolveActions(1, Map.of("s-reproducer", reproduce('6'))); // E (numpad 6)
+        resolver.resolveActions(1, Map.of("s-reproducer", reproduce('6'))); // direction ignored
 
-        Cell targetCell = worldGrid.getCell(4, 3);
+        // Nearest free cell from (3,3) with no blockers: (3,2) via auto-place.
+        Cell targetCell = worldGrid.getCell(3, 2);
         assertThat(targetCell.occupant()).isInstanceOf(Particle.class);
         Particle child = (Particle) targetCell.occupant();
         assertThat(child.type()).isEqualTo(ParticleType.SPORE);
