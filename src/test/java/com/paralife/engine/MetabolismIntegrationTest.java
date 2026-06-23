@@ -79,7 +79,6 @@ class MetabolismIntegrationTest {
     }
 
     @Test
-    @Disabled("TD-22→P21: WorldGrid read-lock starvation under tick-loop write pressure; revisit when P20 runtime tuning lands")
     void allTypesSurviveWithMetabolism() throws Exception {
         int botCount = 30; // 10 of each type
         String uri = "ws://localhost:" + port + "/ws/world";
