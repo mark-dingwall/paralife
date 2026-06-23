@@ -1,5 +1,6 @@
 package com.paralife.engine;
 
+import com.paralife.codec.Frame;
 import com.paralife.world.Entity.BondedPair;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
@@ -8,7 +9,6 @@ import com.paralife.world.Entity.Role;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -17,6 +17,7 @@ import org.springframework.test.context.TestPropertySource;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -57,11 +58,14 @@ class ToxinTest {
     @Autowired EnvironmentConfig cfg;
     @Autowired SimulationEngine simulationEngine;
     @Autowired CompositeRegistry compositeRegistry;
+    @Autowired ActionResolver actionResolver;
+    @Autowired BotRegistry botRegistry;
 
     @BeforeEach
     void reset() {
         worldGrid.clear();
         compositeRegistry.clear();
+        botRegistry.clear();
         env.resetToxinStateForTest();
     }
 
@@ -344,22 +348,84 @@ class ToxinTest {
         assertThat(afterAttacker.energy()).isLessThan(50);
     }
 
+    /**
+     * Drives the real {@link ActionResolver#resolveAttackerAttack} splash block
+     * (ActionResolver.java:855-866) end-to-end via {@code resolveActions} — no
+     * WebSocket session needed (engine-direct, mirroring
+     * {@code MutagenTest.composite_attackCureBuffGrantedSameTickViaReconciler}).
+     * Splash is computed from the TARGET cell's toxin intensity and applied to
+     * the attacking composite member, and {@code markEnvDamageApplied()} is set.
+     *
+     * <p>Replaces a no-op {@code @Disabled} stub that asserted nothing.
+     */
     @Test
-    @Disabled("TODO: covered by Plan 06 full-stack smoke test — resolveAttackerAttack requires a registered session+bot for end-to-end invocation; source-level grep still verifies the wiring.")
-    void splashAppliesInCompositeViaActionResolverResolveAttackerAttack() {
-        // cycle-4 action item #3: the LIVE method name is resolveAttackerAttack
-        // (NOT resolveCompositeAttack). Source-level assertions prove the
-        // splash block + markEnvDamageApplied call are present — end-to-end
-        // invocation requires WebSocket session setup deferred to 14-06.
+    void splashAppliesToAttackerViaActionResolverResolveAttackerAttack() {
+        Position attackerPos = new Position(5, 5);
+        Position targetPos = new Position(5, 6);
+        CompositeMember attacker = new CompositeMember("atk", "comp-atk",
+                ParticleType.CATALYST, Role.ATTACKER, 50, 100);
+        worldGrid.setEntity(attackerPos.x(), attackerPos.y(), attacker);
+        worldGrid.setEntity(targetPos.x(), targetPos.y(),
+                new Particle("prey", ParticleType.SPORE, 50, 100));
+
+        // Toxin on the TARGET cell → computeSplashDamage = round(10 * 255/255 * 0.2) = 2.
+        env.stampToxinIntensityForTest(targetPos, 255);
+        compositeRegistry.register("comp-atk", List.of("atk"),
+                Map.of("atk", attackerPos), 200, 200);
+        botRegistry.register("sess-atk", "atk", attackerPos);
+
+        // Empty direction arg → resolver auto-targets the adjacent enemy.
+        actionResolver.resolveActions(1L,
+                Map.of("sess-atk", new Frame.ActionFrame('A', Optional.empty())));
+
+        CompositeMember after =
+                (CompositeMember) worldGrid.getCell(attackerPos.x(), attackerPos.y()).occupant();
+        assertThat(after).as("attacker remains on grid").isNotNull();
+        assertThat(after.energy())
+                .as("attacker member loses exactly the splash damage (2) from the toxic target cell")
+                .isEqualTo(48);
+        assertThat(env.envDamageAppliedThisTickForTest())
+                .as("resolveAttackerAttack marks env damage so the reconciler re-runs")
+                .isTrue();
     }
 
+    /**
+     * Splash that drives the attacking member to zero energy is finalized in the
+     * SAME tick by the reconciler ({@code EnvPostActionReconciler @Order(25)} →
+     * {@link EnvironmentEngine#processEnvDeaths}) — even though the attacker
+     * stands on a NON-toxic cell (it died from splash, not from standing in
+     * toxin). Replaces a no-op {@code @Disabled} stub.
+     */
     @Test
-    @Disabled("TODO: covered by Plan 06 full-stack smoke test — end-to-end ActionResolver path requires WebSocket session setup; source-level grep verifies markEnvDamageApplied + Math.max(0, ...) clamp are present.")
-    void composite_splashKillFinalizedSameTickViaReconciler() {
-        // cycle-4 action item #2: ActionResolver's resolveAttackerAttack calls
-        // markEnvDamageApplied so EnvPostActionReconciler @Order(25) re-runs
-        // processEnvDeaths and finalises lethal splash SAME TICK. Source-level
-        // grep assertions in the acceptance criteria verify the wiring.
+    void composite_splashKillOfAttackerFinalizedSameTickViaReconciler() {
+        Position attackerPos = new Position(5, 5);
+        Position targetPos = new Position(5, 6);
+        // energy 2, splash 2 → clamped to 0.
+        CompositeMember attacker = new CompositeMember("atk-lethal", "comp-lethal",
+                ParticleType.CATALYST, Role.ATTACKER, 2, 100);
+        worldGrid.setEntity(attackerPos.x(), attackerPos.y(), attacker);
+        worldGrid.setEntity(targetPos.x(), targetPos.y(),
+                new Particle("prey2", ParticleType.SPORE, 50, 100));
+        env.stampToxinIntensityForTest(targetPos, 255);
+        compositeRegistry.register("comp-lethal", List.of("atk-lethal"),
+                Map.of("atk-lethal", attackerPos), 200, 200);
+        botRegistry.register("sess-lethal", "atk-lethal", attackerPos);
+
+        actionResolver.resolveActions(1L,
+                Map.of("sess-lethal", new Frame.ActionFrame('A', Optional.empty())));
+
+        // resolveAttackerAttack clamps to zero but does NOT clear the cell —
+        // processEnvDeaths is the clearer (mirrors toxin-collision contract).
+        CompositeMember preFinalize =
+                (CompositeMember) worldGrid.getCell(attackerPos.x(), attackerPos.y()).occupant();
+        assertThat(preFinalize).as("attacker present pre-finalize").isNotNull();
+        assertThat(preFinalize.energy()).as("clamped to zero by splash").isEqualTo(0);
+
+        // Reconciler effect: same-tick env-death finalization.
+        env.processEnvDeathsForTest();
+        assertThat(worldGrid.getCell(attackerPos.x(), attackerPos.y()).hasOccupant())
+                .as("zero-energy attacker finalized same tick by the reconciler")
+                .isFalse();
     }
 
     @Test
