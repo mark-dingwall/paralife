@@ -176,6 +176,44 @@ surface) are JFR-driven and never cross the wire — `15-SCHEMA.md` stays bit-ex
 No project-specific skills configured. Use GSD workflow commands for project management.
 <!-- GSD:skills-end -->
 
+## On-Demand Skills (web/mobile fallback)
+
+We do ~95% of development via the Claude Code **CLI**, where the
+[Superpowers](https://github.com/obra/Superpowers) skill library is installed as
+a plugin and the skills below load automatically. **Web/mobile** sessions clone
+this repo fresh and do **not** have that plugin. We chose not to vendor the
+skills into the repo (they're ~10k lines). Instead:
+
+> **If the user requests any of the following skills and they are NOT already
+> available to you, fetch and read them from the raw URLs below before
+> proceeding.** Read the listed companion files too — they're load-bearing and
+> the skills reference them by relative path that won't resolve over raw HTTP.
+
+Pinned base (commit `896224c`, plugin v6.0.3 — swap the SHA for `main` to track latest):
+`https://raw.githubusercontent.com/obra/Superpowers/896224c4b1879920ab573417e68fd51d2ccc9072/skills/`
+
+| Skill | `SKILL.md` path | Also read (companions) |
+|-------|-----------------|------------------------|
+| `receiving-code-review` | `receiving-code-review/SKILL.md` | — |
+| `requesting-code-review` | `requesting-code-review/SKILL.md` | `requesting-code-review/code-reviewer.md` |
+| `test-driven-development` | `test-driven-development/SKILL.md` | `test-driven-development/testing-anti-patterns.md` |
+| `writing-plans` | `writing-plans/SKILL.md` | — |
+| `subagent-driven-development` | `subagent-driven-development/SKILL.md` | `subagent-driven-development/implementer-prompt.md`, `subagent-driven-development/task-reviewer-prompt.md` |
+
+**`subagent-driven-development` references sibling Superpowers skills.** Two of
+them — `requesting-code-review`, `test-driven-development` — are in the table
+above. The other three are intentionally **omitted because they don't apply in a
+web/mobile remote session**; when SDD points to them, do this instead:
+
+- `using-git-worktrees` → **skip.** The remote container is already an isolated,
+  fresh clone on a dedicated branch; SDD's "set up an isolated workspace" step is
+  already satisfied. (This skill exists mainly to dodge CLI worktree gotchas.)
+- `executing-plans` → **skip.** It's the no-subagent fallback; subagents *are*
+  available here, so `subagent-driven-development` already supersedes it.
+- `finishing-a-development-branch` → **skip.** Branch integration is governed by
+  the remote harness (commit/push to the designated branch; open a PR only when
+  the user explicitly asks).
+
 <!-- GSD:gsd-workflow-start -->
 ## GSD Workflow Enforcement
 
