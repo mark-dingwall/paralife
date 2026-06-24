@@ -19,11 +19,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * a stochastic property of an essentially unbounded state space and cannot be reliably
  * forced without destabilising other signals.
  *
- * <p>It was deleted (not seed-pinned or tolerance-widened) per the Phase 16 precedent
- * (commit {@code 2ec1d1c}, "Drift Correction" D-04 #2): tests pin spec <i>mechanics</i>
- * via short, seeded, engine-direct paths; ecosystem <i>emergence</i> is judged by a human
- * against the live visualiser (M5) or via offline parameter search — not gated in JUnit.
- * Every production mechanic it touched is already pinned deterministically:
+ * <p>It was deleted (not seed-pinned or tolerance-widened) following the project's
+ * emergence-testing philosophy: tests pin spec <i>mechanics</i> via short, seeded,
+ * engine-direct paths, while long-run ecosystem <i>survival</i> is exercised by the active
+ * {@code EmergenceStabilityLoadTest} (the full-stack all-three-types-alive + oscillation
+ * gate) and judged by a human against the live visualiser (M5) or via offline parameter
+ * search. Every production mechanic this deleted test touched is already pinned
+ * deterministically:
  * RPS combat in {@code SimulationEngineTest.CombatTests.allThreeRPSPairsWork},
  * death/removal in {@code SimulationEngineTest.DeathTests.*}, reproduction in
  * {@code ReproducerAutoPlaceTest}, nutrient spawn/consume in
@@ -31,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * starvation in {@code SimulationEngineTest.StarvationTests.*}, and composite formation in
  * {@code CompositeFormationDeterminismTest}.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @TestPropertySource(properties = {
         "paralife.world.width=64",
         "paralife.world.height=64",

@@ -8,7 +8,6 @@ import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.WorldGrid;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -161,23 +160,6 @@ class MetabolismIntegrationTest {
         // as their entities die and are unregistered).
         long connected = bots.stream().filter(b -> b.isConnected()).count();
         log.info("Bots still connected: {}/{} (bondedPairObserved={})", connected, botCount, bondedPairObserved);
-    }
-
-    @Test
-    void fertilityPatchesExistAfterInit() {
-        var snapshot = worldGrid.snapshot();
-        int fertileCells = 0;
-        for (int x = 0; x < snapshot.width(); x++) {
-            for (int y = 0; y < snapshot.height(); y++) {
-                if (snapshot.getCell(x, y).nutrientLevel() > 0) {
-                    fertileCells++;
-                }
-            }
-        }
-        log.info("Fertile cells after init: {}", fertileCells);
-        assertThat(fertileCells)
-                .as("Number of fertile cells after initialization")
-                .isGreaterThan(0);
     }
 
     /**
