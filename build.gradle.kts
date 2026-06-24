@@ -122,10 +122,10 @@ tasks.register<Test>("leakProbe") {
 
     val cacheMax = (project.findProperty("cacheMax") as String?) ?: "32"
     val label = (project.findProperty("label") as String?) ?: "run"
-    // Default probe set: 6 classes → 6 distinct cached contexts (each a distinct
+    // Default probe set: 5 classes → 5 distinct cached contexts (each a distinct
     // @TestPropertySource). Override with -PprobeClasses=Simple1,Simple2 for smoke runs.
     val probeClasses = (project.findProperty("probeClasses") as String?)
-            ?: "HundredBotIntegrationTest,StallRecoveryIntegrationTest,MetabolismIntegrationTest," +
+            ?: "HundredBotIntegrationTest,StallRecoveryIntegrationTest," +
                "WebSocketIntegrationTest,PerceptionActionIntegrationTest,BotFleetTest"
 
     // Neutralise the two inherited `tasks.withType<Test>` settings that would corrupt the probe:

@@ -9,8 +9,8 @@ import java.util.Optional;
 /**
  * Thin deprecated facade over {@link BotFleet} (Phase 18 D-04).
  *
- * <p><b>Why retained rather than deleted:</b> three existing test files
- * ({@code LoadTest}, {@code PopulationDynamicsTest}, {@code MetabolismIntegrationTest})
+ * <p><b>Why retained rather than deleted:</b> several existing test files
+ * (e.g. {@code LoadTest}, {@code BotFleetTest}, {@code EmergenceStabilityLoadTest})
  * import and use {@code BotLauncher} directly. Deleting it would break those tests.
  * The facade preserves the original observable contract (launch + waitForRegistered timeout,
  * shutdown, getBots) while delegating to {@link BotFleet} internally.
