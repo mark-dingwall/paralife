@@ -35,6 +35,14 @@ Paralife is a distributed living simulation — a toroidal 2D world populated by
 
 **Testing:** `*Test.java` for unit tests, `*IntegrationTest.java` for integration tests. Mirror source directory structure. `@SpringBootTest` for integration tests.
 
+**Testing philosophy** (learned the hard way via the TD-22-A / TD-22-C decompositions — see `.planning/STATE.md`):
+
+- **Pin mechanics; defer emergence.** Deterministic local mechanics (combat math, energy decay, reproduce cost/cooldown/floor gates, nutrient gain, population census, codec round-trips) belong in fast JUnit tests with assertions pinned to config/spec values. Emergent, statistical outcomes (multi-type survival, population oscillation, niche formation over long runs) are **not** gated in the default suite — they are inherently seed- and tuning-sensitive, so a pinned assertion on them is brittle and breaks the moment entity/env constants are tuned. They live in the opt-in `@Tag("slow")` `EmergenceStabilityLoadTest` (excluded from `./gradlew test`; run via `-PincludeLong=true`) and are otherwise deferred to hyperparameter tuning and the M5 visualiser. **Smell test:** if a "mechanics" test only goes green because the simulation happened to survive a multi-tick run, it is an emergence test in disguise — decompose it into engine-direct assertions on the underlying rule.
+
+- **Assert against independent constants, not the code under test.** Expected values are hand-computed literals or config-derived — never recomputed by calling the same production function the test exercises. A self-referential expected value shifts together with the bug and stays green (e.g. assert a starvation-boosted gain equals the literal `10`, not `(int)(base * (1 + boost * StarvationConfig.computeIntensity(...)))`). Pin to the *intended* contract so code drift fails the test, rather than mirroring whatever the code currently computes.
+
+- **Every negative assertion needs a positive control.** A test that asserts "X does not happen" is vacuous if the action never fired (e.g. an unregistered bot whose action is silently dropped, so the cell is empty for the wrong reason). Pair it with a control proving the same harness *does* produce X under the opposite input — and isolate the gate under test so a co-located guard can't mask its regression (the floor gate subsumes the cost gate for sub-cost energy, so "below cost" pins behaviour, not the cost gate alone).
+
 **Build commands:**
 ```bash
 ./gradlew test              # Run all tests
