@@ -79,7 +79,13 @@ class ActionResolverReproduceTest {
         return (Particle) worldGrid.getCell(x, y).occupant();
     }
 
-    // ── Surplus (cost) gate ───────────────────────────────────────
+    // ── Insufficient-energy gate (cost + starvation-floor, jointly) ──
+    // NOTE: with floor=0 here, sub-cost energy is blocked by BOTH the surplus
+    // gate AND the floor gate (energyAfterCost = 29 - 30 = -1 < floor 0). Because
+    // the floor is non-negative, it always subsumes the cost gate for sub-cost
+    // energy, so this test cannot ISOLATE the cost gate — it pins the observable
+    // behaviour (sub-cost ⇒ no child, no debit). The floor gate is isolated on
+    // its own below (cost passes, floor blocks).
 
     @Test
     void belowCostBlocksReproduce_parentNotDebited() {
@@ -91,7 +97,7 @@ class ActionResolverReproduceTest {
         assertThat(worldGrid.getCell(6, 5).hasOccupant())
                 .as("no child placed when energy below reproduce cost").isFalse();
         assertThat(particleAt(5, 5).energy())
-                .as("parent energy unchanged (the discriminator vs the direction gate)").isEqualTo(29);
+                .as("parent not debited when reproduce is rejected").isEqualTo(29);
     }
 
     @Test

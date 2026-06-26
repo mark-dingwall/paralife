@@ -50,7 +50,8 @@ dependencies {
 // removed wire records and the 8-arg (ObjectMapper) ActionResolver constructor
 // that plan 15-06 deleted. Their coverage intent is preserved by sibling tests:
 //   - ActionResolver: SimulationIntegrationTest, PerceptionActionIntegrationTest,
-//     LoadTest, MetabolismIntegrationTest, all composite-* tests.
+//     LoadTest, ActionResolverReproduceTest, ActionResolverConsumeTest,
+//     all composite-* tests.
 //   - Composite lifecycle: CompositeFormationTest, CompositeDissolutionTest,
 //     CompositeEnergyDistributorTest, CompositeMovementTest, CompositeCombatTest,
 //     CompositeRegistryTest.

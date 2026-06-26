@@ -106,13 +106,16 @@ class ActionResolverConsumeTest {
         placeBot("s", "e", new Position(5, 5), 10);       // 10% ≤ floor → intensity 1.0
         worldGrid.setEntity(6, 5, new Entity.Nutrient("n", 20));
 
-        double intensity = StarvationConfig.computeIntensity(10, 100, 30, 10); // 1.0
-        int expectedGain = (int) (5 * (1 + 1.0 * intensity));                  // 10
-
         resolver.resolveActions(1, Map.of("s", consume()));
 
-        assertThat(expectedGain).as("boosted gain strictly exceeds healthy gain (5)").isGreaterThan(5);
+        // Expected anchored to a hand-computed literal, NOT to computeIntensity
+        // (the function under test): at energy 10 / maxEnergy 100, currentPercent
+        // (10%) ≤ floor (10%) so starvation intensity is 1.0 by construction;
+        // gain = (int)(5 * (1 + maxNutrientBoost(1.0) * 1.0)) = 10 (double the
+        // healthy gain of 5). A sign/formula regression in computeIntensity would
+        // shift actual but not this literal, so it stays detectable.
         assertThat(particleAt(5, 5).energy())
-                .as("starving particle gains the boosted amount").isEqualTo(10 + expectedGain);
+                .as("starving particle gains the boosted amount (10), not the healthy 5")
+                .isEqualTo(10 + 10);
     }
 }
