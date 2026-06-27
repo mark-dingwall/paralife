@@ -50,7 +50,8 @@ dependencies {
 // removed wire records and the 8-arg (ObjectMapper) ActionResolver constructor
 // that plan 15-06 deleted. Their coverage intent is preserved by sibling tests:
 //   - ActionResolver: SimulationIntegrationTest, PerceptionActionIntegrationTest,
-//     LoadTest, MetabolismIntegrationTest, all composite-* tests.
+//     LoadTest, ActionResolverReproduceTest, ActionResolverConsumeTest,
+//     all composite-* tests.
 //   - Composite lifecycle: CompositeFormationTest, CompositeDissolutionTest,
 //     CompositeEnergyDistributorTest, CompositeMovementTest, CompositeCombatTest,
 //     CompositeRegistryTest.
@@ -122,10 +123,10 @@ tasks.register<Test>("leakProbe") {
 
     val cacheMax = (project.findProperty("cacheMax") as String?) ?: "32"
     val label = (project.findProperty("label") as String?) ?: "run"
-    // Default probe set: 6 classes → 6 distinct cached contexts (each a distinct
+    // Default probe set: 5 classes → 5 distinct cached contexts (each a distinct
     // @TestPropertySource). Override with -PprobeClasses=Simple1,Simple2 for smoke runs.
     val probeClasses = (project.findProperty("probeClasses") as String?)
-            ?: "HundredBotIntegrationTest,StallRecoveryIntegrationTest,MetabolismIntegrationTest," +
+            ?: "HundredBotIntegrationTest,StallRecoveryIntegrationTest," +
                "WebSocketIntegrationTest,PerceptionActionIntegrationTest,BotFleetTest"
 
     // Neutralise the two inherited `tasks.withType<Test>` settings that would corrupt the probe:

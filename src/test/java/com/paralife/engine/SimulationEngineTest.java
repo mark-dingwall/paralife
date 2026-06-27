@@ -48,6 +48,19 @@ class SimulationEngineTest {
     }
 
     /**
+     * Engine with an explicit (non-uniform) {@link MetabolicProfile} so per-type
+     * decay rates can be observed. The single-arg {@link #engineWith(SimulationConfig)}
+     * uses {@link #uniformProfile} which flattens decay across types and therefore
+     * cannot catch a per-type decay regression.
+     */
+    private SimulationEngine engineWith(SimulationConfig config, MetabolicProfile profile) {
+        return new SimulationEngine(grid, config, botRegistry, noBonding(),
+                new CompositeRegistry(), CompositeConfig.defaults(),
+                profile, StarvationConfig.defaults(),
+                defaultSeasonTracker());
+    }
+
+    /**
      * Default SeasonTracker for legacy tests — year=200, amplitude=0 so the
      * seasonal multiplier is always 1.0. This preserves pre-Phase-13 tests
      * that assert on flat nutrient-spawn probability.
@@ -242,6 +255,34 @@ class SimulationEngineTest {
             assertThat(((Particle) grid.getCell(0, 0).occupant()).energy()).isEqualTo(47);
             assertThat(((Particle) grid.getCell(1, 1).occupant()).energy()).isEqualTo(27);
             assertThat(((Particle) grid.getCell(2, 2).occupant()).energy()).isEqualTo(77);
+        }
+
+        /**
+         * Each type decays by its OWN archetype rate in a single tick. Unlike
+         * {@link #allParticlesLoseEnergyPerTick} (uniform profile, flat rate),
+         * this uses {@link MetabolicProfile#defaults()} (CATALYST 3 / MEMBRANE 1
+         * / SPORE 2) so a regression that flattens per-type decay is caught. The
+         * decay magnitude comes from the profile, not {@code config} — so
+         * {@code decayOnly(0)} only serves to disable spawn/overcrowding.
+         *
+         * <p>Part of the TD-22-A decomposition (replaces the implicit decay
+         * coverage of the deleted MetabolismIntegrationTest).
+         */
+        @Test
+        void distinctPerTypeDecayInSingleTick() {
+            MetabolicProfile profile = MetabolicProfile.defaults();
+            grid.setEntity(0, 0, new Particle("c", ParticleType.CATALYST, 50));
+            grid.setEntity(2, 2, new Particle("m", ParticleType.MEMBRANE, 50));
+            grid.setEntity(4, 4, new Particle("s", ParticleType.SPORE, 50));
+
+            engineWith(decayOnly(0), profile).processTick(1);
+
+            assertThat(((Particle) grid.getCell(0, 0).occupant()).energy())
+                    .isEqualTo(50 - profile.forType(ParticleType.CATALYST).decayPerTick());
+            assertThat(((Particle) grid.getCell(2, 2).occupant()).energy())
+                    .isEqualTo(50 - profile.forType(ParticleType.MEMBRANE).decayPerTick());
+            assertThat(((Particle) grid.getCell(4, 4).occupant()).energy())
+                    .isEqualTo(50 - profile.forType(ParticleType.SPORE).decayPerTick());
         }
 
         @Test
