@@ -32,6 +32,16 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 class HeuristicBrainDeterminismTest {
 
     @Test
+    void entityStatusBitConstantsMatchSchema() {
+        // 15-SCHEMA.md §8.1.2 entityState contract — the bot's decoder must agree with the
+        // server's encoder (EnvironmentEngine) and the schema. Pinned to literals so a future
+        // drift on EITHER side is caught (the server side is pinned in TickBroadcasterProjectionTest).
+        assertEquals(0x01, HeuristicBrain.ENTITY_STATUS_STARVING, "STARVING = bit 0");
+        assertEquals(0x02, HeuristicBrain.ENTITY_STATUS_MUTATING, "MUTATING = bit 1");
+        assertEquals(0x04, HeuristicBrain.ENTITY_STATUS_BUFFED, "BUFFED = bit 2");
+    }
+
+    @Test
     void sameSeedProducesIdenticalDecisionForSolo() {
         HeuristicBrain brain = new HeuristicBrain(70);
         Frame.TickFrame frame = quietSoloFrame();

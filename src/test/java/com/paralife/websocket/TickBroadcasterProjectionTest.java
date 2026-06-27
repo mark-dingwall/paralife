@@ -373,8 +373,46 @@ class TickBroadcasterProjectionTest {
 
         CellEntry east = findNumpadEntry(frame, '6').orElseThrow();
         assertThat(east.entityState()).isPresent();
-        assertThat(east.entityState().getAsInt() & EnvironmentEngine.ENTITY_STATUS_BUFFED)
-                .isEqualTo(EnvironmentEngine.ENTITY_STATUS_BUFFED);
+        // Pin to the literal schema value (§8.1.2 BUFFED = bit 2 = 0x04), not the constant,
+        // so this actually guards the wire contract rather than tautologically passing.
+        assertThat(east.entityState().getAsInt()).isEqualTo(0x04);
+    }
+
+    @Test
+    void starvingEntityStateProjectedForNeighbourEntity() {
+        // STARVING bit on a neighbour entity flows into its entityState on the wire.
+        // Symmetric to the BUFFED case above: this guards the broadcaster's copy of the
+        // entityStatus byte onto the frame for STARVING. The real FLAG_STARVING -> bit-0
+        // projection is covered separately by ToxinTest (registry + grid-scan branches)
+        // and the golden traces.
+        Particle self = Particle.spawn("e1", ParticleType.CATALYST);
+        worldGrid.setEntity(5, 5, self);
+        Particle neighbour = Particle.spawn("e2", ParticleType.SPORE);
+        worldGrid.setEntity(6, 5, neighbour);
+        botRegistry.register("s1", "e1", new Position(5, 5));
+
+        when(envEngineMock.getEntityStatus("e2"))
+                .thenReturn(EnvironmentEngine.ENTITY_STATUS_STARVING);
+
+        var bot = botRegistry.getBySession("s1").orElseThrow();
+        Frame.TickFrame frame = broadcaster.buildTickFrame(bot, 1L);
+
+        CellEntry east = findNumpadEntry(frame, '6').orElseThrow();
+        assertThat(east.entityState()).isPresent();
+        // Pin to the literal schema value (§8.1.2 STARVING = bit 0 = 0x01), not the constant.
+        assertThat(east.entityState().getAsInt()).isEqualTo(0x01);
+    }
+
+    @Test
+    void entityStateBitConstantsMatchSchema() {
+        // 15-SCHEMA.md §8.1.2 is the entityState wire contract: bit0 STARVING, bit1 MUTATING,
+        // bit2 BUFFED; no entity-level TOXIC bit. These literals (not the constants) are the
+        // guard — a future re-layout of the server constants fails here. This is exactly the
+        // drift that previously went unnoticed (server had TOXIC=0x02, MUTATING=0x04, BUFFED=0x08,
+        // one bit out of step with the schema and the bot's HeuristicBrain decoder).
+        assertThat(EnvironmentEngine.ENTITY_STATUS_STARVING).isEqualTo((byte) 0x01);
+        assertThat(EnvironmentEngine.ENTITY_STATUS_MUTATING).isEqualTo((byte) 0x02);
+        assertThat(EnvironmentEngine.ENTITY_STATUS_BUFFED).isEqualTo((byte) 0x04);
     }
 
     @Test

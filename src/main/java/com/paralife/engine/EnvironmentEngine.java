@@ -74,19 +74,20 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
     public static final int TICK_ORDER = 14;
 
     // ── D-38 / D-39 status bit constants ──────────────────────────────
-    // D-38 cellStatus layout: bit 0 OVERCROWDED (per-bot), bit 1 TOXIN_PRESENT, bit 2 MUTAGEN_ZONE.
-    // D-39 entityStatus layout: bit 0 STARVING (server-global via Cell.FLAG_STARVING),
-    // bit 1 TOXIC, bit 2 MUTATING, bit 3 BUFFED.
+    // D-38 cellStatus (envState) layout: bit 0 OVERCROWDED (per-bot), bit 1 TOXIN_PRESENT, bit 2 MUTAGEN_ZONE.
+    // D-39 entityStatus layout (15-SCHEMA.md §8.1.2): bit 0 STARVING, bit 1 MUTATING, bit 2 BUFFED.
+    // NOTE: there is intentionally NO entity-level TOXIC bit — "entity on a toxic cell" is already
+    // derivable from the cell-level TOXIN_PRESENT bit at the same coordinate, which the bot reads.
     /** Cell-status bit 1 (0x02): toxin intensity above {@link Toxin#intensityThreshold()} (D-38). */
     public static final byte CELL_STATUS_TOXIN_PRESENT = 0x02;
     /** Cell-status bit 2 (0x04): mutagen strain cell (D-38). */
     public static final byte CELL_STATUS_MUTAGEN_ZONE = 0x04;
-    /** Entity-status bit 1 (0x02): entity currently standing on a toxic cell (D-39). */
-    public static final byte ENTITY_STATUS_TOXIC = 0x02;
-    /** Entity-status bit 2 (0x04): entity has an active {@link Infection} (D-39). */
-    public static final byte ENTITY_STATUS_MUTATING = 0x04;
-    /** Entity-status bit 3 (0x08): entity has any active survivor buff (D-39). */
-    public static final byte ENTITY_STATUS_BUFFED = 0x08;
+    /** Entity-status bit 0 (0x01): entity is STARVING (energy below its starvation threshold) — schema §8.1.2. */
+    public static final byte ENTITY_STATUS_STARVING = 0x01;
+    /** Entity-status bit 1 (0x02): entity has an active {@link Infection} — schema §8.1.2. */
+    public static final byte ENTITY_STATUS_MUTATING = 0x02;
+    /** Entity-status bit 2 (0x04): entity has any active survivor buff — schema §8.1.2. */
+    public static final byte ENTITY_STATUS_BUFFED = 0x04;
 
     /**
      * Phase 16 Plan 02: shared fallback registry for back-compat test ctors
@@ -963,13 +964,8 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                         byte merged = (byte) ((prior == null ? 0 : prior) | CELL_STATUS_TOXIN_PRESENT);
                         cellStatusStaging.put(pos, merged);
                     }
-                    Cell cell = worldGrid.getCell(x, y);
-                    String id = EntityIds.entityIdOf(cell.occupant());
-                    if (id != null) {
-                        Byte prior = entityStatusStaging.get(id);
-                        byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_TOXIC);
-                        entityStatusStaging.put(id, merged);
-                    }
+                    // No entity-level TOXIC bit (schema §8.1.2): a bot infers "entity on a toxic
+                    // cell" from the cell-level TOXIN_PRESENT bit at the same coordinate.
                 }
             }
         }
@@ -993,19 +989,24 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             entityStatusStaging.put(id, merged);
         }
 
-        // Entity BUFFED bits for any entity with active buffs.
+        // Entity BUFFED + STARVING bits.
         // Phase 19 SCALE-07: entity-list iteration replaces O(width*height) grid scan.
         // Falls back to grid scan when registry is null or empty (back-compat).
-        // BuffRegistry lookups are O(1) per id.
+        // BUFFED: O(1) BuffRegistry lookup per id. STARVING (schema §8.1.2 bit 0): read from
+        // Cell.FLAG_STARVING, which SimulationEngine sets at @Order(10) — current as of this
+        // @Order(14) projection. Revived so bots can see prey starvation (their strongest
+        // predator-targeting signal); FLAG_STARVING was previously observability-only.
         if (liveEntityRegistry != null && liveEntityRegistry.size() > 0) {
             for (LiveEntityRegistry.EntityEntry entry : liveEntityRegistry.snapshot()) {
                 Cell cell = worldGrid.getCell(entry.position().x(), entry.position().y());
                 String id = EntityIds.entityIdOf(cell.occupant());
                 if (id == null) continue;
-                if (buffRegistry.getBuffs(id).isEmpty()) continue;
+                int add = 0;
+                if (!buffRegistry.getBuffs(id).isEmpty()) add |= ENTITY_STATUS_BUFFED;
+                if (cell.hasFlag(Cell.FLAG_STARVING)) add |= ENTITY_STATUS_STARVING;
+                if (add == 0) continue;
                 Byte prior = entityStatusStaging.get(id);
-                byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_BUFFED);
-                entityStatusStaging.put(id, merged);
+                entityStatusStaging.put(id, (byte) ((prior == null ? 0 : prior) | add));
             }
         } else {
             for (int col = 0; col < w; col++) {
@@ -1013,10 +1014,12 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                     Cell cell = worldGrid.getCell(col, row);
                     String id = EntityIds.entityIdOf(cell.occupant());
                     if (id == null) continue;
-                    if (buffRegistry.getBuffs(id).isEmpty()) continue;
+                    int add = 0;
+                    if (!buffRegistry.getBuffs(id).isEmpty()) add |= ENTITY_STATUS_BUFFED;
+                    if (cell.hasFlag(Cell.FLAG_STARVING)) add |= ENTITY_STATUS_STARVING;
+                    if (add == 0) continue;
                     Byte prior = entityStatusStaging.get(id);
-                    byte merged = (byte) ((prior == null ? 0 : prior) | ENTITY_STATUS_BUFFED);
-                    entityStatusStaging.put(id, merged);
+                    entityStatusStaging.put(id, (byte) ((prior == null ? 0 : prior) | add));
                 }
             }
         }
