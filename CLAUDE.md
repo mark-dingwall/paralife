@@ -1,33 +1,36 @@
 <!-- GSD:project-start -->
 ## Project
 
-Paralife is a distributed living simulation — a toroidal 2D world populated by competing entity types (Catalyst, Membrane, Spore) in rock-paper-scissors dynamics. A Spring Boot server runs the physics tick loop, broadcasts state via WebSocket, and receives actions from autonomous heuristic bot clients. Built with Java 21 virtual threads for massive concurrency with simple blocking code.
+Paralife is a distributed living simulation — a toroidal 2D world where three competing particle species (Catalyst, Membrane, Spore) interact in rock-paper-scissors dynamics, alongside richer emergent structures (bonded pairs, composite organisms) and an environment layer (seasons, toxins, mutagens, lightning). A Spring Boot server runs the physics tick loop, broadcasts vision-scoped state via WebSocket over a compact-text wire protocol, and receives actions from autonomous bot clients. Built with Java 21 virtual threads for massive concurrency with simple blocking code.
 
 **Core Value:** Emergent spatial behaviour — spiral waves, population oscillations, and niche formation — arising from simple local rules. A testbed for evolving entity intelligence from heuristic bots toward genetic/learning systems.
 
-**Requirements** (from milestone success criteria):
-- M001: Server boots, tick loop runs, WebSocket broadcasts, 100 concurrent bots sustained
-- M002: RPS entity dynamics, 4-phase physics, perception/action protocol, heuristic bots, population stability over 500+ ticks
+**Milestones / requirements** (current position lives in `.planning/STATE.md`, `.planning/ROADMAP.md`, `.planning/REQUIREMENTS.md`):
+- **v1.0 Foundation & Living Simulation** (M001/M002, Phases 01–10, ✅ complete) — server boots, tick loop, WebSocket broadcast, 100 concurrent bots; RPS entity dynamics, perception/action protocol, heuristic bots, population stability over 500+ ticks.
+- **v2.0 Combination & Emergence** (Phases 11–16, ✅ complete) — bonding/endosymbiosis, composite organisms, energy metabolism, environmental rules, compact-text transport, emergent-behaviour tests.
+- **v3.0 Scale Engineering / M4** (Phases 17–22, 🚧 active) — durable admission control + backpressure, external load harness, connection-multiplexing runtime tuning, high-density placement; latest sequenced phase complete is Phase 20.1, and Phase 21 (scale benchmark gate) is the next planned phase. Phase 22 (integration-test resource-leak audit) already ran out-of-band as 2026-05-03 incident response (merged via PR #3, `f941417`); its revalidation (Phase 22.1) is planned but **not yet executed** — see `.planning/STATE.md` / `.planning/ROADMAP.md`.
 <!-- GSD:project-end -->
 
 <!-- GSD:technology-start -->
 ## Technology Stack
 
 - **Java 21** — Virtual threads enabled (`spring.threads.virtual.enabled: true`)
-- **Spring Boot 3.4.4** — `starter-web`, `starter-websocket`, `starter-actuator`
+- **Spring Boot 3.4.4** — `starter-web`, `starter-websocket`, `starter-actuator`, **`starter-jetty`**
+- **Jetty 12** — the embedded servlet/WebSocket container (`starter-tomcat` is **explicitly excluded**); permessage-deflate via `JettyDeflateCustomizer`; `jetty-websocket-jetty-client` used by the load harness
 - **Gradle Kotlin DSL** — Build system with wrapper (`./gradlew`)
-- **JUnit 5** — 166 tests (unit + integration)
+- **JUnit 5** — ~990 test methods across 144 files (unit + integration)
 - **JaCoCo** — Coverage reporting (XML + HTML)
-- **Jackson** — JSON serialization (transitive via Spring)
-- **`@ConfigurationProperties`** bound to records: `GridConfig`, `TickConfig`, `SimulationConfig`
+- **picocli** — CLI parsing for `LoadHarness` (the in-process `BotRunner` CLI parses its args by hand)
+- **Compact-text wire codec** (`com.paralife.codec`) — hand-rolled protocol on the hot path; Jackson (transitive via Spring) is used only for actuator/JSON, not perception frames
+- **`@ConfigurationProperties`** bound to 16 records — e.g. `GridConfig`, `TickConfig`, `SimulationConfig`, `MetabolicProfile`, `EnvironmentConfig`, `BondingConfig`, `CompositeConfig`, `SeasonsConfig`, `AdmissionConfig`, `JettyRuntimeConfig`, `AppRuntimeConfig`
 <!-- GSD:technology-end -->
 
 <!-- GSD:conventions-start -->
 ## Conventions
 
-**Package structure:** `com.paralife.{world,engine,websocket,bot}` — flat single-level per layer. Plus `com.paralife.diagnostics` — `DeathDiagnostics` (flag-gated death-cause + lifespan census). **OFF by default** (`@ConditionalOnProperty paralife.diagnostics.death-trace.enabled=true`, no yaml key); a no-op unless enabled. Shipped out-of-band (not a GSD phase) via PR #2 `464594e` 2026-05-27; wired into the tick pipeline (SimulationEngine / EnvironmentEngine / DeathFinalizer / OutboundSender / LiveEntityRegistry). Provenance + follow-ups (TD-PR2-A..E): `.planning/STATE.md` §Roadmap Evolution.
+**Package structure:** `com.paralife.{world,engine,websocket,codec,admission,bot,harness,metrics,runtime,diagnostics}` — flat single-level per layer. `diagnostics` holds `DeathDiagnostics` (flag-gated death-cause + lifespan census). **OFF by default** (`@ConditionalOnProperty paralife.diagnostics.death-trace.enabled=true`, no yaml key); a no-op unless enabled. Shipped out-of-band (not a GSD phase) via PR #2 `464594e` 2026-05-27; wired into the tick pipeline (SimulationEngine / EnvironmentEngine / DeathFinalizer / LiveEntityRegistry). Provenance + follow-ups (TD-PR2-A..E): `.planning/STATE.md` §Roadmap Evolution.
 
-**Data modeling:** Immutable records throughout. Sealed interfaces for polymorphism (`Entity`, `Messages`). Mutations produce new instances (`Cell.withOccupant()`, `Particle.withEnergy()`).
+**Data modeling:** Immutable records throughout. Sealed interface for polymorphism (`Entity` permits `Particle`, `Rock`, `Nutrient`, `BondedPair`, `CompositeMember`; `Particle` carries the `ParticleType` species enum CATALYST/MEMBRANE/SPORE, `CompositeMember` a `Role` enum). Mutations produce new instances (`Cell.withOccupant()`, `Entity.Particle.withEnergy()`). Wire frames are modelled by the `com.paralife.codec` record family (`Frame`, `CellEntry`, `Event`, `StateChange`) — the old sealed `Messages` type was **deleted in Phase 15-11**.
 
 **Concurrency:** Single-threaded simulation core (all world mutations in tick event handlers). Virtual threads for I/O (WebSocket, tick loop heartbeat). `ReentrantReadWriteLock` on `WorldGrid` — read lock for snapshots, write lock for mutations.
 
@@ -56,21 +59,26 @@ Paralife is a distributed living simulation — a toroidal 2D world populated by
 <!-- GSD:architecture-start -->
 ## Architecture
 
-**4 layers:**
+**Packages / layers:**
 
 | Layer | Package | Key Files |
 |-------|---------|-----------|
-| World | `com.paralife.world` | `WorldGrid`, `Cell`, `Entity` (sealed), `Position` |
-| Engine | `com.paralife.engine` | `SimulationEngine`, `ActionResolver`, `TickEngine`, `BotRegistry` |
-| WebSocket | `com.paralife.websocket` | `WorldWebSocketHandler`, `TickBroadcaster`, `Messages` (sealed), `SessionRegistry` |
-| Bot | `com.paralife.bot` | `BotClient`, `HeuristicBrain`, `BotLauncher`, `BotRunner` (autonomous client processes; `BotRunner` is the operator CLI invoked via `./gradlew runBot`, 100-bot cap) |
+| World | `com.paralife.world` | `WorldGrid`, `Cell`, `Entity` (sealed: Particle/Rock/Nutrient/BondedPair/CompositeMember), `Position`, `GridConfig` |
+| Engine | `com.paralife.engine` | `SimulationEngine`, `ActionResolver`, `TickEngine`, `BotRegistry`, `EnvironmentEngine`, `CompositeRegistry`/`CompositeEnergyDistributor`, `SeasonTracker`, `CellularAutomaton`, plus ~10 config records (metabolism, bonding, composites, environment, seasons, spawn, fertility) |
+| WebSocket | `com.paralife.websocket` | `WorldWebSocketHandler`, `TickBroadcaster`, `SessionRegistry`, `WebSocketConfig`, `WebSocketKeepaliveService`, `JettyDeflateCustomizer` |
+| Codec | `com.paralife.codec` | Compact-text wire protocol (13 files): `Frame` (`r`/`S`/`T`/`a`/`E`), `PerceptionCodec`, `Base64Codec`, `CellEntry`, `Event`, `StateChange`, `KindData` |
+| Admission | `com.paralife.admission` | `AdmissionGate` (single authority for registration/respawn), `ResumeTokenRegistry`, `OutboundSender`, `AdmissionConfig`, `AdmissionMetrics`, `TickHealthMonitor`, `AttributionTagger`/`AttributionSanitizer` |
+| Bot | `com.paralife.bot` | `BotClient`, `HeuristicBrain`, `BotLauncher`, `BotRunner` (operator CLI via `./gradlew runBot`, 100-bot cap), `BotFleet`, `BotFactory`, `BotIdentity`, `SpeciesMix` |
+| Harness | `com.paralife.harness` | `LoadHarness` — standalone picocli load-test CLI (`./gradlew runHarness` / `loadHarnessJar`); harness-identity attribution (Phase 18) |
+| Metrics | `com.paralife.metrics` | `EmergenceMetrics` (bonded-pairs/composites/buffs/infections), `WebSocketMetrics` |
+| Runtime | `com.paralife.runtime` | `JettyRuntimeConfig`, `AppRuntimeConfig` — Phase 20 per-connection tuning knobs |
 
 **Tick pipeline** (Spring `@EventListener` on `TickEvent`):
 1. `ResumeTokenRegistry` `@Order(1)` — Grace-expiry sweep; dead-entity cleanup before SimulationEngine
 2. `SimulationEngine` `@Order(10)` — Combat, energy decay, death removal, nutrient spawning
 3. `EnvironmentEngine` `@Order(TICK_ORDER)` — Toxin/mutagen/lightning/compost; rebuilds status caches (TICK_ORDER=14)
 4. `CompositeEnergyDistributor` `@Order(15)` — Composite passive energy drain
-5. `ActionResolver` `@Order(20)` — Drain pending bot actions, resolve moves/consume/reproduce/rest
+5. `ActionResolver` `@Order(20)` — Drain pending bot actions, resolve verbs `M/E/A/R/V/L` (move / eat / attack / reproduce / composite-vote / alarm)
 6. `EnvPostActionReconciler` `@Order(TICK_ORDER)` — Apply post-action buff grants, clear cure-immunity (TICK_ORDER=25)
 7. `TickBroadcaster` `@Order(50)` — Per-bot tick frame (5x5 vision, wire bitmask, perception)
 8. `WebSocketKeepaliveService` `@Order(200)` — Keepalive PINGs
@@ -82,16 +90,16 @@ Paralife is a distributed living simulation — a toroidal 2D world populated by
 |-------|---------|-------|---------|
 | 1. Shadow grids | `byte[][] toxinGrid`, `mutagenGrid` (intensity 0–255) | `EnvironmentEngine` | Authoritative effect state; CA diffusion, spline paths, gossip |
 | 2. Status caches | `Map<Position,Byte> cellStatusCache`, `Map<String,Byte> entityStatusCache` | `EnvironmentEngine.buildStatusCaches()` | Per-tick read-only bitmask projection (D-41). Derived from layer 1 + registries (BuffRegistry, Infection map). Rebuilt every tick, not a second source of truth |
-| 3. Wire bitmask | `Messages.CellView.cellStatus`, `entityStatus` bytes | `TickBroadcaster` `@Order(50)` (per-bot) | Zero-trust vision-scoped bitmask. OVERCROWDED is **redacted per bot**: `cellStatus = (layer2 & ~BIT_OVERCROWDED) \| perBotOvercrowdedBit` — bit 0 recomputed from bot's 5x5 Moore count so outer vision cells correctly under-report global overcrowding (D-40 incomplete-information design) |
+| 3. Wire bitmask | `cellStatus` / `entityStatus` bytes carried on the codec `CellEntry` inside each per-bot `Frame` | `TickBroadcaster` `@Order(50)` (per-bot) | Zero-trust vision-scoped bitmask. OVERCROWDED is **redacted per bot**: `cellStatus = (layer2 & ~BIT_OVERCROWDED) \| perBotOvercrowdedBit` — bit 0 recomputed from bot's 5x5 Moore count so outer vision cells correctly under-report global overcrowding (D-40 incomplete-information design) |
 
 Bit layout (D-38 `cellStatus` / D-39 `entityStatus`): OVERCROWDED=bit 0, TOXIN_PRESENT=bit 1 (`0x02`), MUTAGEN_ZONE=bit 2 (`0x04`). STARVING lives on `Cell.flags` (not `entityStatus`) as server-global entity-intrinsic state. `Cell.flags` retains `FLAG_OVERCROWDED`/`FLAG_STARVING` unchanged; env effects do NOT extend `Cell.flags` — intensity values don't fit single bits and cache locality favours per-effect shadow grids.
 
 **Entry points:**
 - `ParalifeApplication.main()` — Spring Boot startup
-- `TickEngine.@PostConstruct` — Starts virtual thread tick loop (if `paralife.tick.auto-start: true`)
+- `TickEngine.onApplicationReady()` (`@EventListener(ApplicationReadyEvent.class)`) — Starts the virtual-thread tick loop (if `paralife.tick.auto-start: true`)
 - `WorldWebSocketHandler` — Client connections at `/ws/world`
 
-**Error handling:** Graceful degradation. WebSocket errors send `Error` message to client. Tick loop catches exceptions and continues. No exception bubbling.
+**Error handling:** Graceful degradation. WebSocket errors send an error frame (`E|<code>|<reason>`, e.g. `E|408|reconnect-required`) to the client. Tick loop catches exceptions and continues. No exception bubbling.
 
 ### Outbound concurrency (Phase 17, D-10)
 
@@ -129,7 +137,7 @@ invokes `OutboundSender.detachSession(WebSocketSession, CloseStatus.SERVICE_REST
 close-aware overload with caller-supplied status), not the `String` overload. The transport-close
 fires first, which causes any blocked Jetty write inside the drain VT's `synchronized(session)`
 block to throw `IOException`, allowing the VT to exit cleanly. The OOB 408 frame that follows is
-best-effort: `WorldWebSocketHandler.sendOutOfBand` carries an `isOpen()` guard at line 965;
+best-effort: `WorldWebSocketHandler.sendOutOfBand` carries an `isOpen()` guard (≈`WorldWebSocketHandler.java:1054`);
 the close itself is the reconnect signal — OOB is not load-bearing. No second
 `session.close(...)` is issued; the close-aware detach already carried
 `SERVICE_RESTARTED` to the wire. The close itself is the reconnect signal — clients observing it
@@ -183,7 +191,7 @@ surface) are JFR-driven and never cross the wire — `15-SCHEMA.md` stays bit-ex
 <!-- GSD:skills-start -->
 ## Project Skills
 
-No project-specific skills configured. Use GSD workflow commands for project management.
+No project-specific skills configured. (GSD workflow commands are being retired — see §GSD Workflow Enforcement.)
 <!-- GSD:skills-end -->
 
 ## On-Demand Skills (web/mobile fallback)
@@ -227,8 +235,18 @@ web/mobile remote session**; when SDD points to them, do this instead:
 <!-- GSD:gsd-workflow-start -->
 ## GSD Workflow Enforcement
 
-This project uses GSD (Get Shit Done) workflow. Follow these rules:
-- Never modify files in `.planning/` without being instructed by a GSD workflow
+> **⚠️ Migration period (since 2026-06-23):** Paralife is migrating off GSD. The
+> rules below were authored by GSD's tooling and are **no longer hard
+> requirements**. In particular, the "never modify docs outside a GSD workflow"
+> constraint is **relaxed**: directly editing docs — including files under
+> `.planning/`, `docs/`, this `CLAUDE.md`, `README.md`, and the decision/roadmap
+> registers — is fine and **encouraged where it keeps them accurate**. You no
+> longer need a GSD skill to touch a doc. Treat the items below as historical
+> context for the GSD-era process, not as gates. (See
+> `workflow-migration-investigation-prompt.md` for the migration background.)
+
+This project used the GSD (Get Shit Done) workflow. During the GSD era the rules were:
+- ~~Never modify files in `.planning/` without being instructed by a GSD workflow~~ — relaxed during migration; doc edits are fine.
 - Always check `.planning/STATE.md` for current project position before starting work
 - Follow the phase-based development process: discuss → plan → execute → verify
 - Respect dependency ordering between phases as defined in `.planning/ROADMAP.md`
@@ -246,37 +264,43 @@ This project has artifacts from two different project management tools due to a 
 
 ### GSD2 artifacts (`.gsd/`)
 
-Used for M001 (Foundation) and initial M002 tracking.
+Used for M001 (Foundation) and initial M002 tracking. **Only a markdown subset is retained in the repo** — the live GSD2 SQLite database (`gsd.db`), `state-manifest.json`, and `event-log.jsonl` are **not present** (defunct/gitignored). What remains under `.gsd/`:
 
-- **`gsd.db`** — SQLite database. Authoritative source for milestones, slices, tasks, decisions, quality gates, verification evidence, and assessments. Query with `sqlite3 .gsd/gsd.db`.
-- **`DECISIONS.md`** — Append-only decision register (D001–D007). Markdown projection of the `decisions` table.
-- **`milestones/M00x/`** — Hierarchy: `M00x-ROADMAP.md`, `M00x-SUMMARY.md`, `M00x-VALIDATION.md`, then `slices/S0x/S0x-PLAN.md` and `tasks/T0x-PLAN.md` / `T0x-SUMMARY.md`.
-- **`state-manifest.json`** — JSON snapshot for headless queries.
-- **`event-log.jsonl`** — JSONL event stream.
+- **`DECISIONS.md`** — Decision register (D001–D005). Markdown projection of the original GSD2 `decisions` table.
+- **`milestones/`** — Archived milestone hierarchy (`M00x-ROADMAP.md`, `M00x-SUMMARY.md`, slice/task plans).
 
 ### GSD1 artifacts (`.planning/`)
 
-Used for M002 (Living Simulation) after migration on 2026-04-11.
+Adopted after the 2026-04-11 migration; the live planning corpus from M002 onward (now milestone v3.0).
 
-- **`PROJECT.md`** — Project vision, core value, requirements.
-- **`ROADMAP.md`** — Phase checklist (all 10 phases, both milestones).
+- **`PROJECT.md`** — Project vision, core value, current milestone.
+- **`ROADMAP.md`** — Phase checklist across all milestones (v1.0–v3.0).
 - **`STATE.md`** — Session continuity state (current position, last activity, blockers).
+- **`REQUIREMENTS.md`** — Active-milestone requirements (currently v3.0 `SCALE-01..10`).
+- **`MILESTONES.md`** — Milestone archive index.
 - **`config.json`** — Workflow preferences (`{"version": 1}`).
-- **`codebase/`** — `ARCHITECTURE.md`, `STRUCTURE.md`, `STACK.md`, `INTEGRATIONS.md` — detailed codebase analysis.
-- **`phases/01–10/`** — Per-phase directories. Phases 01–05 (GSD2-era) have only `CONTEXT.md`. Phases 06–10 (GSD1-era) have `PLAN.md`, `SUMMARY.md`, task breakdowns.
-- **`v1.0-MILESTONE-AUDIT.md`** — Post-completion audit with requirement scores, tech debt, resolved issues.
+- **`codebase/`** — `ARCHITECTURE.md`, `STRUCTURE.md`, `STACK.md`, `INTEGRATIONS.md` — detailed codebase analysis. ⚠️ Partly stale (e.g. `ARCHITECTURE.md` lists only 3 of the 5 `Entity` permits and a "4-phase" pipeline); cross-check against code.
+- **`DOC-RECONCILIATION-FINDINGS.md`** — prior doc-vs-code audit (2026-04-20).
+- **`phases/01–22/` (plus `999.x`)** — Per-phase directories. Phases 01–05 (GSD2-era) have only `CONTEXT.md`; later phases add `PLAN.md`, `SUMMARY.md`, research/review/task breakdowns.
+- **`milestones/`** — Archived per-milestone audits & roadmaps (`v1.0-MILESTONE-AUDIT.md`, `v2.0-MILESTONE-AUDIT.md`, `v2.0-REQUIREMENTS.md`, …).
 
 ### Migration notes
 
-- M001 phases (01–05) were fully managed by GSD2 — their artifacts are in `.gsd/milestones/M001/`.
-- M002 phases (06–10) have artifacts in both systems: GSD2 DB has slice/task records, `.planning/phases/` has GSD1-format plans and summaries.
-- No `REQUIREMENTS.md` exists — GSD2 used `success_criteria` JSON in the `milestones` DB table instead.
+- **GSD is being retired (migration started 2026-06-23).** The old "only a GSD
+  skill may edit GSD-managed docs" rule no longer applies — see §GSD Workflow
+  Enforcement above. Editing any doc directly (including `.planning/` artifacts)
+  is permitted and encouraged where it keeps them accurate.
+- M001 phases (01–05) were managed by GSD2 — their archived artifacts are under `.gsd/milestones/`.
+- M002 phases (06–10) have artifacts in both systems: GSD2 markdown plus GSD1-format plans/summaries under `.planning/phases/`.
+- `.planning/REQUIREMENTS.md` is the active-milestone requirements doc (v3.0). M001/M002 (GSD2) had **no** `REQUIREMENTS.md` — GSD2 used `success_criteria` JSON in its milestones DB instead.
 
-### Known tech debt (from milestone audit)
+### Known tech debt (from the v1.0 milestone audit) — all resolved
 
-| Phase | Item | Severity |
-|-------|------|----------|
-| 06 | `Cell.nutrientLevel` field is inert — defined and serialised but never written | Low |
-| 09 | `HeuristicBrain.predatorType` ternary has dead branch (both branches return same value) | Low |
-| 09 | `BotClient` uses raw `JsonNode`/`LinkedHashMap` instead of `Messages` sealed types | Low |
-| 10 | `LoadTest` omits explicit `nutrient-consume-energy` property (falls back to default) | Low |
+The four items the v1.0 audit flagged have since been fixed (re-confirmed against code 2026-06-23):
+
+| Phase | Item | Status |
+|-------|------|--------|
+| 06 | `Cell.nutrientLevel` was inert | ✅ Resolved — now written by `EnvironmentEngine`/`FertilityInitializer` and read as a fertility multiplier in `SimulationEngine` |
+| 09 | `HeuristicBrain.predatorType` dead-branch ternary | ✅ Resolved — unconditional `myType.predator()` (Phase 09 #3 fix) |
+| 09 | `BotClient` used raw `JsonNode`/`LinkedHashMap` | ✅ Resolved — now uses `com.paralife.codec` (`Frame` + `PerceptionCodec`) |
+| 10 | `LoadTest` omitted `nutrient-consume-energy` | ✅ Resolved — set explicitly in `LoadTest` |
