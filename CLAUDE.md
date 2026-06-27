@@ -236,6 +236,16 @@ web/mobile remote session**; when SDD points to them, do this instead:
   the remote harness (commit/push to the designated branch; open a PR only when
   the user explicitly asks).
 
+## Web/mobile (cloud sandbox) session quirks
+
+- **Multi-choice / structured questions are unreliable in mobile/cloud sandbox
+  mode.** Observed repeatedly (2026-06-27): when running in the web/mobile remote
+  execution environment, the structured multiple-choice prompt (`AskUserQuestion`)
+  loses the user's selection in transit — the answer never reaches the assistant.
+  Seen three times in one session. **Prefer asking the question in plain prose**
+  (numbered options the user can reply to in free text) over the structured
+  picker when in this environment.
+
 <!-- GSD:gsd-workflow-start -->
 ## GSD Workflow Enforcement
 
