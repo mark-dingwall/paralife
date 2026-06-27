@@ -92,7 +92,11 @@ Paralife is a distributed living simulation — a toroidal 2D world where three 
 | 2. Status caches | `Map<Position,Byte> cellStatusCache`, `Map<String,Byte> entityStatusCache` | `EnvironmentEngine.buildStatusCaches()` | Per-tick read-only bitmask projection (D-41). Derived from layer 1 + registries (BuffRegistry, Infection map). Rebuilt every tick, not a second source of truth |
 | 3. Wire bitmask | `cellStatus` / `entityStatus` bytes carried on the codec `CellEntry` inside each per-bot `Frame` | `TickBroadcaster` `@Order(50)` (per-bot) | Zero-trust vision-scoped bitmask. OVERCROWDED is **redacted per bot**: `cellStatus = (layer2 & ~BIT_OVERCROWDED) \| perBotOvercrowdedBit` — bit 0 recomputed from bot's 5x5 Moore count so outer vision cells correctly under-report global overcrowding (D-40 incomplete-information design) |
 
-Bit layout (D-38 `cellStatus` / D-39 `entityStatus`): OVERCROWDED=bit 0, TOXIN_PRESENT=bit 1 (`0x02`), MUTAGEN_ZONE=bit 2 (`0x04`). STARVING lives on `Cell.flags` (not `entityStatus`) as server-global entity-intrinsic state. `Cell.flags` retains `FLAG_OVERCROWDED`/`FLAG_STARVING` unchanged; env effects do NOT extend `Cell.flags` — intensity values don't fit single bits and cache locality favours per-effect shadow grids.
+Bit layout — two separate bytes, defined by `15-SCHEMA.md` §8.1.2/§8.1.3 (the wire contract):
+- **`cellStatus` / `envState`** (D-38): OVERCROWDED=bit 0 (`0x01`, vision-scoped — redacted per bot), TOXIN_PRESENT=bit 1 (`0x02`), MUTAGEN_ZONE=bit 2 (`0x04`).
+- **`entityStatus` / `entityState`** (D-39): STARVING=bit 0 (`0x01`, projected from `Cell.FLAG_STARVING`), MUTATING=bit 1 (`0x02`, active infection), BUFFED=bit 2 (`0x04`, active survivor buff). There is intentionally **no** entity-level TOXIC bit — "entity on a toxic cell" is derivable from the cell-level TOXIN_PRESENT bit at the same coordinate. `EnvironmentEngine.buildStatusCaches()` is the encoder, `HeuristicBrain` the canonical decoder; both are pinned to these schema literals by contract tests (`TickBroadcasterProjectionTest`, `HeuristicBrainDeterminismTest`).
+
+`Cell.flags` retains `FLAG_OVERCROWDED`/`FLAG_STARVING`; STARVING is both an intrinsic cell flag (set by `SimulationEngine` `@Order(10)`) **and** projected onto `entityStatus` bit 0 at `@Order(14)` so bots can see prey starvation. Env effects do NOT extend `Cell.flags` — intensity values don't fit single bits and cache locality favours per-effect shadow grids.
 
 **Entry points:**
 - `ParalifeApplication.main()` — Spring Boot startup

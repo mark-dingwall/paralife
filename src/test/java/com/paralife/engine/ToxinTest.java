@@ -1,6 +1,7 @@
 package com.paralife.engine;
 
 import com.paralife.codec.Frame;
+import com.paralife.world.Cell;
 import com.paralife.world.Entity.BondedPair;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
@@ -60,12 +61,14 @@ class ToxinTest {
     @Autowired CompositeRegistry compositeRegistry;
     @Autowired ActionResolver actionResolver;
     @Autowired BotRegistry botRegistry;
+    @Autowired LiveEntityRegistry liveEntityRegistry;
 
     @BeforeEach
     void reset() {
         worldGrid.clear();
         compositeRegistry.clear();
-        botRegistry.clear();
+        botRegistry.clear();                 // main's salvaged ActionResolver splash tests
+        liveEntityRegistry.clearForTest();   // our buildStatusCaches projection tests
         env.resetToxinStateForTest();
     }
 
@@ -234,8 +237,8 @@ class ToxinTest {
     @Test
     void buildStatusCachesSetsToxinPresentBitAboveThresholdOnly() {
         // threshold=20. Cell A with intensity=50 → TOXIN_PRESENT set. Cell B with
-        // intensity=10 → below threshold → no cellStatus bit (but entity TOXIC bit
-        // still fires if an entity is present).
+        // intensity=10 → below threshold → no cellStatus bit. (There is no entity-level
+        // TOXIC bit per schema §8.1.2 — see buildStatusCachesSetsNoEntityToxicBit.)
         env.stampToxinIntensityForTest(new Position(12, 12), 50);
         env.stampToxinIntensityForTest(new Position(13, 13), 10);
 
@@ -248,19 +251,56 @@ class ToxinTest {
     }
 
     @Test
-    void buildStatusCachesSetsEntityToxicBitForAnyPositiveIntensity() {
-        // Entity-level TOXIC bit uses > 0 (separate threshold from cell bit).
+    void buildStatusCachesSetsNoEntityToxicBit() {
+        // Schema §8.1.2 defines NO entity-level TOXIC bit. An entity standing on a toxic
+        // cell gets no entity-status bit from the toxin; a bot infers "on a toxic cell"
+        // from the cell-level TOXIN_PRESENT bit at the same coordinate instead.
         Particle p = new Particle("p-toxic", ParticleType.CATALYST, 100, 100);
         worldGrid.setEntity(0, 0, p);
-        env.stampToxinIntensityForTest(new Position(0, 0), 1);  // below cell threshold
+        env.stampToxinIntensityForTest(new Position(0, 0), 50);  // above cell threshold(20)
 
         env.buildStatusCachesForTest();
 
-        assertThat(env.getEntityStatus("p-toxic")
-                & EnvironmentEngine.ENTITY_STATUS_TOXIC).isNotZero();
-        // cellStatus for that position remains zero because 1 < threshold(20).
+        // Not infected / buffed / starving, and no entity TOXIC bit → entityStatus is empty.
+        assertThat(env.getEntityStatus("p-toxic")).isZero();
+        // The toxic signal lives on the cell bit instead.
         assertThat(env.getCellStatus(new Position(0, 0))
-                & EnvironmentEngine.CELL_STATUS_TOXIN_PRESENT).isZero();
+                & EnvironmentEngine.CELL_STATUS_TOXIN_PRESENT).isNotZero();
+    }
+
+    @Test
+    void buildStatusCachesSetsStarvingBitFromCellFlag() {
+        // Schema §8.1.2 bit 0: STARVING is projected onto entityStatus, sourced from
+        // Cell.FLAG_STARVING (set by SimulationEngine). Revived in the entityStatus drift fix.
+        Particle p = new Particle("p-starve", ParticleType.CATALYST, 5, 100);
+        worldGrid.setEntity(2, 2, p);
+        worldGrid.setCell(2, 2, worldGrid.getCell(2, 2).withAddedFlag(Cell.FLAG_STARVING));
+        liveEntityRegistry.register("p-starve", new Position(2, 2));
+
+        env.buildStatusCachesForTest();
+
+        assertThat(env.getEntityStatus("p-starve") & EnvironmentEngine.ENTITY_STATUS_STARVING)
+                .as("STARVING bit (0x01) projected from Cell.FLAG_STARVING")
+                .isNotZero();
+    }
+
+    @Test
+    void buildStatusCachesSetsStarvingBitFromCellFlagViaGridScanFallback() {
+        // Same projection as above, but with an EMPTY liveEntityRegistry so
+        // buildStatusCaches takes the grid-scan fallback branch (EnvironmentEngine
+        // ~:1011) instead of the registry branch. The two branches carry copy-identical
+        // STARVING logic; this pins the fallback so a future edit to only one branch
+        // can't silently re-drop STARVING.
+        Particle p = new Particle("p-starve-scan", ParticleType.CATALYST, 5, 100);
+        worldGrid.setEntity(3, 3, p);
+        worldGrid.setCell(3, 3, worldGrid.getCell(3, 3).withAddedFlag(Cell.FLAG_STARVING));
+        // Intentionally NOT registered in liveEntityRegistry → empty registry → grid scan.
+
+        env.buildStatusCachesForTest();
+
+        assertThat(env.getEntityStatus("p-starve-scan") & EnvironmentEngine.ENTITY_STATUS_STARVING)
+                .as("STARVING bit (0x01) projected via the grid-scan fallback branch")
+                .isNotZero();
     }
 
     // ── Splash damage fraction ─────────────────────────────────────

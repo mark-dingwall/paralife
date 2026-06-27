@@ -959,9 +959,11 @@ public class SimulationEngine {
                     worldGrid.setEntity(x, y, updated);
                     decayed++;
                 }
-                // Plan 02 (D-10): FLAG_STARVING lifecycle for observability only.
-                // Combat/consume modifiers read current energy directly via
-                // StarvationConfig.computeIntensity — never read the flag.
+                // Plan 02 (D-10): FLAG_STARVING lifecycle. Combat/consume modifiers
+                // read current energy directly via StarvationConfig.computeIntensity
+                // — they never read the flag. The flag is, however, the source for the
+                // entityStatus STARVING wire bit (EnvironmentEngine.buildStatusCaches
+                // projects it at @Order(14)), so it is no longer purely observability.
                 updateStarvingFlag(x, y, updated.energy(), updated.maxEnergy(),
                         profile.starvationThreshold(), profile.starvationFloor());
             } else if (cell.occupant() instanceof Entity.BondedPair bp) {
@@ -1009,7 +1011,8 @@ public class SimulationEngine {
     /**
      * Apply starvation attack boost (D-10, D-11) to a base combat value, using
      * the attacker's CURRENT energy to compute intensity. Never reads
-     * {@link Cell#FLAG_STARVING} — that flag is observability-only.
+     * {@link Cell#FLAG_STARVING} — that flag is not a combat input (it is instead
+     * the source for the entityStatus STARVING wire projection, D-39).
      *
      * <p>Plan 14-05: ATTACK_PLUS_1 adds a flat +1 to the base BEFORE the
      * starvation-intensity multiplier (D-15). Buff check lives here so every
