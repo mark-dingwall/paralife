@@ -35,6 +35,16 @@ class BotFleetTest {
     private BotFactory factory;
     private String serverUri;
 
+    // Generous safety-net for the bot connect/settle handshake. This is PLUMBING to
+    // reach each test's real assertion, not a behavioural deadline — under a 2-core
+    // VT-carrier squeeze a single bot's Jetty cold-start handshake was observed to
+    // exceed a tight 10s (forkEvery=0 stress sweep, this class:onCloseHookFiresExactlyOnce).
+    // A safety-net only exists to bound a genuine hang, so it should be generous, not
+    // tuned to the happy path. (Same class of fix as TD-22-D for HundredBotIntegrationTest.)
+    // Deliberately NOT applied to awaitAllSettled_completesWithin5Seconds (a real 5s SLA
+    // assertion) or the badFleet negative-path waits (which expect failure).
+    private static final long SETTLE_TIMEOUT_S = 30;
+
     @BeforeEach
     void setUp() {
         serverUri = "ws://localhost:" + port + "/ws/world";
@@ -75,7 +85,7 @@ class BotFleetTest {
         try {
             fleet.launch(serverUri, 5, BotIdentity.operator(),
                     RampUpSpec.instant(), SpeciesMix.balanced(), factory);
-            fleet.awaitAllSettled().get(10, TimeUnit.SECONDS);
+            fleet.awaitAllSettled().get(SETTLE_TIMEOUT_S, TimeUnit.SECONDS);
 
             boolean badLogFound = appender.list.stream()
                     .anyMatch(e -> e.getFormattedMessage().contains("Not all bots finished connecting within timeout"));
@@ -89,7 +99,7 @@ class BotFleetTest {
     void peakIsTrueHighWaterMark() throws Exception {
         fleet.launch(serverUri, 5, BotIdentity.operator(),
                 RampUpSpec.instant(), SpeciesMix.balanced(), factory);
-        fleet.awaitAllSettled().get(10, TimeUnit.SECONDS);
+        fleet.awaitAllSettled().get(SETTLE_TIMEOUT_S, TimeUnit.SECONDS);
 
         // All bots should have registered
         Awaitility.await().atMost(Duration.ofSeconds(10))
@@ -109,7 +119,7 @@ class BotFleetTest {
     void shutdownIsIdempotent() throws Exception {
         fleet.launch(serverUri, 3, BotIdentity.operator(),
                 RampUpSpec.instant(), SpeciesMix.balanced(), factory);
-        fleet.awaitAllSettled().get(10, TimeUnit.SECONDS);
+        fleet.awaitAllSettled().get(SETTLE_TIMEOUT_S, TimeUnit.SECONDS);
 
         CountDownLatch bothStarted = new CountDownLatch(2);
         CountDownLatch bothDone = new CountDownLatch(2);
@@ -152,7 +162,7 @@ class BotFleetTest {
         // Start a single bot and register a close callback.
         List<BotClient> bots = fleet.launch(serverUri, 1, BotIdentity.operator(),
                 RampUpSpec.instant(), SpeciesMix.balanced(), factory);
-        fleet.awaitAllSettled().get(10, TimeUnit.SECONDS);
+        fleet.awaitAllSettled().get(SETTLE_TIMEOUT_S, TimeUnit.SECONDS);
 
         BotClient bot = bots.get(0);
         CountDownLatch closedLatch = new CountDownLatch(1);
@@ -173,7 +183,7 @@ class BotFleetTest {
         // Jetty @OnWebSocketClose path fire, callbacks must run EXACTLY ONCE.
         List<BotClient> bots = fleet.launch(serverUri, 1, BotIdentity.operator(),
                 RampUpSpec.instant(), SpeciesMix.balanced(), factory);
-        fleet.awaitAllSettled().get(10, TimeUnit.SECONDS);
+        fleet.awaitAllSettled().get(SETTLE_TIMEOUT_S, TimeUnit.SECONDS);
 
         BotClient bot = bots.get(0);
         AtomicInteger fireCount = new AtomicInteger(0);
@@ -248,7 +258,7 @@ class BotFleetTest {
         // At 50/s with 10 bots, ramp should finish in ~200ms (9 intervals × 20ms each)
         // We allow 1s of wall-clock slack for VT scheduling.
         assertThat(elapsed).isLessThan(1000L);
-        fleet.awaitAllSettled().get(15, TimeUnit.SECONDS);
+        fleet.awaitAllSettled().get(SETTLE_TIMEOUT_S, TimeUnit.SECONDS);
     }
 
     @Test
@@ -260,6 +270,6 @@ class BotFleetTest {
 
         // Wave of 5 then 200ms sleep then wave of 5; total >= 200ms.
         assertThat(elapsed).isGreaterThanOrEqualTo(200L);
-        fleet.awaitAllSettled().get(15, TimeUnit.SECONDS);
+        fleet.awaitAllSettled().get(SETTLE_TIMEOUT_S, TimeUnit.SECONDS);
     }
 }
