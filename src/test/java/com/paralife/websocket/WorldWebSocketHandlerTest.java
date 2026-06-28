@@ -96,10 +96,16 @@ class WorldWebSocketHandlerTest {
         handler.markDead(session);
         handler.handleMessage(session, new TextMessage("r|C"));
 
-        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
-        verify(session, timeout(2000).atLeastOnce()).sendMessage(captor.capture());
-        boolean sawCap = captor.getAllValues().stream()
-                .anyMatch(m -> m.getPayload().startsWith("E|429"));
-        assertTrue(sawCap, "Expected E|429 after respawn cap exceeded");
+        // The handler drives 7 outbound frames (1 registration ack + 5 respawn acks +
+        // the final E|429), all sent ASYNCHRONOUSLY through the per-session VT drain loop.
+        // A plain timeout(...).atLeastOnce() returns on the FIRST frame to land, so asserting
+        // on the captured values right after races the still-queued E|429 (the LAST frame) —
+        // intermittently the cap frame hasn't drained yet and the assertion sees only the
+        // earlier acks. (Observed ~12% under a 2-core VT-carrier squeeze.) Bumping the timeout
+        // would NOT fix it: atLeastOnce still unblocks on the first frame regardless of the
+        // value. Wait for the SPECIFIC E|429 send instead — Mockito polls until that exact
+        // frame is observed, which both synchronises on and asserts the cap rejection.
+        verify(session, timeout(5000).atLeastOnce()).sendMessage(argThat(
+                msg -> msg instanceof TextMessage tm && tm.getPayload().startsWith("E|429")));
     }
 }

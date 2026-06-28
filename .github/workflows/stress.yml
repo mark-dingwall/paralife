@@ -1,0 +1,76 @@
+name: Stress (flaky-test sweep)
+
+# Manual flake-hunter. Runs the full suite N times back-to-back, each pinned to a
+# small CPU set via taskset so the Java 21 virtual-thread carrier pool is squeezed
+# (availableProcessors honours the affinity mask on Linux). Fewer cores => more
+# carrier-starvation pressure => intermittent timing flakes surface faster. This is
+# the CI-side equivalent of the local 2-core sweep that found the respawnCapEnforced
+# race; run it after touching anything in the WebSocket/outbound/tick hot path, or
+# whenever a default-suite green needs a confidence check.
+#
+# Defaults (10 runs @ 2 cores) mirror a small GitHub runner / the project's
+# documented CI floor. Bump iterations for a deeper sweep; lower cores for more
+# pressure. The job fails if ANY run fails, and uploads the failing reports.
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Number of full-suite runs"
+        required: false
+        default: "10"
+      cores:
+        description: "CPU cores to pin via taskset (lower = more VT-carrier pressure)"
+        required: false
+        default: "2"
+
+jobs:
+  stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Repeated forkEvery=0 suite runs (pinned cores)
+        run: |
+          set -u
+          N="${{ github.event.inputs.iterations }}"
+          CORES="${{ github.event.inputs.cores }}"
+          mask="0-$((CORES - 1))"
+          echo "Sweeping $N run(s), pinned to cores $mask (taskset)"
+          fails=0
+          declare -a failed_runs=()
+          for i in $(seq 1 "$N"); do
+            echo "::group::run $i/$N  (taskset -c $mask)"
+            if taskset -c "$mask" ./gradlew cleanTest test -x jacocoTestReport --no-daemon --console=plain; then
+              echo "run $i: PASS"
+            else
+              echo "run $i: FAIL"
+              fails=$((fails + 1))
+              failed_runs+=("$i")
+            fi
+            echo "::endgroup::"
+          done
+          echo "=============================================="
+          echo "Sweep complete: $((N - fails))/$N clean, $fails failed"
+          if [ "$fails" -ne 0 ]; then
+            echo "Failing runs: ${failed_runs[*]}"
+          fi
+          echo "=============================================="
+          [ "$fails" -eq 0 ]
+
+      - name: Upload reports from last failing run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-failure-reports
+          path: |
+            build/reports/tests/test/
+            build/test-results/test/
+          if-no-files-found: ignore

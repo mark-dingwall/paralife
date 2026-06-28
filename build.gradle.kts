@@ -82,13 +82,23 @@ tasks.withType<Test> {
     // 497 leaked threads from earlier tests starved the virtual-thread carrier pool —
     // proving leaks now exist outside slow-tagged tests too. Made unconditional until
     // the integration-test resource-leak audit (Phase 22 / 22.1) could safely remove it.
-    // 2026-06-14 (P22.1): I-04 exit gate met — flipped to 0 so the whole suite shares ONE
-    // JVM. Closing three root causes made this safe: (A) WorldWebSocketHandler @PreDestroy
-    // close-aware mass-detach → 0 "did not exit" drain-VT WARNs; (B) test client-stop hygiene
-    // (BlockingWebSocketClient self-clean + register-before-connect) → 0 HttpClient/scheduler
-    // residue in the end-of-suite census; (C) a real cleanupByEntityId→cleanupBot double-dec
-    // of the active-bucket gauge (surfaced only under shared-JVM context reuse). 967 tests,
-    // 3 consecutive green forkEvery=0 runs, threads cache-bounded (leakProbe census).
+    // 2026-06-17 (`876c8b1`): flipped to 0 so the whole suite shares ONE JVM. This shipped
+    // as the leak-fix commit, NOT a formal Phase 22.1 execution — P22.1 revalidation is still
+    // unexecuted (see .planning/STATE.md). Closing three root causes made the flip safe:
+    // (A) WorldWebSocketHandler @PreDestroy close-aware mass-detach → 0 "did not exit" drain-VT
+    // WARNs; (B) test client-stop hygiene (BlockingWebSocketClient self-clean +
+    // register-before-connect) → 0 HttpClient/scheduler residue in the end-of-suite census;
+    // (C) a real cleanupByEntityId→cleanupBot double-dec of the active-bucket gauge (surfaced
+    // only under shared-JVM context reuse).
+    // Empirical confidence (2026-06-27, branch claude/forkevery-test-flakiness): 44 back-to-back
+    // forkEvery=0 full-suite runs (1013 tests) pinned to 2 cores via taskset to squeeze the VT
+    // carrier pool. ZERO leak / VT-exit / "Could not write XML" signals across all 44 — the leak
+    // fix holds. The only failures were three timing-fragile tests (all addressed): a test-logic
+    // race (WorldWebSocketHandlerTest.respawnCapEnforced — fixed), a tight connect/settle timeout
+    // (BotFleetTest — widened), and a load-throughput SLA starved below its compute floor by the
+    // 2-core squeeze (LoadTest.hundredBotsNoCorruption — reclassified @Tag("slow"), out of the
+    // default gate). The CI stress sweep (.github/workflows/stress.yml) reproduces the 2-core
+    // squeeze on demand; the ci.yml gate runs at the runner's native core count.
     forkEvery = 0
     maxParallelForks = 1
     finalizedBy(tasks.jacocoTestReport)
