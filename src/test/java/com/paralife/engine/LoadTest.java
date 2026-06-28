@@ -9,6 +9,7 @@ import com.paralife.bot.SpeciesMix;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,6 +53,15 @@ import static org.assertj.core.api.Assertions.assertThat;
         "paralife.admission.cap=1000000"
 })
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+// @Tag("slow"): this is a load-THROUGHPUT assertion (≥80% of 100 concurrently-connecting
+// bots register within the settle window), not a deterministic mechanic. Its outcome
+// depends on available compute — under a constrained-core squeeze (e.g. the 2-core CI
+// stress floor) the VT carrier pool can't handshake+register 80% of 100 bots in time, so
+// the assertion intermittently fails (~2% observed in the forkEvery=0 sweep) for reasons
+// that are environmental, not a code defect. Per the project's "pin mechanics; defer
+// emergence/load" principle it is excluded from the default `./gradlew test` gate and run
+// on-demand via `-PincludeLong=true` (same disposition as EmergenceStabilityLoadTest).
+@Tag("slow")
 class LoadTest {
 
     private static final Logger log = LoggerFactory.getLogger(LoadTest.class);
