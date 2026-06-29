@@ -12,7 +12,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * <p><strong>D-20: This record does NOT contain {@code outbound-queue-size}.</strong>
  * The outbound queue size lives in {@link
  * com.paralife.admission.AdmissionConfig.BackpressureConfig#outboundQueueSize()}
- * — that key is kept in place for Phase 20 (CLAUDE.md / 17-ADMISSION.md /
+ * — that key is kept in place for Phase 20 (CLAUDE.md / ADMISSION.md /
  * AdmissionConfig.java cross-references stay intact). Phase 999.4 owns the
  * eventual namespace consolidation. {@code AppRuntimeConfig.OutboundConfig}
  * carries <em>sibling</em> outbound knobs only.
@@ -33,7 +33,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *   <li>D-20: layer alongside paralife.admission.backpressure.outbound-queue-size, do NOT move</li>
  * </ul>
  *
- * <p>See {@code .planning/phases/20-connection-multiplexing-runtime-tuning/20-RUNTIME.md} §2.
+ * <p>See {@code docs/RUNTIME.md} §2.
  */
 @ConfigurationProperties(prefix = "paralife.runtime.app")
 public record AppRuntimeConfig(

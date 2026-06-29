@@ -1,15 +1,14 @@
 package com.paralife.bot;
 
-import com.paralife.codec.Frame;
-import org.junit.jupiter.api.Test;
-
-import java.util.List;
-import java.util.Optional;
-import java.util.Random;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+
+import com.paralife.codec.Frame;
+import java.util.List;
+import java.util.Optional;
+import java.util.Random;
+import org.junit.jupiter.api.Test;
 
 /**
  * HeuristicBrain determinism + BotState-gated branches.
@@ -33,7 +32,7 @@ class HeuristicBrainDeterminismTest {
 
     @Test
     void entityStatusBitConstantsMatchSchema() {
-        // 15-SCHEMA.md §8.1.2 entityState contract — the bot's decoder must agree with the
+        // SCHEMA.md §8.1.2 entityState contract — the bot's decoder must agree with the
         // server's encoder (EnvironmentEngine) and the schema. Pinned to literals so a future
         // drift on EITHER side is caught (the server side is pinned in TickBroadcasterProjectionTest).
         assertEquals(0x01, HeuristicBrain.ENTITY_STATUS_STARVING, "STARVING = bit 0");

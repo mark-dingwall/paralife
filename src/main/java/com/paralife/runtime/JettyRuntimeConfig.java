@@ -17,13 +17,13 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * pre-existing legacy {@code paralife.websocket.idle-timeout-ms} value (Jetty's
  * own default is 30000). A fresh boot with no overrides exhibits zero behavioural
  * change vs the c22e487 baseline. Tuning is JFR-driven per D-10/D-13 — see
- * {@code .planning/phases/20-connection-multiplexing-runtime-tuning/20-RUNTIME.md} §3.
+ * {@code docs/RUNTIME.md} §3.
  *
  * <p>(Pass-2 Concern #16: do NOT "fix" {@code idleTimeoutMs=60000} to Jetty's bare
  * 30000 default — the 60000 inherits the project's pre-existing operator behaviour,
- * codified in Phase 17 17-ADMISSION.md as the keepalive-service braces' belt. If you
+ * codified in Phase 17 ADMISSION.md as the keepalive-service braces' belt. If you
  * want to tighten it for a specific tier, that's a per-recipe override in
- * {@code 20-RUNTIME.md} §3, not a default change.)
+ * {@code RUNTIME.md} §3, not a default change.)
  *
  * <p>All eight setters are <strong>launch-only</strong> per Jetty 12's
  * {@code Configurable} contract: applied at WS upgrade per session; no live

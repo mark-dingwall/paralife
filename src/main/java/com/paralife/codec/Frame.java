@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Compact wire frames per 15-SCHEMA.md §5 + §6.
+ * Compact wire frames per SCHEMA.md §5 + §6.
  * Five permitted subtypes: r (register), S (sync), T (tick), a (action), E (error).
  */
 public sealed interface Frame
@@ -51,7 +51,7 @@ public sealed interface Frame
     }
 
     /**
-     * Server → Client per 15-SCHEMA.md §6.3.
+     * Server → Client per SCHEMA.md §6.3.
      *
      * <p>{@code sensorRadius} is the minimal-form sentinel:
      * <ul>
@@ -87,7 +87,7 @@ public sealed interface Frame
             if (maxEnergy < 0) throw new IllegalArgumentException("maxEnergy negative: " + maxEnergy);
             if (sensorRadius < 0 || sensorRadius > 3) {
                 throw new IllegalArgumentException(
-                        "sensorRadius must be 0 (minimal form) or 1..3 per 15-SCHEMA.md §6.3: " + sensorRadius);
+                        "sensorRadius must be 0 (minimal form) or 1..3 per SCHEMA.md §6.3: " + sensorRadius);
             }
             cells = (cells == null) ? List.of() : List.copyOf(cells);
             effects = (effects == null) ? List.of() : List.copyOf(effects);
@@ -106,7 +106,7 @@ public sealed interface Frame
         public boolean isMinimal() { return sensorRadius == 0; }
     }
 
-    /** Client → Server per 15-SCHEMA.md §8.6. verb ∈ {M, E, A, R, V, L}. */
+    /** Client → Server per SCHEMA.md §8.6. verb ∈ {M, E, A, R, V, L}. */
     record ActionFrame(char verb, Optional<String> arg) implements Frame {
         public ActionFrame {
             if (verb != 'M' && verb != 'E' && verb != 'A' && verb != 'R' && verb != 'V' && verb != 'L') {

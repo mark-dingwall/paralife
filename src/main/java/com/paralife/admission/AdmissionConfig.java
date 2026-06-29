@@ -16,7 +16,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *   <li>D-16: maintenance is a static flag (restart required to flip)</li>
  * </ul>
  *
- * <p>See {@code .planning/phases/17-durable-admission-control-backpressure/17-ADMISSION.md}
+ * <p>See {@code docs/ADMISSION.md}
  * for the full admission specification.
  */
 @ConfigurationProperties(prefix = "paralife.admission")

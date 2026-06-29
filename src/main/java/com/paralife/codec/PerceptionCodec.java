@@ -6,9 +6,9 @@ import java.util.Optional;
 import java.util.OptionalInt;
 
 /**
- * Shared encode/decode per 15-SCHEMA.md. Pure static; no hidden state (D-41).
+ * Shared encode/decode per SCHEMA.md. Pure static; no hidden state (D-41).
  *
- * <h2>DoS bounds (15-SCHEMA.md §12)</h2>
+ * <h2>DoS bounds (SCHEMA.md §12)</h2>
  * {@link #MAX_S_ENTRIES} and {@link #MAX_V_ENTRIES} bound the decoder's
  * per-frame list allocation. Exceeding either during decode is a wire-protocol
  * violation and throws {@link CodecException} (mapped by the handler to E|400).

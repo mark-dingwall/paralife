@@ -4,7 +4,7 @@ import java.util.Arrays;
 
 /**
  * Shared 64-char alphabet lookup tables for the Phase 15 compact wire protocol.
- * Authoritative alphabet from 15-SCHEMA.md §1 — do not reorder.
+ * Authoritative alphabet from SCHEMA.md §1 — do not reorder.
  */
 public final class Base64Codec {
 

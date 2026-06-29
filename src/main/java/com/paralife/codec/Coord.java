@@ -1,7 +1,7 @@
 package com.paralife.codec;
 
 /**
- * Three coordinate forms per 15-SCHEMA.md §2. Parser disambiguates by first-char class.
+ * Three coordinate forms per SCHEMA.md §2. Parser disambiguates by first-char class.
  * There is NO 6-char "extended relative" form — all relative coords are exactly 4 chars.
  */
 public sealed interface Coord permits Coord.Numpad, Coord.Relative, Coord.Absolute {

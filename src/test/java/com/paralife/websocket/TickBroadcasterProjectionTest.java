@@ -1,5 +1,11 @@
 package com.paralife.websocket;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
+
 import com.paralife.admission.OutboundSender;
 import com.paralife.codec.CellEntry;
 import com.paralife.codec.Coord;
@@ -23,19 +29,12 @@ import com.paralife.world.GridConfig;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.springframework.web.socket.WebSocketSession;
-
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.web.socket.WebSocketSession;
 
 /**
  * Plan 15-11 (Task 2): projection-layer test for the codec-driven
@@ -405,7 +404,7 @@ class TickBroadcasterProjectionTest {
 
     @Test
     void entityStateBitConstantsMatchSchema() {
-        // 15-SCHEMA.md §8.1.2 is the entityState wire contract: bit0 STARVING, bit1 MUTATING,
+        // SCHEMA.md §8.1.2 is the entityState wire contract: bit0 STARVING, bit1 MUTATING,
         // bit2 BUFFED; no entity-level TOXIC bit. These literals (not the constants) are the
         // guard — a future re-layout of the server constants fails here. This is exactly the
         // drift that previously went unnoticed (server had TOXIC=0x02, MUTATING=0x04, BUFFED=0x08,

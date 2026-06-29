@@ -46,7 +46,7 @@ paralife:
     # relaxing the production invariant. Production MUST stay at 5.
     max-respawns-per-session: 5
   # Phase 20 D-07 — runtime tuning surface. Layer 2 (jetty) and layer 3 (app).
-  # See 20-RUNTIME.md §2.
+  # See RUNTIME.md §2.
   runtime:
     # Phase 20 D-07 layer 2 — Jetty 12 WebSocket runtime tuning surface.
     # Defaults match project-current defaults — Jetty 12.0.18 defaults except
@@ -54,7 +54,7 @@ paralife:
     # value (Jetty's own default is 30000; Pass-2 Concern #16). Overriding any value
     # tunes that specific knob. All eight fields are [launch-only]: applied by
     # JettyRequestUpgradeStrategy.addWebSocketConfigurer at WS upgrade.
-    # See .planning/phases/20-connection-multiplexing-runtime-tuning/20-RUNTIME.md §2.
+    # See docs/RUNTIME.md §2.
     jetty:
       input-buffer-size: 4096           # [launch-only] Jetty default
       output-buffer-size: 4096          # [launch-only] Jetty default

@@ -4,7 +4,7 @@ package com.paralife.admission;
  * Stable machine-readable rejection-token vocabulary emitted in
  * {@code Frame.ErrorFrame} messages per Phase 17 D-07.
  *
- * <p>See {@code .planning/phases/17-durable-admission-control-backpressure/17-ADMISSION.md}
+ * <p>See {@code docs/ADMISSION.md}
  * for the full taxonomy, HTTP-style code mapping, and on-wire shape.
  */
 public final class RejectionToken {

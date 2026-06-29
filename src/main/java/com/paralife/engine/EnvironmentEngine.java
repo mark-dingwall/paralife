@@ -8,20 +8,14 @@ import com.paralife.engine.SeasonTracker.Season;
 import com.paralife.metrics.EmergenceMetrics;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.paralife.world.Entity.BondedPair;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.Role;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.annotation.PostConstruct;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.context.event.EventListener;
-import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -31,6 +25,11 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
 
 /**
  * Phase 14 environmental-rules tick-pipeline component (D-45, D-46).
@@ -75,7 +74,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
 
     // ── D-38 / D-39 status bit constants ──────────────────────────────
     // D-38 cellStatus (envState) layout: bit 0 OVERCROWDED (per-bot), bit 1 TOXIN_PRESENT, bit 2 MUTAGEN_ZONE.
-    // D-39 entityStatus layout (15-SCHEMA.md §8.1.2): bit 0 STARVING, bit 1 MUTATING, bit 2 BUFFED.
+    // D-39 entityStatus layout (SCHEMA.md §8.1.2): bit 0 STARVING, bit 1 MUTATING, bit 2 BUFFED.
     // NOTE: there is intentionally NO entity-level TOXIC bit — "entity on a toxic cell" is already
     // derivable from the cell-level TOXIN_PRESENT bit at the same coordinate, which the bot reads.
     /** Cell-status bit 1 (0x02): toxin intensity above {@link Toxin#intensityThreshold()} (D-38). */
