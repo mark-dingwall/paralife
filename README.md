@@ -25,6 +25,7 @@ population oscillations, niche formation) arises from simple local rules.
 - [`docs/`](docs/README.md) — live reference: capability contracts (wire protocol, admission, harness, runtime) + architecture internals
 - `.planning/`, `.gsd/` — frozen GSD-era planning history (see [`.planning/README.md`](.planning/README.md))
 - [`CLAUDE.md`](CLAUDE.md) — project constitution: conventions, architecture, the working loop
+- [`BACKLOG.md`](BACKLOG.md) — live backlog: deferred work with triggers + anchors
 
 ## Runtime tuning
 

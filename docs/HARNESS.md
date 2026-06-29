@@ -1,9 +1,9 @@
-# Phase 18: External Load Harness Spec
+# External Load Harness
 
-**Phase:** 18-external-load-harness-harness-identity
-**Status:** Authoritative — locks D-01 through D-21
-**Requirements:** SCALE-03 (standalone harness > 100 bots), SCALE-04 (harness identity in metrics/logs), SCALE-05 (BotRunner stays for ≤100)
-**Supersedes:** N/A (new document this phase)
+**Status:** Live capability contract.
+
+The standalone load harness (> 100 bots), harness-identity attribution in metrics/logs, and the
+WS:entity 1:1 connection model with its design ceilings. Any change updates this doc before code lands.
 
 See also: `ADMISSION.md` §1 (token taxonomy), §3 (FSM including STALLED), §4 (resume-token lifecycle); `SCHEMA.md` §6.1 (`r|` grammar — milestone-locked, not extended here).
 
