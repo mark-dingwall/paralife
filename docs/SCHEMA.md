@@ -1,11 +1,52 @@
-# Phase 15: Protocol Wire Schema (locked)
+# Wire Protocol — Compact-Text Codec
 
-**Committed:** 2026-04-20
-**Status:** LOCKED — gate D-50 satisfied. PLAN.md may now be written.
-**Supersedes:** multiple 15-CONTEXT.md decisions (see §Decision Reversal Table).
-**Revised:** 2026-04-20 — Vector 9 coord corrected (user directive during cross-AI review replan). Vector audit: only Vector 9 required a fix; all other vectors use valid 4-char relative / 1-char numpad / 4-char absolute forms per §2.
+**Status:** Live capability contract — byte-exact.
+**Pinned by:** `PerceptionCodecRoundTripTest` (round-trip vectors, §10), `PerceptionCodecErrorTest`
+(negative paths + DoS bounds, §12), `TickBroadcasterProjectionTest` (vision / tier projection, §7–§8).
 
-This document is the **single source of truth** for the Phase 15 compact wire protocol. Codec implementation (`PerceptionCodec`), round-trip tests, and planner agents all bind to this spec. Any change after lock must update this file *and* the round-trip test vectors before code changes land.
+This document is the single source of truth for the compact wire protocol; `PerceptionCodec` and its
+tests bind to it. **Any change updates this doc *and* its §10 round-trip vectors before code lands**
+— the merge-back contract.
+
+> **Normative layer:** the EARS clauses in **§0** are the contract. The prose sections (§1–§13) are
+> rationale, tables, and worked examples — where prose reads as a requirement, the §0 clause governs.
+> Reference-only sections are tagged *(non-normative)*.
+
+---
+
+## 0. Requirements (EARS)
+
+Each clause is `WHEN <event> THE SYSTEM SHALL <response>`, pinned to an existing test by the exact
+assertion it turns on (the line that would go red — not merely "a test exists"). Wire-constant
+literals (the base64 alphabet, the status bitmask values) are pinned *as literals* by deliberate
+exception to the "pin accessors, not magnitudes" rule: they are the immutable wire contract, not
+tunable defaults.
+
+| # | Requirement | § | Pinned by — anchor (test method · quoted assertion · symbol) |
+|---|---|---|---|
+| R1 | WHEN encoding or decoding any compact field THE SYSTEM SHALL use the single shared 64-char base64 alphabet. | §1 | `PerceptionCodecRoundTripTest.roundTripsExactly` — `assertEquals(wireFrame, reEncoded, …)`, all 13 vectors |
+| R2 | WHEN parsing a coordinate token THE SYSTEM SHALL select the form by first-char class: `+`/`-` → 4-char relative, `1`–`9` → numpad, absolute only in fixed positional slots. | §2 | `roundTripsExactly` — V2 (`s61F`, numpad) + V3 (`s+4-21R62`, relative) |
+| R3 | WHEN a relative coordinate's source offset would exceed ±63 THE SYSTEM SHALL clamp it to ±63 before emission, never widening the 4-char relative form. | §2, §8.4 | type invariant `Coord.Relative` ctor (±63 guard) + producer clamps (`TickBroadcaster.gatherLocoRelativeCells`, `buildRosterIfChanged`); V9 exercises the in-range max. *Uniform producer-clamp test → BACKLOG.md.* |
+| R4 | WHEN emitting a block THE SYSTEM SHALL separate list entries with `,` and intra-entry structure with `:`; `;` SHALL NOT appear. | §3 | `roundTripsExactly` — V6 (carries both separators) |
+| R5 | WHEN emitting a spatial block (`s`/`g`/`v`) THE SYSTEM SHALL place coord first; WHEN emitting a type block (`f`/`c`) THE SYSTEM SHALL place code first. | §4 | `roundTripsExactly` — V6 (`s`/`g`/`v` coord-first + `f`/`c` code-first in one frame) |
+| R6 | WHEN encoding a full `T` frame THE SYSTEM SHALL emit present optional blocks in the order `s, c, f, v, p, g`. | §6.3.1 | `roundTripsExactly` — V6 + V11 (`v` before `g`) |
+| R7 | WHEN decoding a frame THE SYSTEM SHALL accept exactly the five types `r/S/T/a/E` and reject any other. | §5, §6 | `PerceptionCodecErrorTest.unknownFrameTypeRejected` — `assertTrue(ex.getMessage().contains("Unknown frame type"))` |
+| R8 | WHEN a client registers THE SYSTEM SHALL encode `r\|<entityType>` with type ∈ {C,M,S}. | §6.1 | `RegisterFrameResumeTokenTest.encodeRegisterWithoutToken` — `assertEquals("r\|C", encoded)` |
+| R9 | WHEN syncing THE SYSTEM SHALL encode `S\|<entityId>[\|effects]`, the effects segment present only on resync. | §6.2 | `SyncFrameResumeTokenTest.parseSyncEntityOnly` — `assertEquals("abc-123", sf.entityId())`; V10 |
+| R10 | WHEN a bot is a passive composite member (SENSOR/DEFENDER) THE SYSTEM SHALL send the minimal `T` form (no vision/effects/pool/roster); WHEN authority-lite (FEEDER/ATTACKER/REPRODUCER) THE SYSTEM SHALL set sensorRadius = 1. | §7, §6.3.2 | `TickBroadcasterProjectionTest.compositeSensorMemberReceivesMinimalForm` — `assertThat(frame.isMinimal())…isTrue()`; `authorityLiteFeederHasSensorRadius1` — `assertThat(frame.sensorRadius())…isEqualTo(1)` |
+| R11 | WHEN emitting an error THE SYSTEM SHALL encode `E\|<code>[\|<message>]` with a 3-digit code. | §6.5 | `PerceptionCodecErrorTest.errorFrameRoundTrips` — `assertEquals("E\|429\|respawn cap", encoded)` |
+| R12 | WHEN emitting a vision cell THE SYSTEM SHALL prefix a presence byte (bit 0 entity, bit 1 env) and SHALL NOT emit presence=0 cells; entity kind per the §8.1.1 table. | §8.1, §8.1.1 | `TickBroadcasterProjectionTest.emptyCellsOmittedFromSBlock`; `tickFrameShowsNearbyEntitiesWithCorrectKindCodes` — `assertThat(kindCodeOf(east)).isEqualTo('M')` |
+| R13 | WHEN projecting entity status onto a cell THE SYSTEM SHALL encode STARVING=`0x01`, MUTATING=`0x02`, BUFFED=`0x04`. | §8.1.2 | `TickBroadcasterProjectionTest.entityStateBitConstantsMatchSchema` — `assertThat(EnvironmentEngine.ENTITY_STATUS_STARVING).isEqualTo((byte) 0x01)` (+ MUTATING `0x02`, BUFFED `0x04`) |
+| R14 | WHEN a tick produces a state transition THE SYSTEM SHALL carry at most one `c` token in the frame; on multiple candidates the server picks one (§8.2). | §8.2 | structural: `Frame.TickFrame.change` is `Optional<StateChange>` — singular by type; V5 (`cC:7A`) shows the encoding. Conflict-resolution is server-side emission, not round-trip-pinned (`TickBroadcaster` c-block, currently `Optional.empty()`). |
+| R15 | WHEN emitting an event THE SYSTEM SHALL accept every code in `Event.ALL_CODES` and reject any unknown code. | §8.4 | `everyEventCodeRoundTrips` (drives `Event.ALL_CODES`); `PerceptionCodecErrorTest.validateEventCodeRejectsZ` — `contains("Unknown event code 'Z'")` |
+| R16 | WHEN a client submits an action THE SYSTEM SHALL accept verbs `M/E/A/R/V/L` and reject any other. | §8.6 | `PerceptionCodecErrorTest.actionRoundTrips` — `assertEquals("a\|M\|8", encoded)`; `unknownActionVerbRejected` |
+| R17 | WHEN any valid frame is decoded then re-encoded THE SYSTEM SHALL produce byte-identical output. | §10 | `PerceptionCodecRoundTripTest.roundTripsExactly` — `assertEquals(wireFrame, reEncoded, …)`, all 13 vectors |
+| R18 | WHEN an `s` block exceeds `MAX_S_ENTRIES` (256) or a `v` block exceeds `MAX_V_ENTRIES` (32) THE SYSTEM SHALL throw `CodecException` (server then emits `E\|400`). | §12 | `PerceptionCodecErrorTest.boundedEntriesRejected` — `contains("MAX_S_ENTRIES")`; `boundedEventsRejected` — `contains("MAX_V_ENTRIES")` |
+
+**Pinning & deferrals.** R1/R2/R4/R5/R6/R17 share the byte-exact round-trip oracle
+(`roundTripsExactly`) — a strong joint gate, not clause-isolating. Two follow-ups — codec
+decode-semantic unit tests (the R1/R2 symmetric-bug gap) and R3's uniform producer-clamp + >±63
+reachability check — are in [`BACKLOG.md`](../BACKLOG.md), not inline here.
 
 ---
 
@@ -80,6 +121,8 @@ Blocks whose entries describe a **type anchor** put code first, coord as trailin
 ---
 
 ## 5. Frame Inventory
+
+*(Informative inventory. Frame-type acceptance is normative — §0 R7.)*
 
 | Char | Direction | Purpose | Frequency |
 |---|---|---|---|
@@ -420,6 +463,8 @@ a|<verb>[|<arg>]
 
 ## 9. Decision Reversal Table
 
+*(Non-normative — design history retained for facts/rationale.)*
+
 Decisions from `15-CONTEXT.md` superseded by this schema:
 
 | Decision | Was | Now | Reason |
@@ -515,6 +560,8 @@ These MUST all satisfy `PerceptionCodec.encode(decode(x)) == x` byte-for-byte. I
 
 ## 11. Authority / Behaviour Matrix
 
+*(Reference. The normative tier → frame-form rule is §0 R10.)*
+
 | Role / Entity | Tick frame | Sensor radius | Actions allowed | Notes |
 |---|---|---|---|---|
 | Solo Particle | Full `T` | 2 (3 with SENSOR_PLUS_1) | M, E, A, R | Own authority |
@@ -528,9 +575,10 @@ These MUST all satisfy `PerceptionCodec.encode(decode(x)) == x` byte-for-byte. I
 
 ---
 
-## 12. Parser Implementation Notes (non-normative)
+## 12. Parser Implementation Notes
 
-These are hints for the codec implementer; not wire-observable.
+Implementer hints (non-normative), **except the DoS bounds, which are wire-observable and normative —
+pinned by §0 R18**.
 
 - **Single pass.** All grammars are LL(1) given the position rules. No backtracking required.
 - **Character class table.** A 64-entry lookup table (`charToInt[128]`) handles decoding; a 64-char array (`intToChar[64]`) handles encoding. Share between all fields.
@@ -543,7 +591,7 @@ These are hints for the codec implementer; not wire-observable.
 
 ## 13. Known Follow-ups (out of scope)
 
-Tracked here so they're not forgotten when PLAN.md is written.
+*(Non-normative — backlog.)*
 
 - Precompress fan-out infrastructure (`BroadcastChannel`, `CompressedFrame`) → M005.
 - Visualizer UI + observer endpoint → M005.
@@ -554,4 +602,5 @@ Tracked here so they're not forgotten when PLAN.md is written.
 
 ---
 
-*Schema lock: 2026-04-20 per D-50 gate. PLAN.md proceeds on this spec. Vector 9 corrected 2026-04-20 during cross-AI review replan — no other vector changes required.*
+*Wire format is byte-exact and milestone-locked. Any change updates §0, the §10 round-trip vectors,
+and the codec in lockstep.*

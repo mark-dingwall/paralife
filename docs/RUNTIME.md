@@ -1,11 +1,11 @@
-# Phase 20: Runtime Tuning Spec
+# Runtime Tuning
 
-**Phase:** 20-connection-multiplexing-runtime-tuning
-**Status:** Authoritative — locks D-01..D-21 from 20-CONTEXT.md
-**Requirements:** SCALE-08 (overhead reduction, equivalent-strategy escape hatch), SCALE-09 (measured tuning, not guesswork)
-**Profile baseline:** Commit SHA `62c1b44` (Plan 1c F1/F2/F6 re-anchor, post-Phase 19.1 close)
+**Status:** Live capability contract.
 
-See also: `ADMISSION.md` §3 (STALLED FSM, the path Phase 20 tunes for stability under), `HARNESS.md` §1 (5000-conn/JVM design ceiling), `SCHEMA.md` §6 / §8 / §10 (Frame Grammars, Block Grammars, Round-trip Test Vectors — wire format LOCKED; Phase 20 D-10 codec opts MUST preserve byte-exact output).
+Per-connection runtime tuning (`paralife.runtime.*`) and per-scale-tier JVM presets for many
+concurrent WebSocket connections. Any change updates this doc before code lands.
+
+See also: `ADMISSION.md` §3 (STALLED FSM, the path this tuning stabilises), `HARNESS.md` §1 (5000-conn/JVM design ceiling), `SCHEMA.md` §6 / §8 / §10 (Frame Grammars, Block Grammars, Round-trip Test Vectors — wire format LOCKED; codec opts MUST preserve byte-exact output).
 
 ***
 

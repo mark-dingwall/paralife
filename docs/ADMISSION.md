@@ -1,9 +1,10 @@
-# Phase 17: Durable Admission Control Spec
+# Admission Control & Backpressure
 
-**Phase:** 17-durable-admission-control-backpressure
-**Status:** Authoritative — locks D-05, D-07, D-08
-**Requirements:** SCALE-01 (durable admission), SCALE-02 (overload / backpressure)
-**Supersedes:** backlog 999.1 temporary cap stopgap
+**Status:** Live capability contract.
+
+Durable admission, overload backpressure, the resume-token FSM, and the STALLED connection lifecycle.
+All wire-emitted rejection reasons are stable machine-readable tokens (§1). Any change updates this
+doc before code lands.
 
 ---
 
