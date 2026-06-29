@@ -21,6 +21,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so Spotless ratchetFrom(origin/main) can resolve the base
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -29,8 +31,10 @@ jobs:
           java-version: '21'
           cache: gradle
 
-      - name: Run test suite (forkEvery=0)
-        run: ./gradlew test --no-daemon --console=plain
+      - name: Lint (Spotless) + test suite (forkEvery=0)
+        # One Gradle invocation: pays JVM startup once and runs spotlessCheck
+        # first, so a formatting failure fails fast before the long test suite.
+        run: ./gradlew spotlessCheck test --no-daemon --console=plain
 
       - name: Upload test reports
         if: always()

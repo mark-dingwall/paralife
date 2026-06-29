@@ -3,6 +3,7 @@ plugins {
     jacoco
     id("org.springframework.boot") version "3.4.4"
     id("io.spring.dependency-management") version "1.1.7"
+    id("com.diffplug.spotless") version "6.25.0"
 }
 
 group = "com.paralife"
@@ -11,6 +12,22 @@ version = "0.0.1-SNAPSHOT"
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+// Lightweight formatting/hygiene gate (the absent lint signal flagged by the
+// workflow-migration investigation). Native Spotless steps only — no opinionated
+// Java reformatter, so existing style is preserved (CLAUDE.md: match existing style).
+// `ratchetFrom` introduces it to the 1000-test corpus without a reformat-the-world
+// commit: only files changed vs origin/main are checked; untouched legacy files are
+// left until next edited. `spotlessCheck` auto-binds to `check`.
+spotless {
+    java {
+        target("src/main/java/**/*.java", "src/test/java/**/*.java")
+        ratchetFrom("origin/main")
+        importOrder()
+        trimTrailingWhitespace()
+        endWithNewline()
     }
 }
 
