@@ -1,23 +1,22 @@
 package com.paralife.codec;
 
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Round-trip acceptance oracle for PerceptionCodec.
- * Vectors lifted verbatim from 15-SCHEMA.md §10. Every vector MUST satisfy:
+ * Vectors lifted verbatim from SCHEMA.md §10. Every vector MUST satisfy:
  *   PerceptionCodec.encode(PerceptionCodec.decode(vector)) == vector
  * byte-for-byte.
  *
  * This test is RED until plan 15-05 (codec impl) lands; then it must stay GREEN forever.
- * Adding a vector here REQUIRES adding a row in 15-SCHEMA.md §10.
+ * Adding a vector here REQUIRES adding a row in SCHEMA.md §10.
  */
 class PerceptionCodecRoundTripTest {
 

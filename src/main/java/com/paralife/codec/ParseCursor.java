@@ -2,7 +2,7 @@ package com.paralife.codec;
 
 /**
  * Package-private index cursor over a wire string. Single-pass LL(1) parser state
- * per 15-SCHEMA.md §12. Mutable by design — hand this cursor down the parse tree.
+ * per SCHEMA.md §12. Mutable by design — hand this cursor down the parse tree.
  */
 final class ParseCursor {
 

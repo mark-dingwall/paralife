@@ -1,6 +1,6 @@
 package com.paralife.codec;
 
-/** Per 15-SCHEMA.md §8.1. */
+/** Per SCHEMA.md §8.1. */
 public sealed interface KindData permits KindData.Simple, KindData.RockSolo, KindData.RockRun {
 
     /** Non-rock kind: C/M/S/D/N/T/0-5/F. */

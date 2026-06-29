@@ -4,7 +4,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 
 /**
- * One entry in the `s` block per 15-SCHEMA.md §8.1.
+ * One entry in the `s` block per SCHEMA.md §8.1.
  * presence: 1 = entity only, 2 = env only, 3 = both.
  * entityState/envState: base64 bitmask; omitted on wire when 0 (but present=3 entities with 0 entity state carry envState only).
  */

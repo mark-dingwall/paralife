@@ -4,13 +4,6 @@ import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
 import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.PreDestroy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
-import org.springframework.web.socket.CloseStatus;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketSession;
-
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -18,6 +11,12 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
 
 /**
  * Per-session virtual-thread outbound sender (Phase 17 D-10, D-11).
@@ -136,9 +135,9 @@ public class OutboundSender {
         queues.put(id, queue);
         overflowFiredFlags.put(id, new AtomicBoolean(false));
         // Phase 20 D-02 — One drain VT per session is structural per the WS:entity 1:1
-        // model (CLAUDE.md §Connection model, 18-HARNESS.md §1, 20-RUNTIME.md §1).
+        // model (CLAUDE.md §Connection model, HARNESS.md §1, RUNTIME.md §1).
         // Per-VT cost is a few KB heap; 1000+ VTs is acceptable. Per-connection cost
-        // is reduced via paralife.runtime.* tuning (see 20-RUNTIME.md §3), NOT by
+        // is reduced via paralife.runtime.* tuning (see RUNTIME.md §3), NOT by
         // sharing the drain VT across sessions. Multi-entity-per-VT requires explicit
         // ADR per Phase 18 D-21.
         Thread t = Thread.ofVirtual()

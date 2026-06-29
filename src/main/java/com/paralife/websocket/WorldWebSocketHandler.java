@@ -14,12 +14,12 @@ import com.paralife.codec.CodecException;
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.ActionResolver;
+import com.paralife.engine.BotRegistry;
 import com.paralife.engine.BuffRegistry;
 import com.paralife.engine.DeathCleanupHooks;
-import com.paralife.engine.EnvironmentEngine;
-import com.paralife.engine.EntityLifecycleListener;
-import com.paralife.engine.BotRegistry;
 import com.paralife.engine.EligibleCellIndex;
+import com.paralife.engine.EntityLifecycleListener;
+import com.paralife.engine.EnvironmentEngine;
 import com.paralife.engine.LiveEntityRegistry;
 import com.paralife.engine.MetabolicProfile;
 import com.paralife.engine.SpawnConfig;
@@ -29,7 +29,6 @@ import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
-
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
@@ -42,8 +41,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
 import org.springframework.http.HttpHeaders;
+import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -347,7 +346,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         sessionRegistry.register(session);
         if (outboundSender != null) {
             // Phase 20 D-02 — WS:entity 1:1 is a deliberate architectural choice, not an
-            // optimisation gap. See 20-RUNTIME.md §1 (and 18-HARNESS.md §1, CLAUDE.md
+            // optimisation gap. See RUNTIME.md §1 (and HARNESS.md §1, CLAUDE.md
             // §Connection model). Tuning per-connection cost is the equivalent
             // transport-level scale strategy (SCALE-08); collapsing entities onto a shared
             // session would require explicit ADR per D-21 of Phase 18.

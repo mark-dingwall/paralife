@@ -23,7 +23,7 @@ public final class AttributionSanitizer {
     public static final int MAX_HARNESS_ID_LENGTH = 32;
 
     /**
-     * Allowlist regex per {@code 18-HARNESS.md §2}: {@code ^[A-Za-z0-9-]{1,32}$}.
+     * Allowlist regex per {@code HARNESS.md §2}: {@code ^[A-Za-z0-9-]{1,32}$}.
      * Spaces, {@code =}, {@code /}, {@code _}, non-ASCII chars are rejected — a tight
      * superset of the original control-char-only guard (P18-Chunk-A remediation MEDIUM).
      */

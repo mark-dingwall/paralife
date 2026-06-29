@@ -1,16 +1,15 @@
 package com.paralife.engine;
 
-import org.junit.jupiter.api.Test;
-
-import java.util.Arrays;
-import java.util.List;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import java.util.Arrays;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
 /**
- * IRV (Instant Runoff) rounds per 15-SCHEMA.md §8.6. Ballots are 3-char numpad
+ * IRV (Instant Runoff) rounds per SCHEMA.md §8.6. Ballots are 3-char numpad
  * strings. Numpad mapping per {@link Direction#fromNumpad(char)}:
  * {@code 8=N, 9=NE, 6=E, 3=SE, 2=S, 1=SW, 4=W, 7=NW}.
  *

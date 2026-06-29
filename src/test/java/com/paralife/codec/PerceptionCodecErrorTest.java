@@ -1,14 +1,13 @@
 package com.paralife.codec;
 
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-
-import java.util.Optional;
-
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.Optional;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 
 /**
  * Negative-path tests for {@link PerceptionCodec} — malformed wire bytes, unknown
@@ -17,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * or silent acceptance.
  *
  * <p>Complements {@link PerceptionCodecRoundTripTest}, which covers the happy
- * path. See 15-SCHEMA.md §12 for LL(1) parser expectations and DoS bounds.
+ * path. See SCHEMA.md §12 for LL(1) parser expectations and DoS bounds.
  */
 class PerceptionCodecErrorTest {
 

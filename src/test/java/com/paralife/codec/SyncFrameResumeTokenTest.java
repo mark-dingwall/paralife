@@ -1,11 +1,10 @@
 package com.paralife.codec;
 
-import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import java.util.Optional;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
 
 /**
  * Round-trip and parse tests for the r:-sentinel resume-token slot on SyncFrame.
@@ -13,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * Locked design per Phase 17 Plan 02:
  *   - Sole disambiguator in parseSync: second slot starts with literal "r:" → token;
  *     otherwise → effect list. The 'f' prefix (TickFrame f-block) is irrelevant here;
- *     SyncFrame effects per 15-SCHEMA.md §6.2 / vector 10 are bare S:/I:/f... without
+ *     SyncFrame effects per SCHEMA.md §6.2 / vector 10 are bare S:/I:/f... without
  *     a block-header 'f'. The only signal that matters is whether the slot begins with "r:".
  *   - Token format: r:%016x — always 18 chars, always begins with literal "r:".
  */
@@ -36,7 +35,7 @@ class SyncFrameResumeTokenTest {
     @Test
     void parseSyncEntityAndEffects_legacyShapeF() {
         // S|abc-123|f5T2 — effect block that starts with 'f': not a token, parsed as effects.
-        // (Per 15-SCHEMA.md §6.2: effects are bare codes like S:/I:/fX, no block prefix.)
+        // (Per SCHEMA.md §6.2: effects are bare codes like S:/I:/fX, no block prefix.)
         // This test documents that f5T2 is treated as effect code 'f' followed by '5T2'
         // per the existing grammar — the disambiguator only checks "r:", not "f".
         // NOTE: 'f' is not a valid effect code per current schema, so this will produce a
@@ -48,7 +47,7 @@ class SyncFrameResumeTokenTest {
 
     @Test
     void parseSyncEntityAndEffects_vector10Shape() {
-        // V10 from 15-SCHEMA.md §10: S|7A|S:1Fg8,I:1Ef0 — effects starting with S:/I:.
+        // V10 from SCHEMA.md §10: S|7A|S:1Fg8,I:1Ef0 — effects starting with S:/I:.
         // This is the canonical resync shape; NO token, effects parsed directly.
         // The disambiguator must NOT be keyed off 'f' — both 'S:' and 'I:' are valid here.
         Frame frame = PerceptionCodec.decode("S|7A|S:1Fg8,I:1Ef0");

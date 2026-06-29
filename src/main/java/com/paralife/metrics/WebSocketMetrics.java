@@ -3,9 +3,8 @@ package com.paralife.metrics;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
-import org.springframework.stereotype.Component;
-
 import java.util.concurrent.atomic.AtomicInteger;
+import org.springframework.stereotype.Component;
 
 /**
  * Phase 15 D-38 metrics surface. Names follow Micrometer + Prometheus dot-separated
@@ -24,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * without reaching into extension internals. Previous drafts shipped a
  * fabricated coefficient-based estimate which misleads downstream dashboards.
  * Deferred to a follow-up plan once Jetty exposes a stable hook — see
- * 15-SCHEMA.md §13.
+ * SCHEMA.md §13.
  */
 @Component
 public class WebSocketMetrics {

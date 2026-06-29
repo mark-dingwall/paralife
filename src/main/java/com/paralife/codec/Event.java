@@ -7,7 +7,7 @@ import java.util.OptionalInt;
 import java.util.Set;
 
 /**
- * One entry in the `v` block per 15-SCHEMA.md §8.4.
+ * One entry in the `v` block per SCHEMA.md §8.4.
  * codes: E/A/H/T/M/R/L/N/S/D/B. Magnitude presence depends on code (see SCHEMA §8.4 table).
  *
  * <p>Phase 19.5 E1: 'B' (absorBed) added for the bond-formation prey-session
