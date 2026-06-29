@@ -192,18 +192,6 @@ consolidation is Phase 999.4. Codec hot-path opts (D-10, layer 4 of the tuning
 surface) are JFR-driven and never cross the wire — `15-SCHEMA.md` stays bit-exact.
 <!-- GSD:architecture-end -->
 
-## Code Review
-
-Review standards — the severity gate, the PR comment format, the adversarial posture, and the
-author-side reception discipline — live in `.github/REVIEW_GUIDELINES.md`. **Read it before
-reviewing a PR or opening one.** It specializes the Superpowers `requesting-code-review` /
-`receiving-code-review` skills (§On-Demand Skills) for Paralife's CI gate: a 4-tier
-Critical/High/Medium/Low scale, blocking at **High+**, backlogging **Medium** as a `TD-*` row,
-and noting **Low**. `AGENTS.md` / `GEMINI.md` re-export this plus project context to Codex /
-Gemini so cross-agent reviews share one rubric.
-
-@.github/REVIEW_GUIDELINES.md
-
 <!-- GSD:skills-start -->
 ## Project Skills
 
