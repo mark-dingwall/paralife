@@ -1,4 +1,3 @@
-<!-- GSD:project-start -->
 ## Project
 
 Paralife is a distributed living simulation — a toroidal 2D world where three competing particle species (Catalyst, Membrane, Spore) interact in rock-paper-scissors dynamics, alongside richer emergent structures (bonded pairs, composite organisms) and an environment layer (seasons, toxins, mutagens, lightning). A Spring Boot server runs the physics tick loop, broadcasts vision-scoped state via WebSocket over a compact-text wire protocol, and receives actions from autonomous bot clients. Built with Java 21 virtual threads for massive concurrency with simple blocking code.
@@ -9,9 +8,7 @@ Paralife is a distributed living simulation — a toroidal 2D world where three 
 - **v1.0 Foundation & Living Simulation** (M001/M002, Phases 01–10, ✅ complete) — server boots, tick loop, WebSocket broadcast, 100 concurrent bots; RPS entity dynamics, perception/action protocol, heuristic bots, population stability over 500+ ticks.
 - **v2.0 Combination & Emergence** (Phases 11–16, ✅ complete) — bonding/endosymbiosis, composite organisms, energy metabolism, environmental rules, compact-text transport, emergent-behaviour tests.
 - **v3.0 Scale Engineering / M4** (Phases 17–22, 🚧 active) — durable admission control + backpressure, external load harness, connection-multiplexing runtime tuning, high-density placement; latest sequenced phase complete is Phase 20.1, and Phase 21 (scale benchmark gate) is the next planned phase. Phase 22 (integration-test resource-leak audit) already ran out-of-band as 2026-05-03 incident response (merged via PR #3, `f941417`); its revalidation (Phase 22.1) is planned but **not yet executed** — see `.planning/STATE.md` / `.planning/ROADMAP.md`.
-<!-- GSD:project-end -->
 
-<!-- GSD:technology-start -->
 ## Technology Stack
 
 - **Java 21** — Virtual threads enabled (`spring.threads.virtual.enabled: true`)
@@ -23,9 +20,7 @@ Paralife is a distributed living simulation — a toroidal 2D world where three 
 - **picocli** — CLI parsing for `LoadHarness` (the in-process `BotRunner` CLI parses its args by hand)
 - **Compact-text wire codec** (`com.paralife.codec`) — hand-rolled protocol on the hot path; Jackson (transitive via Spring) is used only for actuator/JSON, not perception frames
 - **`@ConfigurationProperties`** bound to 16 records — e.g. `GridConfig`, `TickConfig`, `SimulationConfig`, `MetabolicProfile`, `EnvironmentConfig`, `BondingConfig`, `CompositeConfig`, `SeasonsConfig`, `AdmissionConfig`, `JettyRuntimeConfig`, `AppRuntimeConfig`
-<!-- GSD:technology-end -->
 
-<!-- GSD:conventions-start -->
 ## Conventions
 
 **Package structure:** `com.paralife.{world,engine,websocket,codec,admission,bot,harness,metrics,runtime,diagnostics}` — flat single-level per layer. `diagnostics` holds `DeathDiagnostics` (flag-gated death-cause + lifespan census). **OFF by default** (`@ConditionalOnProperty paralife.diagnostics.death-trace.enabled=true`, no yaml key); a no-op unless enabled. Shipped out-of-band (not a GSD phase) via PR #2 `464594e` 2026-05-27; wired into the tick pipeline (SimulationEngine / EnvironmentEngine / DeathFinalizer / LiveEntityRegistry). Provenance + follow-ups (TD-PR2-A..E): `.planning/STATE.md` §Roadmap Evolution.
@@ -54,9 +49,7 @@ Paralife is a distributed living simulation — a toroidal 2D world where three 
 ./gradlew bootRun           # Start server on :8080
 ./gradlew jacocoTestReport  # Generate coverage report
 ```
-<!-- GSD:conventions-end -->
 
-<!-- GSD:architecture-start -->
 ## Architecture
 
 **Packages / layers:**
@@ -190,13 +183,10 @@ D-20 keeps `paralife.admission.backpressure.outbound-queue-size` in
 `AdmissionConfig` rather than moving it under `paralife.runtime.app.*`; namespace
 consolidation is Phase 999.4. Codec hot-path opts (D-10, layer 4 of the tuning
 surface) are JFR-driven and never cross the wire — `15-SCHEMA.md` stays bit-exact.
-<!-- GSD:architecture-end -->
 
-<!-- GSD:skills-start -->
 ## Project Skills
 
 No project-specific skills configured. (GSD workflow commands are being retired — see §GSD Workflow Enforcement.)
-<!-- GSD:skills-end -->
 
 ## On-Demand Skills (web/mobile fallback)
 
@@ -246,7 +236,6 @@ web/mobile remote session**; when SDD points to them, do this instead:
   (numbered options the user can reply to in free text) over the structured
   picker when in this environment.
 
-<!-- GSD:gsd-workflow-start -->
 ## GSD Workflow Enforcement
 
 > **⚠️ Migration period (since 2026-06-23):** Paralife is migrating off GSD. The
@@ -264,13 +253,10 @@ This project used the GSD (Get Shit Done) workflow. During the GSD era the rules
 - Always check `.planning/STATE.md` for current project position before starting work
 - Follow the phase-based development process: discuss → plan → execute → verify
 - Respect dependency ordering between phases as defined in `.planning/ROADMAP.md`
-<!-- GSD:gsd-workflow-end -->
 
-<!-- GSD:developer-profile-start -->
 ## Developer Profile
 
 No developer profile generated yet. Run `/gsd-profile-user` to create one.
-<!-- GSD:developer-profile-end -->
 
 ## Planning Artifacts Guide
 
