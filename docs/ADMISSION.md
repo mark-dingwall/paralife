@@ -1,10 +1,91 @@
 # Admission Control & Backpressure
 
 **Status:** Live capability contract.
+**Pinned by:** `AdmissionGateTest` (token taxonomy + the one pinned precedence edge),
+`ResumeTokenRegistryTest` (resume-token FSM), `TickHealthMonitorTest` (overload gate),
+`OutboundSenderTest` (backpressure).
 
 Durable admission, overload backpressure, the resume-token FSM, and the STALLED connection lifecycle.
 All wire-emitted rejection reasons are stable machine-readable tokens (§1). Any change updates this
 doc before code lands.
+
+> **Normative layer:** the EARS clauses in **§0** are the contract. The prose sections (§1–§9) are
+> rationale, tables, and worked examples — where prose reads as a requirement, the §0 clause governs.
+> Reference-only sections are tagged *(non-normative)*.
+
+---
+
+## §0 Requirements (EARS)
+
+Each clause is `WHEN <event> THE SYSTEM SHALL <response>`, pinned to an existing test by the exact
+assertion it turns on (the line that would go red — not merely "a test exists"). Clauses pin the
+**transformation contract** — a config accessor or a behavioural invariant — never a tunable
+magnitude: the tick-health watermarks (80/60), the queue size (128), and the grace window (10) are
+**test-owned** in their anchors (each anchor builds its own `TickOverloadConfig` / `BackpressureConfig`
+/ capacity), not asserted here as literals. The single deliberate wire-literal exception is the
+resume-token format `r:%016x` (A9) — the immutable wire contract, regex-pinned. Rejection **tokens**
+are pinned *constant-referentially*: the condition → `RejectionToken.X` mapping is the contract; the
+literal string value is not asserted in the default suite (see the deferrals note).
+
+| # | Requirement | § | Pinned by — anchor (test method · quoted assertion · symbol) |
+|---|---|---|---|
+| A1 | WHEN a second `r\|` frame arrives while the session is Alive THE SYSTEM SHALL reject `already-registered` (409). | §1 | `AdmissionGateTest.rejectsAlreadyRegistered` — `code()…isEqualTo(409)` + `token()…isEqualTo(RejectionToken.ALREADY_REGISTERED)` |
+| A2 | WHEN the global reservation count is at cap THE SYSTEM SHALL reject `world-full` (429). | §1 | `AdmissionGateTest.rejectsWorldFull` — after two `Allow`s, third `token()…isEqualTo(RejectionToken.WORLD_FULL)` |
+| A3 | WHEN a respawning session is at its per-session respawn cap THE SYSTEM SHALL reject `respawn-cap` (429). | §1 | `AdmissionGateTest.rejectsRespawnCap` — `token()…isEqualTo(RESPAWN_CAP)`; integration control `WorldWebSocketHandlerTest.respawnCapEnforced` |
+| A4 | WHEN the tick-health gate is overloaded THE SYSTEM SHALL reject `tick-overload` (429). | §1, §5 | `AdmissionGateTest.rejectsTickOverloadAheadOfCap` — overload → `token()…isEqualTo(TICK_OVERLOAD)`. *Cap arg inert:* the gate reads the reservation counter, not `livingEntityCount()=99`, so this pins overload → token, **not** overload-before-cap precedence. |
+| A5 | WHEN the maintenance flag is set THE SYSTEM SHALL reject `maintenance` (429). | §1 | `AdmissionGateTest.rejectsMaintenanceFirst` — `token()…isEqualTo(MAINTENANCE)` |
+| A6 | WHEN a session is already Alive and presents a resume token THE SYSTEM SHALL reject `already-registered` (409) and SHALL NOT attempt rebind. | §1 | `AdmissionGateTest.rejectsAlreadyRegisteredBeforeResumeToken` — `code()…isEqualTo(409)` + `verify(resumeRegistry, never()).tryRebind(...)` (armed isolating control) |
+| A7 | WHEN a session transitions to Dead (`markDead`) THE SYSTEM SHALL remove its `entityId` attribute and clear its active resume-token slot. | §3 | `WorldWebSocketHandlerMarkDeadTest.markDeadCallsClearActiveOnResumeTokenRegistry` — `verify(resumeTokenRegistry).clearActive("entity-1")`; `markDeadRemovesEntityIdAttribute` — `attrs…doesNotContainKey(ATTR_ENTITY_ID)` |
+| A8 | WHEN a session's outbound transport errors into stall THE SYSTEM SHALL hold its entity on the grid for the grace sweep (not remove it immediately). | §3 | `WorldWebSocketHandlerRemediationTest.stalledTransportError_holdsEntityForGraceSweep` |
+| A9 | WHEN issuing a resume token THE SYSTEM SHALL format it `r:%016x` (`r:` + 16 lowercase-hex chars). | §4 | `ResumeTokenRegistryTest.issueActiveMatchesFormatAndDoesNotIncrementStalledSize` — `token…matches(TOKEN_FORMAT)` where `TOKEN_FORMAT = ^r:[0-9a-f]{16}$`. **The one literal-pinned wire constant.** |
+| A10 | WHEN a rebind is attempted THE SYSTEM SHALL succeed only for a STALLED token and reject an ACTIVE token. | §4 | `tryRebindOnStalledReturnsFreshActiveToken` — result present, fresh ACTIVE token ≠ old; `tryRebindRejectsActiveTokens` — `r…isEmpty()` |
+| A11 | WHEN a token is rebound THE SYSTEM SHALL consume it so a second rebind of the same token fails (no replay). | §4 | `doubleRebindOfSameTokenFails` — first `isPresent()`, second `isEmpty()` |
+| A12 | WHEN the per-tick sweep runs THE SYSTEM SHALL reap only STALLED+expired entries and invoke the cleanup callback with the entityId, never reaping ACTIVE entries. | §4 | `sweepReapsOnlyStalledExpiredAndInvokesCallbackWithEntityId` — `reaped…containsExactlyInAnyOrder("entity-1","entity-2")` + ACTIVE token retained; `sweepDoesNotReapActiveEntries` — `reaped…isEmpty()` |
+| A13 | WHEN a rebind presents a missing or expired token THE SYSTEM SHALL return empty (caller falls through to fresh registration). | §4 | `tryRebindExpiredStalledReturnsEmpty` — `r…isEmpty()` (unit, default-gated) |
+| A14 ⚠ | WHEN a stalled session rebinds within the grace window THE SYSTEM SHALL restore its entityId and respawn count. | §4 | `StallRecoveryIntegrationTest.stallRecoveryRebindsEntityIdWithinGraceWindow`, `respawnCountRestoredAcrossRebind` — ⚠ `@Tag("slow")`, excluded from `./gradlew test` |
+| A15 | WHEN the rolling-mean tick work exceeds the high-watermark THE SYSTEM SHALL open the overload gate. | §5 | `TickHealthMonitorTest.overloadFiresWhenRollingMeanExceedsHighWatermark` — mean crosses 80 → `isOverloaded()…isTrue()` (test-owned `TickOverloadConfig(80,60,5)`) |
+| A16 | WHEN the rolling mean drops below the low-watermark THE SYSTEM SHALL clear the gate, and SHALL NOT flap between the watermarks. | §5 | `recoversWhenRollingMeanDropsBelowLowWatermark`; `hysteresisPreventsImmediateRecovery`; `noFlappingOnSamplesInBetweenWatermarks` |
+| A17 | WHEN the sample window is not yet full THE SYSTEM SHALL never trip the gate. | §5 | `warmupSamplesNeverTriggerOverload`; `singleSpikeBeforeWindowFillsCannotTriggerOverload` |
+| A18 | WHEN constructing a tick-overload config THE SYSTEM SHALL require high-water-pct > low-water-pct. | §5 | `AdmissionConfigTest.rejectsHighWaterAtOrBelowLowWater` — `IllegalArgumentException`…`hasMessageContaining("must be > low-water-pct")` (pins the invariant, not a number) |
+| A19 | WHEN the outbound queue is full THE SYSTEM SHALL return false from `offer`. | §6 | `OutboundSenderTest.offerReturnsFalseWhenQueueFull` — capacity=1; `b…isFalse()` with positive control `a…isTrue()` |
+| A20 | WHEN the first offer overflows THE SYSTEM SHALL fire the STALLED overflow callback exactly once per attach (idempotent). | §6 | `overflowCallbackFiresExactlyOncePerAttach` — `callbackCount…isEqualTo(1)` after repeated overflow (unit, default-gated) |
+| A21 | WHEN a session detaches THE SYSTEM SHALL join the sender VT within the timeout, and SHALL increment the detach-timeout counter when the join times out. | §6 | `detachJoinsVTWithinTimeout` — `elapsedMs…isLessThan(200)`; `detachTimeoutIncrementsCounter` — `after - before…isEqualTo(1.0)` |
+| A22 ⚠ | WHEN the grace window expires THE SYSTEM SHALL reap the held entity and force fresh registration. | §6 | `StallRecoveryIntegrationTest.stallExpiryReapsEntityAndForcesFreshRegistration` — ⚠ `@Tag("slow")`, excluded from `./gradlew test` |
+| A23 | WHEN a registration is rejected THE SYSTEM SHALL increment `paralife.admission.rejected` tagged `reason=<token>`. | §7 | `AdmissionMetricsTest.rejectedCounterTaggedByReason` — `counter(M_REJECTED,"reason",WORLD_FULL,…).count()…isEqualTo(2.0)` (+ TICK_OVERLOAD=1.0, MAINTENANCE=0.0 negative control) |
+| A24 | WHEN an inbound action overwrites a pending action THE SYSTEM SHALL increment `paralife.admission.ingress.overwrites`. | §7 | `AdmissionMetricsTest.ingressOverwriteCounterIsAggregate` — `counter(M_INGRESS_OVERWRITES,…).count()…isEqualTo(2.0)` |
+
+**Guard order (prose — only the A6 edge is clause-pinned).** `AdmissionGate.evaluate` applies six
+guards in fixed order (source: `AdmissionGate.java` guards 1–6 + javadoc lines 22–34):
+*maintenance → tick-overload → already-registered → resume-token-rebind → global cap → respawn-cap*.
+Of these, **only** the already-registered → resume-token edge is minted as a clause (A6) — it is the
+sole edge with an armed isolating control (`verify(...never()).tryRebind`). The other edges
+(maintenance > overload, overload > cap, rebind > cap) are documented here but **not clause-pinned**:
+the unit tests don't arm the cap gate (`@PostConstruct seedReservedSlots` doesn't fire), so a
+precedence regression on those edges would not go red. → BACKLOG.
+
+**Pinning & deferrals.** Honest gaps — *not* minted as clauses:
+
+- **Partial (clause-adjacent, gap annotated):** `malformed`/400 — code pinned by
+  `WorldWebSocketHandlerTest.malformedFrameProducesError400` (`err.code() == 400`), token string
+  un-asserted. `reconnect-required`/408 — close pinned by
+  `StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed` (`@slow`), token
+  best-effort per D-07. `grid-full`/503 — the 503 code + placement-exhaustion pinned by
+  `PlacementDensityIntegrationTest.fillsGridAndReceivesGridFullOnExhaustion` (`response.startsWith("E\|503")`),
+  but token string un-asserted **and** a non-isolating survive-a-run integration test — demoted here,
+  not a clean clause.
+- **Token wire-strings are constant-referential, not literal-pinned.** §1 clauses pin
+  condition → `RejectionToken.X` *constant*; renaming a token's string value stays green in the
+  default suite (the literal-string assertions live in `@slow` integration tests such as the
+  non-normative `AdmissionLogMarkersIntegrationTest`). A codec admission-path `E`-frame literal
+  test → BACKLOG.
+- **Integration / `@slow`-only anchors (A14, A22):** real but excluded from `./gradlew test` (run via
+  `-PincludeLong=true`). Engine-direct unit decomposition → BACKLOG.
+- **Orphans (excluded from §0):** `no-active-entity`/404 (zero tests — grep-confirmed); inbound
+  collapse-to-one *behaviour* (only the counter A24 is pinned); the §5 N-1 gauge-lag caveat (prose).
+  → BACKLOG.
+- **Cross-guard precedence edges** beyond A6 (maintenance > overload, overload > cap, rebind > cap):
+  documented in the guard-order prose above from source, **not pinned** (the unit tests don't arm the
+  `reservedSlots` cap gate). → BACKLOG.
 
 ---
 
@@ -32,7 +113,7 @@ Reserved but not emitted this phase: ingress-flood token (D-09 chose counter-onl
 
 ---
 
-## §2 Wire Shape Delta vs `SCHEMA.md`
+## §2 Wire Shape Delta vs `SCHEMA.md` *(non-normative — canonical grammar is `SCHEMA.md` §8.3 / §0)*
 
 See `SCHEMA.md` §8.3 for the canonical frame grammar; this document only defines the new resume-token slot and the closed token vocabulary in §1.
 
@@ -84,7 +165,7 @@ Predicate definitions:
 - `isDead(session)`: `entityId` absent AND `entityType` present AND `stallTick` absent
 - `isStalled(session)`: `stallTick` attr present
 
-### FSM Diagram
+### FSM Diagram *(non-normative — illustrative; the transition clauses A7/A8 are the contract)*
 
 ```
                     ┌─────────────────────────────────────────┐
@@ -126,7 +207,7 @@ Predicate definitions:
                  if respawn succeeds)
 ```
 
-### Death-Pivot vs Stall-Pivot Orthogonality
+### Death-Pivot vs Stall-Pivot Orthogonality *(non-normative)*
 
 | Dimension | Death-Pivot (Phase 15.2) | Stall-Pivot (Phase 17) |
 |-----------|--------------------------|------------------------|
@@ -238,7 +319,7 @@ if (session.isOpen()) {
 - Queue: `ArrayBlockingQueue<Frame>(outboundQueueSize)` — default 128 frames. At the 30ms test tick with 2 frames/tick/bot (perception + tick snapshot) this gives ≈2s of buffered frames per session — survives GC pauses and scheduler jitter at sustained 100-bot fan-out without false-positive STALLED. Production tick at 500ms makes the same 128 frames a ~64s buffer; tune for workload.
 - `TickBroadcaster` enqueues frames via `queue.offer(frame)` (non-blocking). If `offer` returns `false` (queue full), the session transitions to STALLED immediately (single-shot, not windowed).
 
-**Rationale (D-10):** Matches Paralife's VT philosophy (simple blocking code, VTs do concurrency). Per-session isolation is structural — one slow socket cannot block the tick thread or any other session. `queue.size()` is the explicit backpressure signal, trivially observable as a gauge. Java 21 VTs are cheap (few KB heap each); 1000+ VTs is acceptable.
+**Rationale (D-10)** *(non-normative)*: Matches Paralife's VT philosophy (simple blocking code, VTs do concurrency). Per-session isolation is structural — one slow socket cannot block the tick thread or any other session. `queue.size()` is the explicit backpressure signal, trivially observable as a gauge. Java 21 VTs are cheap (few KB heap each); 1000+ VTs is acceptable.
 
 ### Inbound: Last-Write-Wins Collapse (D-09)
 
@@ -281,7 +362,7 @@ Entity held on grid for `graceWindowTicks` (default 10) ticks. `ResumeTokenRegis
 | `paralife.tick.health.work-time-ms` | Most recently completed tick work time (ms) | `TickEngine.getLastTickWorkMs()` |
 | `paralife.backpressure.stalled.sessions` | Count of sessions in STALLED grace | `ResumeTokenRegistry.size()` |
 
-### Log Markers (D-19)
+### Log Markers (D-19) *(non-normative — marker string formats are not pinned)*
 
 Grep-friendly single-line structured markers — same style as Phase 16 `EMERGENCE` channel.
 
@@ -305,7 +386,7 @@ Log channel pays forward to M5 visualizer / observer — no redesign of emission
 
 ---
 
-## §8 Migration Notes (closes 999.1)
+## §8 Migration Notes (closes 999.1) *(non-normative)*
 
 ### Config Key Changes
 
@@ -340,7 +421,7 @@ Log channel pays forward to M5 visualizer / observer — no redesign of emission
 
 ---
 
-## §9 Forward Notes
+## §9 Forward Notes *(non-normative)*
 
 - **Origin-blind:** Admission stays origin-blind (D-03). Phase 18 adds a `source` tag to the `paralife.admission.rejected` counter.
 - **In-sim reproduction exempt:** In-sim reproduction stays exempt from the cap (D-02). When bot-driven offspring (backlog 999.2) arrives over WebSocket via `r|`, those calls fall under admission naturally — code stays neutral on entity origin so this transition requires no special-casing.
