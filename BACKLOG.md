@@ -49,19 +49,18 @@ constant-referential blind spots.
 `src/test/java/com/paralife/codec/`; strengthens `ADMISSION.md` §0 A4/A6/A14/A22 + the partial/orphan
 deferrals.
 
-## Codec decode-semantic unit tests (CoordTest / Base64CodecTest)
+## Codec decode-semantic unit tests (CoordTest / Base64CodecTest) — CLOSED (done)
 
-**Why:** `SCHEMA.md` §0 clauses R1 (alphabet) and R2 (coordinate disambiguation) are pinned only by
-the byte-exact round-trip oracle (`PerceptionCodecRoundTripTest.roundTripsExactly`). Round-trip has a
-blind spot: a bug that mis-parses *and* mis-encodes identically (symmetric) survives it. The codec has
-**no** decode-semantic unit tests — nothing asserts `decode("6")` → the correct numpad position, or
-`decode("+4-2")` → `dx=+4, dy=-2`, independent of re-encoding.
-
-**Trigger:** any change to coordinate parsing or the base64 alphabet; or opportunistically alongside
-the R3 producer-clamp slice below (same `Coord` surface).
-
-**Anchor:** new `CoordTest` / `Base64CodecTest` in `src/test/java/com/paralife/codec/`; strengthens
-`SCHEMA.md` §0 R1/R2.
+**Resolution:** `Base64CodecTest` and `CoordTest` landed in `src/test/java/com/paralife/codec/`,
+closing the R1/R2 symmetric-bug blind spot. R1 (`Base64CodecTest`) asserts `decodeDigit`/`encodeDigit`
+across all 64 indices against a **test-owned** alphabet literal (not `Base64Codec.ALPHABET`), plus
+invalid-char/out-of-range rejection. R2 (`CoordTest`) asserts the decode direction via `decode()` of a
+minimal hand-authored frame — numpad/relative dispatch, the positional `-`-as-digit-63 subtlety, the
+absolute-positional-only invariant, and first-char rejection (numpad/relative cases as positive
+controls). `SCHEMA.md` §0 R1/R2 re-anchored to these (round-trip kept as joint backstop). The
+investigation found **no** hidden symmetric bug — code was correct; the value was converting two
+oracle-shared clauses into clause-isolating ones. Non-vacuity proven by mutation (alphabet reorder →
+5 reds; relative-sign drop → reds).
 
 ## R3 producer-clamp uniformity + >±63 reachability investigation — CLOSED (unreachable)
 

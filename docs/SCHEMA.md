@@ -24,8 +24,8 @@ tunable defaults.
 
 | # | Requirement | § | Pinned by — anchor (test method · quoted assertion · symbol) |
 |---|---|---|---|
-| R1 | WHEN encoding or decoding any compact field THE SYSTEM SHALL use the single shared 64-char base64 alphabet. | §1 | `PerceptionCodecRoundTripTest.roundTripsExactly` — `assertEquals(wireFrame, reEncoded, …)`, all 13 vectors |
-| R2 | WHEN parsing a coordinate token THE SYSTEM SHALL select the form by first-char class: `+`/`-` → 4-char relative, `1`–`9` → numpad, absolute only in fixed positional slots. | §2 | `roundTripsExactly` — V2 (`s61F`, numpad) + V3 (`s+4-21R62`, relative) |
+| R1 | WHEN encoding or decoding any compact field THE SYSTEM SHALL use the single shared 64-char base64 alphabet. | §1 | `Base64CodecTest.decodeDigitMapsEachCharToIndex` — `assertEquals(i, Base64Codec.decodeDigit(c))` across all 64 indices vs a **test-owned** alphabet literal (decode-isolating); `encodeDigitMapsEachIndexToChar` (inverse); `decodeDigitRejectsInvalidChars`. Joint backstop: `PerceptionCodecRoundTripTest.roundTripsExactly`, all 13 vectors. |
+| R2 | WHEN parsing a coordinate token THE SYSTEM SHALL select the form by first-char class: `+`/`-` → 4-char relative, `1`–`9` → numpad, absolute only in fixed positional slots. | §2 | `CoordTest` (decode-isolating, via `decode()` of a hand-authored frame) — `numpadDispatch` (`Numpad('6')`), `relativeDispatch` (`Relative(4,-2)`/`(-4,2)`), `relativeMagnitudeIsPositional` (`Relative(63,5)` from `+-+5` — `-` is digit 63 in the magnitude slot, not a sign), `absoluteIsPositionalOnly` (curX/curY off the fixed header), `invalidFirstCharRejected` (negative + the numpad/relative cases as positive controls). Joint backstop: `roundTripsExactly` V2/V3. |
 | R3 | WHEN a relative coordinate's source offset would exceed ±63 THE SYSTEM SHALL bound it to ±63 before emission, never widening the 4-char relative form. | §2, §8.4 | type invariant `Coord.Relative` ctor (±63 guard, the backstop) + pre-construction producer clamps where offsets *can* be large (`TickBroadcaster.gatherLocoRelativeCells`, `buildRosterIfChanged`); V9 exercises the in-range max. *Reachability investigation (closed): no current producer emits >±63 — composites are size-2 adjacent, solo vision ≤±2; the redundant post-construction codec clamp was removed.* |
 | R4 | WHEN emitting a block THE SYSTEM SHALL separate list entries with `,` and intra-entry structure with `:`; `;` SHALL NOT appear. | §3 | `roundTripsExactly` — V6 (carries both separators) |
 | R5 | WHEN emitting a spatial block (`s`/`g`/`v`) THE SYSTEM SHALL place coord first; WHEN emitting a type block (`f`/`c`) THE SYSTEM SHALL place code first. | §4 | `roundTripsExactly` — V6 (`s`/`g`/`v` coord-first + `f`/`c` code-first in one frame) |
@@ -43,10 +43,11 @@ tunable defaults.
 | R17 | WHEN any valid frame is decoded then re-encoded THE SYSTEM SHALL produce byte-identical output. | §10 | `PerceptionCodecRoundTripTest.roundTripsExactly` — `assertEquals(wireFrame, reEncoded, …)`, all 13 vectors |
 | R18 | WHEN an `s` block exceeds `MAX_S_ENTRIES` (256) or a `v` block exceeds `MAX_V_ENTRIES` (32) THE SYSTEM SHALL throw `CodecException` (server then emits `E\|400`). | §12 | `PerceptionCodecErrorTest.boundedEntriesRejected` — `contains("MAX_S_ENTRIES")`; `boundedEventsRejected` — `contains("MAX_V_ENTRIES")` |
 
-**Pinning & deferrals.** R1/R2/R4/R5/R6/R17 share the byte-exact round-trip oracle
-(`roundTripsExactly`) — a strong joint gate, not clause-isolating. One follow-up — codec
-decode-semantic unit tests (the R1/R2 symmetric-bug gap) — is in [`BACKLOG.md`](../BACKLOG.md), not
-inline here. (R3's >±63 reachability check is now closed: investigation found no producer can emit
+**Pinning & deferrals.** R4/R5/R6/R17 share the byte-exact round-trip oracle (`roundTripsExactly`)
+— a strong joint gate, not clause-isolating. R1/R2 previously leaned on that oracle alone (a
+symmetric mis-parse/mis-encode bug survives round-trip); they now carry decode-isolating anchors
+(`Base64CodecTest`, `CoordTest`) that assert the decode direction against independent literals, with
+`roundTripsExactly` retained as the joint backstop. (R3's >±63 reachability check is now closed: investigation found no producer can emit
 >±63 in the current feature set, so the redundant codec clamp was removed and no behavioural fix was
 needed — see the R3 anchor note above.)
 
