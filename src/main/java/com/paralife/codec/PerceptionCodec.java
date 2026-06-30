@@ -278,19 +278,13 @@ public final class PerceptionCodec {
     }
 
     private static void encodeRelative(StringBuilder sb, int dx, int dy) {
-        // Per SCHEMA §2 & §8.4: clamp to ±63, always emit exactly 4 chars.
-        int cdx = clampRelative(dx);
-        int cdy = clampRelative(dy);
-        sb.append(cdx >= 0 ? '+' : '-');
-        sb.append(Base64Codec.encodeDigit(Math.abs(cdx)));
-        sb.append(cdy >= 0 ? '+' : '-');
-        sb.append(Base64Codec.encodeDigit(Math.abs(cdy)));
-    }
-
-    private static int clampRelative(int v) {
-        if (v > 63) return 63;
-        if (v < -63) return -63;
-        return v;
+        // Per SCHEMA §2 & §8.4: dx/dy are already ±63-bounded — the Coord.Relative
+        // type guard rejects out-of-range upstream of here, so no post-clamp is
+        // needed. Always emit exactly 4 chars (1 sign + 1 base64 magnitude per axis).
+        sb.append(dx >= 0 ? '+' : '-');
+        sb.append(Base64Codec.encodeDigit(Math.abs(dx)));
+        sb.append(dy >= 0 ? '+' : '-');
+        sb.append(Base64Codec.encodeDigit(Math.abs(dy)));
     }
 
     // ---- base64 integer helpers ----

@@ -26,7 +26,7 @@ tunable defaults.
 |---|---|---|---|
 | R1 | WHEN encoding or decoding any compact field THE SYSTEM SHALL use the single shared 64-char base64 alphabet. | §1 | `PerceptionCodecRoundTripTest.roundTripsExactly` — `assertEquals(wireFrame, reEncoded, …)`, all 13 vectors |
 | R2 | WHEN parsing a coordinate token THE SYSTEM SHALL select the form by first-char class: `+`/`-` → 4-char relative, `1`–`9` → numpad, absolute only in fixed positional slots. | §2 | `roundTripsExactly` — V2 (`s61F`, numpad) + V3 (`s+4-21R62`, relative) |
-| R3 | WHEN a relative coordinate's source offset would exceed ±63 THE SYSTEM SHALL clamp it to ±63 before emission, never widening the 4-char relative form. | §2, §8.4 | type invariant `Coord.Relative` ctor (±63 guard) + producer clamps (`TickBroadcaster.gatherLocoRelativeCells`, `buildRosterIfChanged`); V9 exercises the in-range max. *Uniform producer-clamp test → BACKLOG.md.* |
+| R3 | WHEN a relative coordinate's source offset would exceed ±63 THE SYSTEM SHALL bound it to ±63 before emission, never widening the 4-char relative form. | §2, §8.4 | type invariant `Coord.Relative` ctor (±63 guard, the backstop) + pre-construction producer clamps where offsets *can* be large (`TickBroadcaster.gatherLocoRelativeCells`, `buildRosterIfChanged`); V9 exercises the in-range max. *Reachability investigation (closed): no current producer emits >±63 — composites are size-2 adjacent, solo vision ≤±2; the redundant post-construction codec clamp was removed.* |
 | R4 | WHEN emitting a block THE SYSTEM SHALL separate list entries with `,` and intra-entry structure with `:`; `;` SHALL NOT appear. | §3 | `roundTripsExactly` — V6 (carries both separators) |
 | R5 | WHEN emitting a spatial block (`s`/`g`/`v`) THE SYSTEM SHALL place coord first; WHEN emitting a type block (`f`/`c`) THE SYSTEM SHALL place code first. | §4 | `roundTripsExactly` — V6 (`s`/`g`/`v` coord-first + `f`/`c` code-first in one frame) |
 | R6 | WHEN encoding a full `T` frame THE SYSTEM SHALL emit present optional blocks in the order `s, c, f, v, p, g`. | §6.3.1 | `roundTripsExactly` — V6 + V11 (`v` before `g`) |
@@ -44,9 +44,11 @@ tunable defaults.
 | R18 | WHEN an `s` block exceeds `MAX_S_ENTRIES` (256) or a `v` block exceeds `MAX_V_ENTRIES` (32) THE SYSTEM SHALL throw `CodecException` (server then emits `E\|400`). | §12 | `PerceptionCodecErrorTest.boundedEntriesRejected` — `contains("MAX_S_ENTRIES")`; `boundedEventsRejected` — `contains("MAX_V_ENTRIES")` |
 
 **Pinning & deferrals.** R1/R2/R4/R5/R6/R17 share the byte-exact round-trip oracle
-(`roundTripsExactly`) — a strong joint gate, not clause-isolating. Two follow-ups — codec
-decode-semantic unit tests (the R1/R2 symmetric-bug gap) and R3's uniform producer-clamp + >±63
-reachability check — are in [`BACKLOG.md`](../BACKLOG.md), not inline here.
+(`roundTripsExactly`) — a strong joint gate, not clause-isolating. One follow-up — codec
+decode-semantic unit tests (the R1/R2 symmetric-bug gap) — is in [`BACKLOG.md`](../BACKLOG.md), not
+inline here. (R3's >±63 reachability check is now closed: investigation found no producer can emit
+>±63 in the current feature set, so the redundant codec clamp was removed and no behavioural fix was
+needed — see the R3 anchor note above.)
 
 ---
 
@@ -426,7 +428,7 @@ Magnitude bound to code per the table below; parser knows per-code whether to co
 
 **Renames from initial D-14:** damage-received `D` → `H` (frees `D` for died). Role code dropped from `N` entry (LOCOMOTOR reads role from the `g` roster it already holds). Member alarm absorbed into `v` (no standalone `m` block).
 
-**Lightning coord range.** `L` events use the same 4-char relative coord as any other `v` event. Lightning strike coords that would exceed ±63 in relative form are clamped to the wire magnitude limit server-side (lightning visibility already requires proximity enough to flee, so this is not a practical restriction). There is NO special 6-char "extended relative" coord for lightning.
+**Lightning coord range.** Lightning damage is currently surfaced via the `FLEEING` state change, which carries the strike as an **absolute** `XXYY` coord (`fF:` effect context) — so the ±63 relative bound does not bite on the live path. The documented `L`-event-with-relative-coord wire form (Vector 9) would, if emitted, use the same 4-char relative coord as any other `v` event, type-bounded to ±63 by `Coord.Relative`; lightning visibility already requires proximity enough to flee, so >±63 is not reachable in practice. There is NO special 6-char "extended relative" coord for lightning.
 
 ### 8.5 `g` block — composite roster (coord-first)
 
@@ -552,7 +554,7 @@ These MUST all satisfy `PerceptionCodec.encode(decode(x)) == x` byte-for-byte. I
 - **Vector 4** — `+1+13M32`: relative (+1,+1), presence=3 (both), kind=M, entityState=3 (STARVING|MUTATING), envState=2 (TOXIN).
 - **Vector 5** — `cC:7A` = bonded primary = Catalyst, new maxEnergy slot `7A` (carried in ctx).
 - **Vector 6** — `43C1` combines "Catalyst at W" + OVERCROWDED into one presence=3 entry (kind=C, no entity state = omitted, envState=1). `R62` run = starter + 2 = 3 rocks east. `fF:2E:0F03` = FLEEING expires tick `2E` with strike coord abs (15, 3).
-- **Vector 9** — `fF:2E:0F03` + `v+F-3L5`: effect stores abs strike (15, 3); event says bot took 5 lightning dmg from relative offset (+15, -3). The relative coord is 4 chars: sign `+`, magnitude `F` (base64 → 15), sign `-`, magnitude `3` (base64 → 3). This is the standard §2 relative form; there is NO 6-char "extended relative" coord. If vision extends only to ±2, the relative coord still parses but falls outside the 5×5 snapshot — acceptable; lightning events can originate off-grid from the vision scope. If an L event's source exceeds ±63, the encoder clamps to ±63 (see §8.4 lightning coord range note).
+- **Vector 9** — `fF:2E:0F03` + `v+F-3L5`: effect stores abs strike (15, 3); event says bot took 5 lightning dmg from relative offset (+15, -3). The relative coord is 4 chars: sign `+`, magnitude `F` (base64 → 15), sign `-`, magnitude `3` (base64 → 3). This is the standard §2 relative form; there is NO 6-char "extended relative" coord. If vision extends only to ±2, the relative coord still parses but falls outside the 5×5 snapshot — acceptable; lightning events can originate off-grid from the vision scope. An L event's source is type-bounded to ±63 by `Coord.Relative` and is not reachable beyond that in practice (see §8.4 lightning coord range note).
 - **Vector 10** — `S:1Fg8,I:1Ef0` = SENSOR_PLUS_1 expires `1Fg8`, MUTATING expires `1Ef0`.
 - **Vector 13** — `43R824,124,-1-124`: starter at W is presence=3 rock run of 3 south (`R82`) with envState=4 (MUTAGEN) on starter; supplements at SW (`124` = numpad 1, presence=2, envState=4) and relative (-1,-2) (`-1-124` = presence=2, envState=4). Client merges: 3 rocks in column, each with MUTAGEN_ZONE.
 

@@ -26,19 +26,10 @@ import com.paralife.world.Entity.BondedPair;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Nutrient;
 import com.paralife.world.Entity.Particle;
-import com.paralife.world.Entity.Role;
 import com.paralife.world.Entity.Rock;
+import com.paralife.world.Entity.Role;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.event.EventListener;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
-import org.springframework.web.socket.WebSocketSession;
-
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -49,6 +40,14 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.WebSocketSession;
 
 /**
  * Plan 15-08: codec-driven tick projection (SCHEMA §6.3 / §7 / §8).
@@ -1089,9 +1088,14 @@ public class TickBroadcaster {
 
     /**
      * Minimal relative-coord helper: toroidal-aware shortest dx/dy from bot to
-     * target. Only used for alarms right now; produced values are clamped to
-     * the codec's ±63 relative range during encode (see
-     * {@link PerceptionCodec}).
+     * target. Only used for alarms right now. The alarm cell is the raising
+     * member's own position ({@code ActionResolver.handleAlarmAction}); since a
+     * composite is always exactly two adjacent members (D-01 formation, rigid-body
+     * movement preserves the ≤1 spread), this offset is bounded to ±1 and
+     * {@code coordFor} always emits the numpad form — {@code Coord.Relative} (±63
+     * guard) is never constructed here. If composites ever grow past two members
+     * or gain SENSOR-stitching, this path must clamp pre-construction like
+     * {@link #gatherLocoRelativeCells} / {@link #buildRosterIfChanged} do.
      */
     private Position relativeTo(Position from, Position to) {
         int gridW = worldGrid.getWidth();
