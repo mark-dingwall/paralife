@@ -9,6 +9,46 @@ Format: each item names **why deferred**, the **trigger** to pick it up, and the
 
 ---
 
+## HARNESS EARS rollout (deferred, gated)
+
+**Why:** ADMISSION §0 landed (EARS Rollout #2); HARNESS is the deliberate next gate, not this slice.
+Scope is mechanism **§2–§6 only** — handshake attribution, the sanitizer regex-reject
+(`^[A-Za-z0-9-]{1,32}$`), the `source=harness ⇔ id` invariant, the cardinality cap, the source
+taxonomy, the JSON-report atomic-rename, and T-18-04 rebind — ≈6–12 anchored clauses. §1 / §7 / §10
+stay tagged non-normative. RUNTIME is **no-go** in the Phase 20 state (the knobs aren't live); revisit
+only if Phase 21 makes them load-bearing.
+
+**Trigger:** after one real admission-touching change exercises the ADMISSION §0 merge-back — i.e.
+prove the living-spec cadence pays for itself once before extending it (resolves GSD-graduation
+open-Q3 with evidence, not assertion).
+
+**Anchor:** new `## §0` on `docs/HARNESS.md`; same two-gate rule (firewall-survivor **and**
+test-anchored) as `SCHEMA.md` §0 / `ADMISSION.md` §0.
+
+## ADMISSION §0 anchor-hardening follow-ups
+
+**Why:** ADMISSION §0 carries known gaps the plan review surfaced (see its "Pinning & deferrals"
+note). Closing them turns partial/annotated clauses into clean ones and kills the `@slow`-only and
+constant-referential blind spots.
+
+- Unit asserts for the 404 `no-active-entity` token (zero tests today), and the `malformed` /
+  `grid-full` token *strings* (only their HTTP codes are pinned now).
+- Engine-direct unit twins for the `@slow`-only **A14** (`stallRecoveryRebindsEntityIdWithinGraceWindow`,
+  `respawnCountRestoredAcrossRebind`) and **A22** (`stallExpiryReapsEntityAndForcesFreshRegistration`)
+  so they gate in `./gradlew test`.
+- A codec admission-path `E`-frame literal test that locks the rejection token *strings* (the §1
+  mapping is pinned constant-referentially; the literal value is not).
+- Precedence-isolation tests that **arm the `reservedSlots` cap gate** (`@PostConstruct` doesn't fire
+  in the current unit tests) so the maintenance > overload, overload > cap, and rebind > cap edges go
+  red on regression — promoting them from prose to clauses.
+
+**Trigger:** opportunistic / next admission-touching change.
+
+**Anchor:** `AdmissionGateTest`, `ResumeTokenRegistryTest`, `WorldWebSocketHandlerTest`,
+`PlacementDensityIntegrationTest`, `StallRecoveryIntegrationTest`; new codec `E`-frame test in
+`src/test/java/com/paralife/codec/`; strengthens `ADMISSION.md` §0 A4/A6/A14/A22 + the partial/orphan
+deferrals.
+
 ## Codec decode-semantic unit tests (CoordTest / Base64CodecTest)
 
 **Why:** `SCHEMA.md` §0 clauses R1 (alphabet) and R2 (coordinate disambiguation) are pinned only by
