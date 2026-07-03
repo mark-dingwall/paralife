@@ -56,11 +56,14 @@ determinism hooks + long-run fixtures.
 - **🚫 Emergence / balance-tuning *campaign*** (env, metabolic, global constants) — the full A/B campaign
   stays **GUI / M5-gated**: a 1-D scalar can Goodhart-drive the spatial emergence that is the Core Value,
   so it wants eyes. Death-treadmill sits at prod defaults (~78% starvation) by deliberate deferral.
-  *Partial unblock proposed* — [`docs/notes/headless-feedback-loop-adr.md`](docs/notes/headless-feedback-loop-adr.md)
-  (status: **Proposed, awaiting ratification**) authorizes an observe-only **headless death-cause
-  measurement** probe (~0 prod lines: flag-flip over the already-shipped gated `DeathDiagnostics`, read
-  per-cause raw-count deltas across a one-constant change) — refutes "no feedback without pixels" without
-  starting the campaign. Partially supersedes `MEMORY.md` → balance-tuning-deferred *(once ratified)*.
+  *Measurement/tuning split resolved* — [`docs/notes/headless-feedback-loop-adr.md`](docs/notes/headless-feedback-loop-adr.md)
+  (**Accepted, 2026-07-01**): *measuring* emergence was never blocked, only *tuning* to it. Death-cause
+  **counts are observe-only emergence** (banked to `CLAUDE.md` firewall corollary). The full backlog
+  cluster (path-alpha existence proof, cheap gauge, ensemble-N campaign, foraging assay, invariant/checksum
+  substrate) lives in [`BACKLOG.md`](BACKLOG.md) §Headless feedback-loop + emergence testing. The campaign
+  itself stays gated: **Phase 21 stable AND a spatial-emergence guard exists** (M5 eyes, or a headless
+  spatial invariant). Partially supersedes `MEMORY.md` → balance-tuning-deferred (measuring OK, tuning
+  deferred).
 - **🚫 Population Viability phase** (drafted) — visualiser-gated for the same reason.
 
 ## Horizon
