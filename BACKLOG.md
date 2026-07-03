@@ -111,3 +111,162 @@ Properties / caveats to carry into any implementation:
 
 **Anchor:** `TickBroadcaster.buildEventsForBot` (+ its `relativeTo`), `Coord.Relative`; `SCHEMA.md`
 §0 R3 + §2/§8.4.
+
+## Headless feedback-loop + emergence testing (Pelagia harvest)
+
+**Orientation for future-you — read this before the items.** In mid-2026 we investigated *Pelagia*
+(a similar-ish sim, `docs/notes/pelagia-comparison.md`) to see what ports here. It produced one ADR
+(`docs/notes/headless-feedback-loop-adr.md`) and a cross-project synthesis. Two source claims matter:
+
+1. **You don't need pixels to measure — you need a deterministic *numeric* signal.** Paralife already
+   *measures* death causes (`DeathDiagnostics`, flag-gated) where Pelagia only infers them. This
+   refuted an over-broad reading of the `balance_tuning_deferred` stance: *measuring* emergence was
+   never blocked, only *tuning* to it.
+2. **The firewall sharpening (the durable keeper):** a death-cause **label** is pinnable **mechanism**
+   (`WHEN a combat sink drives energy==0 THE SYSTEM SHALL attribute cause=COMBAT`); a death-cause
+   **count / share** is **observe-only emergence** (most tuning-sensitive scalar in the sim — retune
+   `decayPerTick` and it moves). Emergence *is* testable, but **only tuning-invariant, control-anchored
+   ratios** (ordinal "evolved forages ≥3× random", not cardinal "starvation==78%"), and only in
+   `@Tag("slow")` — never the default gate. This is why the assay ports and the death-share doesn't.
+
+**Two do-now precursors — NOT filed below (they aren't deferred):** *(a)* bank the firewall label-vs-count
+doctrine + the class-ban into `CLAUDE.md` §Testing philosophy + a memory; *(b)* ratify the ADR (direction
+only — it never converged; ratify the *shape*, not the 5 escalations) and harvest both notes into
+`ROADMAP.md`/here before they rot (they're untracked). Do these first; the items below assume the doctrine
+exists.
+
+The launch question — *"is a headless feedback **loop** available today?"* — the ADR left open. It answers
+only the cheap *measurement* half (yes). The *loop* half is what **B1 (path-alpha)** actually settles.
+
+### B1 · path-alpha — prove the open-loop link exists
+
+**Why:** the one piece of new evidence the whole 2.5M-token exercise pointed at and *skipped*. Flag on →
+read per-`[cause][type]` counts → bump **one** constant (`decayPerTick`) → re-read → diff. If the number
+moves, the actuator→metric signal path is live — upgrades "a number exists" to "the feedback signal is
+live." Observe-only, manual, **discard the result, never commit it** → not tuning (no constant selected to
+optimise), so firewall-clean and compatible with the M5 tuning deferral.
+
+**Scope guard (important):** this proves the **open loop** (actuator→metric) *only*. It reads a 1-D
+cause-share and is **structurally blind to spatial collapse** — you can move the scalar while flattening
+the spiral-wave/niche emergence that is the Core Value, and the read still says "success." So it does
+**NOT** bear on the tune-pre-M5 hazard (see the #5 cross-link at the end). Existence proof, not a
+safe-to-tune proof.
+
+**Trigger:** opportunistic — whenever you want the loop-buildable claim settled by evidence, not debate.
+
+**Anchor:** `paralife.diagnostics.death-trace.enabled` flag; `DeathDiagnostics.java:97-102` (the per-cause
+counter); `MetabolicProfile` `decayPerTick`. *Effort: S (throwaway read).*
+
+### B2 · Cheap always-on death-cause gauge
+
+**Why:** if we ever want the cause signal always-on (not flag-gated), the *counting* is already cheap —
+`causeCounts` is a `LongAdder` map (`DeathDiagnostics.java:53,97`). The always-on tax is elsewhere and
+must be stripped: the per-death Micrometer **re-registration** (`Counter.builder()…register()` rebuilds
+Id+tags+lookup *every death*, `:98-102`), the per-death `log.info` (`:105`, the dominant cost), and the
+lifespan **census** maps (`birthTick`/`preHitEnergy`, `:50,52`) a cause gauge doesn't need. Lighter shape
+= register **one** `Gauge` over `causeCounts`, drop the rest.
+
+**Trigger:** **gated** — only when the tuning campaign (B4) is authorized. This is the only PR that can
+violate the class-ban, so it carries that ban.
+
+**Notes to carry:** write-side is single-writer (`recordDeath`, tick-thread) → volatile-array / VarHandle
+publish for the read; add a **kind dimension** (free / composite / BONDED) or inherit the mixed-taxonomy
+confound (`BONDED` spans two species, unapportionable); value is cumulative → delta-between-scrapes. The
+javadoc "negligible" (`:37`) scopes to `hintLethal`, **not** `recordDeath` — the per-death cost is real
+when enabled (fine at the 500ms prod interval; only bites at compressed harness intervals).
+
+**Anchor:** `DeathDiagnostics.java:50-53,88-107`; `MeterRegistry`. *Effort: M.*
+
+### B3 · Paired in-process synchronous bot-driver
+
+**Why:** robust A/B (not a single-seed fluke) needs paired runs — identical worlds varying one knob. The
+named `@Tag("slow")` `EmergenceStabilityLoadTest` **cannot pair**: live-WS action-delivery timing is an
+unseeded 8th source the GoldenTrace gate doesn't cover (Cov≈0 at zero perturbation), so a paired delta on
+it is noise. A genuinely paired loop needs a new synchronous in-process driver.
+
+**Trigger:** **YAGNI** — build only once **ensemble-N (B4) is *proven* too noisy** to read the signal. Not
+on spec.
+
+**Anchor:** `ActionResolver.java:158,353` (action drain timing); `BotFactory.java:44` (unseeded prod bots);
+new driver beside `com.paralife.harness`. *Effort: M.*
+
+### B4 · Ensemble-N tuning campaign
+
+**Why:** the actual perturb→measure→compare→adjust loop over N seeds, diffing distributions (not one
+chaotic run vs another).
+
+**Trigger:** **gated** — Phase 21 landed (density/timing stable, else you tune a soon-stale world) **AND**
+a Core-Value guard exists (M5 visualiser is the default guard; a headless spatial-emergence invariant is a
+possible substitute — don't nail the lift to M5-the-artifact, tie it to M5's *function*). Matches the
+`balance_tuning_deferred` stance.
+
+**Anchor:** `SimulationConfig` / `MetabolicProfile` (the knobs); `EmergenceStabilityLoadTest`;
+`com.paralife.harness`. *Effort: M+ (campaign).*
+
+### E1 · Competence-vs-random foraging assay — harness scaffold
+
+**Why:** the firewall-safe *emergence-test* shape (Pelagia's `evaluateGate`/`assayForaging`): an **ordinal
+ratio** (`evolved/random ≥ K` across `≥X%` of seeds) in a frozen-lifecycle arena, seed-folded. Tuning-
+invariant because the random baseline lives in the *same* retuned world — both arms shift together, the
+ratio survives. Buildable **now** with `HeuristicBrain` as the subject: a real `@slow` regression guard
+("the brain forages better than a flailing random bot") + de-risks the v4.0 scaffold.
+
+**Caveat:** heuristic-vs-random straddles mechanism/emergence (the heuristic is deterministic logic) — the
+reusable asset is the **construction** (arena + ratio-vs-control + ensemble), not the learning claim.
+Moderate value. **Hard rule:** `@Tag("slow")` only, never the default gate; ordinal/relative only — the
+instant someone rewrites `≥3× random` as `rate ≥ 42` it's a cardinal and back behind the firewall.
+
+**Trigger:** opportunistic, or when v4.0 neural scaffolding starts.
+
+**Anchor:** new `EvolvedVsRandomForagingTest` `@Tag("slow")`; `HeuristicBrain.decide(...)`; needs a
+headless subject-injecting driver. *Effort: M.*
+
+### E2 · Foraging assay as real selection signal
+
+**Why:** the assay only measures *learning* once there's an evolved subject that can beat random.
+
+**Trigger:** **gated** — downstream of MLP + genome inheritance (v4.0 core-value work). Cannot build first.
+
+**Anchor:** E1 harness + `bot/NeuralBrain`, `MutationConfig`. *Effort: M (on top of v4.0).*
+
+### S1 · Long-run invariant harness (default suite)
+
+**Why:** seeded `WorldGrid`, N ticks, assert **no double-occupancy, energy≥0, toroidal wrap, pop ≤
+admission cap**. Pure mechanism, EARS-phrasable, closes the gap between unit tests and `@slow`. Enabling
+substrate for the assay's determinism.
+
+**Watch:** resist drifting a bound into emergence — `pop>0` **re-crosses the firewall** (the treadmill
+legitimately empties the world). Invariants only, never population targets.
+
+**Anchor:** `WorldGrid`; new `WorldInvariantTest`. *Effort: S.*
+
+### S2 · World-state checksum oracle
+
+**Why:** `WorldGrid.stateChecksum()` (FNV-1a over cells) decouples the determinism oracle from the
+wire / VT / mock-session machinery (drops `OutboundSender`, mock sessions, the VT-drain barrier). Int
+energy → no float-fold fragility.
+
+**Caveat:** cross-run reproducibility still needs seeded-bean reset (only lands with the RNG rewrite);
+single-run / GoldenTrace use works today.
+
+**Anchor:** new `WorldGrid.stateChecksum()`; `GoldenTraceEquivalenceTest`. *Effort: S.*
+
+### Dependency shape + the #5 cross-link
+
+```
+firewall doctrine (do-now precursor) ─ everything below references it
+    ├─ B1 path-alpha        (independent, opportunistic)
+    ├─ B2 cheap gauge ──── B4 campaign ─┐
+    ├─ B3 paired driver ───────────────┤ (gated: Phase 21 stable + Core-Value guard)
+    ├─ S1 invariants ─┐
+    ├─ S2 checksum  ──┴─ E1 assay scaffold ── E2 real assay (gated: v4.0 genome)
+```
+
+Zero-gate / actionable now: **B1, E1, S1, S2** (+ the two do-now precursors). Everything else waits on a
+real trigger.
+
+**The #5 open question (non-blocking):** *should the tuning deferral ever lift before M5?* Its hazard is
+**not** "can the number move" (B1 settles that) — it is that a 1-D scalar can be *hit while silently
+destroying spatial emergence*. Its unlock is therefore a **spatial-emergence discriminator** — M5's eyes,
+or a headless tuning-invariant spatial-structure test (the E1 family) — **never any 1-D death read.** Stays
+open, non-blocking, M5-gated; matches `balance_tuning_deferred`.
