@@ -221,8 +221,6 @@ public final class LoadHarness implements Callable<Integer> {
         // Build initial header snapshot (retained across all interval writes for overwrite-mode merge).
         initialHeader = ReportSnapshot.header(harnessId, serverUri, count,
                 startedAt.toString(), System.getProperty("java.version"));
-        metricsHttp = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
-        metricsScraper = new ServerMetricsScraper(ServerMetricsScraper.actuatorBaseFrom(serverUri), metricsHttp);
 
         // Write initial report.
         try {
@@ -235,6 +233,11 @@ public final class LoadHarness implements Callable<Integer> {
             log.error("Initial report write failed: {}", e.getMessage());
             return 2;
         }
+
+        // Build the scraper AFTER the initial write (which doesn't need it) so an initial-write
+        // early-return can't bypass the finally that closes the owned client and leak it.
+        metricsHttp = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        metricsScraper = new ServerMetricsScraper(ServerMetricsScraper.actuatorBaseFrom(serverUri), metricsHttp);
 
         // Periodic counter-write virtual thread.
         Thread reporterVT = Thread.ofVirtual().start(() -> {
@@ -324,9 +327,14 @@ public final class LoadHarness implements Callable<Integer> {
             }
             reporterVT.interrupt();
             // Close the owned scraper client — the reporter VT is already drained (writeFinalReportOnce
-            // interrupt+join above), so no scrape is in flight and close() returns promptly.
+            // interrupt+join above), so no scrape is in flight and close() returns promptly. Guarded so a
+            // close failure (UncheckedIOException) can't shadow the return or skip the active* cleanup below.
             if (metricsHttp != null) {
-                metricsHttp.close();
+                try {
+                    metricsHttp.close();
+                } catch (RuntimeException ignored) {
+                    // best-effort; a reused instance rebuilds the client on its next run
+                }
                 metricsHttp = null;
             }
             // Release strong refs so a reused harness instance doesn't pin prior state.
