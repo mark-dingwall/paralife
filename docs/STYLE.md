@@ -18,5 +18,4 @@ Standing editorial rules for every doc in `docs/`. Each rule is checkable; new d
 **GUARDRAIL (restated, binding):** trimming must NOT drop load-bearing content. Every canonical doc
 (SCHEMA/ADMISSION/HARNESS/RUNTIME/ARCHITECTURE) survives with its contract intact; EARS §0 clause
 tables are preserved verbatim (G1); every `D-xx`/`T-xx`, reversal-table row, round-trip vector,
-bitmask/byte layout, and `file:line` anchor is preserved (G3/G8). Project-internal strategic goals
-must never appear in any doc.
+bitmask/byte layout, and `file:line` anchor is preserved (G3/G8).
