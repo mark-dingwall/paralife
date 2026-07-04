@@ -1,5 +1,6 @@
 package com.paralife.admission;
 
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -98,5 +99,31 @@ class AdmissionMetricsTest {
         AdmissionMetrics metrics = makeMetrics(registry);
         // Deprecated no-op — should not throw
         metrics.setStalledSessions(3);
+    }
+
+    @Test
+    void recordsEachTickWorkSampleIntoNamedDriftSummary() {
+        SimpleMeterRegistry reg = new SimpleMeterRegistry();
+        AdmissionMetrics metrics = makeMetrics(reg);
+
+        long[] samples = {3, 7, 4, 9, 5};              // test-owned magnitudes — NOT production defaults
+        for (long s : samples) metrics.setLastTickWorkMs(s);
+
+        DistributionSummary drift = reg.find(AdmissionMetrics.METRIC_TICK_DRIFT).summary();
+        assertThat(drift).as("summary registered under the contract name").isNotNull();
+        assertThat(drift.count()).isEqualTo(samples.length);   // transformation contract: one record per sample
+        assertThat(drift.max()).isEqualTo(9.0);                // max of test-owned inputs
+        assertThat(drift.totalAmount()).isEqualTo(28.0);       // sum of test-owned inputs
+    }
+
+    @Test
+    void driftSummaryPublishesP99Percentile() {
+        SimpleMeterRegistry reg = new SimpleMeterRegistry();
+        AdmissionMetrics metrics = makeMetrics(reg);
+        for (int i = 1; i <= 100; i++) metrics.setLastTickWorkMs(i); // 1..100, test-owned
+        DistributionSummary drift = reg.find(AdmissionMetrics.METRIC_TICK_DRIFT).summary();
+        // Contract: percentiles are PUBLISHED (non-NaN), so EncodeDeflatePerformanceGateTest's
+        // preferred path is live. We assert publication, NOT a magnitude bound.
+        assertThat(drift.percentile(0.99)).as("p99 published (non-NaN)").isNotNaN();
     }
 }

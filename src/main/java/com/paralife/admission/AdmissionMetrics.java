@@ -81,6 +81,8 @@ public class AdmissionMetrics {
     public static final String M_OUTBOUND_QUEUE_DEPTH_MAX = "paralife.outbound.queue.depth.max";
     /** Phase 20-01c (F2 review remediation): per-frame encode + sendMessage latency Timer. */
     public static final String M_OUTBOUND_ENCODE_SEND_MS  = "paralife.outbound.encode.send.ms";
+    /** Phase 21 scale-benchmark: per-tick work-time distribution (drift proxy). */
+    public static final String METRIC_TICK_DRIFT = "paralife.tick.drift.millis";
 
     /** Session attribute key for entity id — shared constant for callers that need it. */
     public static final String ATTR_ENTITY_ID = "entityId";
@@ -122,6 +124,8 @@ public class AdmissionMetrics {
     private final Counter detachTimeout;
     /** Phase 20-01c (F2 remediation): per-frame encode + sendMessage latency Timer. */
     private final Timer encodeSendTimer;
+    /** Phase 21 scale-benchmark: per-tick work-time distribution (drift proxy). */
+    private final DistributionSummary tickDrift;
 
     // F2/A1 remediation: strong reference so Micrometer's weak-target gauge doesn't GC the supplier.
     private volatile java.util.function.IntSupplier outboundQueueDepthSupplier;
@@ -195,6 +199,12 @@ public class AdmissionMetrics {
         // encode + sendMessage cost that lives on per-session VTs outside the tick window.
         this.encodeSendTimer = Timer.builder(M_OUTBOUND_ENCODE_SEND_MS)
                 .description("OutboundSender.drainLoop encode + sendMessage latency (per frame)")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+        // Phase 21 scale-benchmark: per-tick work-time distribution (drift proxy).
+        this.tickDrift = DistributionSummary.builder(METRIC_TICK_DRIFT)
+                .baseUnit("milliseconds")
+                .description("Per-tick work-time distribution (scale-benchmark tick drift)")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(registry);
     }
@@ -425,7 +435,10 @@ public class AdmissionMetrics {
     public void setMaintenance(boolean on) { maintenance.set(on ? 1 : 0); }
 
     /** Set the most-recently-completed tick work time in ms (D-18 scalar). */
-    public void setLastTickWorkMs(long ms) { lastTickWorkMs.set(ms); }
+    public void setLastTickWorkMs(long ms) {
+        lastTickWorkMs.set(ms);
+        tickDrift.record(ms);
+    }
 
     // ── Legacy scalar setters (back-compat — kept for setMaintenance/setLastTickWorkMs callers) ──
 
