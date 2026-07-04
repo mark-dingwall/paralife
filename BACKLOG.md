@@ -19,15 +19,25 @@ per-reason rejection shares (e.g. an M5 dashboard or a tuning assay), **and** th
 asserting those shares in the default suite (they stay report-only). *Anchor:* `ServerMetricsScraper.scrape(...)`,
 `ReportSnapshot.BENCHMARK_METER_NAMES`; the `reason`+`source` tags on `AdmissionMetrics` `paralife.admission.rejected`.
 
-**Total-scrape time budget (→ Phase 22.1).** *Why deferred:* `ServerMetricsScraper.scrape(BENCHMARK_METER_NAMES)`
-GETs 7 meters serially, each bounded to 2s, so worst case ≈14s — and it runs inline on `LoadHarness`'s
-crash-safe shutdown-hook final write and every periodic write. In practice absent meters 404 fast (not a 2s
-timeout) and the write is `try/catch`-wrapped, so a benign run scrapes in well under a second; the worst case
-only bites if a genuinely hung server stalls all 7 meters — plausible under 1000-bot overload. P21 ships the
-plan-mandated inline design. *Trigger:* if the sync stall is observed to degrade report cadence or the
-shutdown write under real overload capture. *Fix options:* an overall scrape deadline (budget across meters),
-or run the scrape off the reporter/shutdown critical path. *Anchor:* `ServerMetricsScraper.scrape(...)`,
-`LoadHarness` report-assembly path. (Surfaced by the Phase 21 whole-branch review, 2026-07-04.)
+**Total-scrape time budget — ✅ RESOLVED (post-review, 2026-07-04).** Originally deferred to 22.1: 7 serial
+meters × 2s ≈ 14s worst case on the inline shutdown-hook final write could lose the most-stressed tier's
+report under a bounded supervisor kill-grace. The Phase-21 post-implementation review (codex + whole-branch
+adversarial both flagged it) took the "overall scrape deadline" fix option: `ServerMetricsScraper.scrape`
+now bounds the **whole** meter set to a ~2s budget (`TOTAL_BUDGET`; per-request timeout = min(2s, remaining)),
+which also closes the reporter-VT clobber race (the `join(2000)` drain reliably beats a ≤2s scrape). *Anchor:*
+`ServerMetricsScraper.TOTAL_BUDGET`. Off-critical-path scraping (a cached background snapshot) remains a
+possible future refinement but is no longer needed for report safety.
+
+**`scrape()` fail-soft unit coverage (test-debt).** *Why deferred:* `ServerMetricsScraper.scrape()` holds the
+hard contract (omit on non-200, omit on exception + continue to next meter, `InterruptedException` → restore
+flag + return partial, whole-set budget) but has **no** direct unit test — the injected `HttpClient` makes it
+trivially mockable (stub returning 404 / junk-200 / throwing `HttpTimeoutException` / throwing
+`InterruptedException`). The contract is verified-by-reading (4 reviewers) and by the `@Tag("slow")`
+`ScrapeLiveIntegrationTest` happy path, but a regression in the fail-soft loop or interrupt handling would ship
+green. Same file: `actuatorBaseFrom` no-port branch and a bare-`NaN`-token parse case are untested; the public
+`ServerMetricsScraper(URI,...)` constructor's load-bearing trailing-slash invariant is undocumented. *Trigger:*
+next touch of `ServerMetricsScraper`, or a P22.1 harness-hardening slice. *Anchor:* `ServerMetricsScraperTest`.
+(Surfaced by the Phase 21 post-implementation review, 2026-07-04.)
 
 ## HARNESS EARS rollout (deferred, gated)
 

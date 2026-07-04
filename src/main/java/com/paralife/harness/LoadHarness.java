@@ -104,9 +104,14 @@ public final class LoadHarness implements Callable<Integer> {
     // Retained for overwrite-mode header-merge across interval writes.
     private ReportSnapshot initialHeader;
 
-    // Server /actuator scraper (Task 3), built once per run from --server-uri. Bounded 2s connect
-    // timeout so an overloaded server can't stall the shutdown-hook final-report write.
-    private ServerMetricsScraper metricsScraper;
+    // Server /actuator scraper (Task 3), built once per run from --server-uri. The scrape is bounded
+    // by an overall ~2s budget (see ServerMetricsScraper) so an overloaded server can't stall the
+    // shutdown-hook final-report write. volatile: read on the shutdown-hook thread (scrape), written
+    // on the run thread — same cross-thread visibility contract as the active* live-state fields.
+    private volatile ServerMetricsScraper metricsScraper;
+    // Owned scraper HTTP client, closed in runInternal()'s finally (Java 21 HttpClient is
+    // AutoCloseable) so a reused instance / leak-sensitive test JVM doesn't accrete client threads.
+    private volatile HttpClient metricsHttp;
 
     // H-02/H-03 + M-01 (Round B): live state retained as instance fields so the
     // shutdown hook body and tests can drive the same final-report code path.
@@ -216,8 +221,8 @@ public final class LoadHarness implements Callable<Integer> {
         // Build initial header snapshot (retained across all interval writes for overwrite-mode merge).
         initialHeader = ReportSnapshot.header(harnessId, serverUri, count,
                 startedAt.toString(), System.getProperty("java.version"));
-        metricsScraper = new ServerMetricsScraper(ServerMetricsScraper.actuatorBaseFrom(serverUri),
-                HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build());
+        metricsHttp = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        metricsScraper = new ServerMetricsScraper(ServerMetricsScraper.actuatorBaseFrom(serverUri), metricsHttp);
 
         // Write initial report.
         try {
@@ -318,6 +323,12 @@ public final class LoadHarness implements Callable<Integer> {
                 // JVM is already shutting down — hook is being executed; removal not possible.
             }
             reporterVT.interrupt();
+            // Close the owned scraper client — the reporter VT is already drained (writeFinalReportOnce
+            // interrupt+join above), so no scrape is in flight and close() returns promptly.
+            if (metricsHttp != null) {
+                metricsHttp.close();
+                metricsHttp = null;
+            }
             // Release strong refs so a reused harness instance doesn't pin prior state.
             activeFleet = null;
             activeWriter = null;

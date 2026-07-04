@@ -2,6 +2,7 @@ package com.paralife.harness;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -51,15 +52,24 @@ public record ReportSnapshot(
      * report (Task 3). Exact meter names — no wildcard {@code /actuator/metrics} endpoint exists,
      * so {@code paralife.backpressure.*} meters are spelled out individually. By-reason breakdown
      * of {@code paralife.admission.rejected} is deferred to BACKLOG.
+     *
+     * <p>Insertion-ordered (not {@code Map.of}, whose per-JVM salted iteration order shuffled the
+     * {@code server_metrics} key order between runs) so the report schema is byte-stable and
+     * successive reports diff cleanly.
      */
-    public static final Map<String, String> BENCHMARK_METER_NAMES = Map.of(
-            "paralife.tick.drift.millis", "MAX",
-            "paralife.ws.active.sessions", "VALUE",
-            "paralife.backpressure.stalled.sessions", "VALUE",
-            "paralife.backpressure.stalled.total", "COUNT",
-            "paralife.backpressure.rebound", "COUNT",
-            "paralife.backpressure.terminal.dropouts", "COUNT",
-            "paralife.admission.rejected", "COUNT");
+    public static final Map<String, String> BENCHMARK_METER_NAMES = benchmarkMeterNames();
+
+    private static Map<String, String> benchmarkMeterNames() {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("paralife.tick.drift.millis", "MAX");
+        m.put("paralife.ws.active.sessions", "VALUE");
+        m.put("paralife.backpressure.stalled.sessions", "VALUE");
+        m.put("paralife.backpressure.stalled.total", "COUNT");
+        m.put("paralife.backpressure.rebound", "COUNT");
+        m.put("paralife.backpressure.terminal.dropouts", "COUNT");
+        m.put("paralife.admission.rejected", "COUNT");
+        return Collections.unmodifiableMap(m);
+    }
 
     /**
      * Build a static-config-only header snapshot. Counter fields are all null so

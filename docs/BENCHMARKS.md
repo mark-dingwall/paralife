@@ -69,10 +69,15 @@ that clock covers connect/ramp-up too).
   the same qualitative shape. No median/range was captured (N=1 per tier); a repeat run is expected
   to drift.
 - **MAX caveat:** `paralife.tick.drift.millis` MAX is `SimpleMeterRegistry`'s decaying
-  `TimeWindowMax` (~1-minute window), not the run-global peak. These runs (32–50s wall time) are
-  shorter than that window, so no early spike should have decayed out of the reported value — but
-  for any future run longer than ~1 minute, scrape promptly at run-end or treat the MAX as a
-  recency-weighted figure, not a true peak.
+  `TimeWindowMax` (Micrometer's default `distributionStatisticExpiry` is ~2 minutes), not the
+  run-global peak. These runs (32–50s wall time) are shorter than that window, so no early spike
+  should have decayed out of the reported value — but for any future run longer than that window,
+  scrape promptly at run-end or treat the MAX as a recency-weighted figure, not a true peak.
+- **Work-time-vs-drift caveat:** `paralife.tick.drift.millis` records each tick's *work-time* (a
+  drift proxy), not measured scheduling drift (actual-minus-expected tick interval). The tick period
+  is 500ms (`application.yml`), so the reported MAX values (53 / 70 / 84 ms) are per-tick work-times
+  well under budget — actual scheduling drift was ≈0. Read the "Tick-drift MAX (ms)" column as "peak
+  per-tick work-time," **not** "how far behind schedule the loop ran."
 - **Empty-category honesty:** `paralife.backpressure.stalled.sessions` / `.stalled.total` /
   `.rebound` / `.terminal.dropouts` read `0`/null in **all three** tiers — this run never drove a
   genuine mid-session outbound-queue stall (that requires sustained slow-client backpressure, not
@@ -87,11 +92,13 @@ The 500 and 1000-bot tiers did **not** reach their target concurrent count, and 
 directly attributable, not a mystery: `application.yml` sets `paralife.admission.cap: 256`. Both
 tiers plateaued at `peak_registered=256` — exactly the configured cap — while `connect_failures_total`
 (244 at 500-tier, 744 at 1000-tier) and the `paralife.admission.rejected` COUNT meter (332 / 1159)
-climbed with the oversubscription ratio. The server's `/actuator/health` endpoint returned `200`
-throughout both runs, tick-drift MAX rose only modestly (70ms, 84ms vs. 53ms at the 100-tier), and
-no exception, OOM, or unresponsiveness was observed — this is the Phase 17 durable-admission gate
-enforcing its configured ceiling under 2x and 4x oversubscription, not the server failing to sustain
-load.
+climbed with the oversubscription ratio. Tick-drift MAX (per-tick work-time — see caveat) rose only
+modestly (70ms, 84ms vs. 53ms at the 100-tier) and the rejection counter was populated rather than the
+run erroring out — this is the Phase 17 durable-admission gate enforcing its configured ceiling under
+2x and 4x oversubscription, not the server failing to sustain load. (A manual `/actuator/health` check
+returned `200` with no exception/OOM seen during the runs, but that was an **out-of-band** observation:
+only the `/actuator/metrics` figures cited here are captured in the committed report artifacts, so the
+"admission-capped, not degraded" conclusion rests on those bounded metrics — not on the health probe.)
 
 (The run-end `paralife.ws.active.sessions` figures — 168 at the 500-tier, 173 at the 1000-tier — sit
 *below* the `peak_registered=256` high-water mark: `peak_registered` is a monotonic maximum, while
@@ -110,9 +117,9 @@ failure mode, where one exists, is "admission-capped by design," not "degraded/c
   admission rejections. `docs/benchmarks/bench-100.json`.
 - **500 and 1000-bot *target* tiers**: real evidence captured (`docs/benchmarks/bench-500.json`,
   `docs/benchmarks/bench-1000.json`), but the *validated concurrent envelope* both plateau at is the
-  configured **admission cap of 256 concurrent sessions** — demonstrated safely and repeatably under
-  both 2x (500) and 4x (1000) oversubscription, with the rejection meter populated and the server
-  remaining healthy throughout. **The validated scale envelope for this phase is: 100 bots fully
+  configured **admission cap of 256 concurrent sessions** — demonstrated safely and consistently under
+  both 2x (500) and 4x (1000) oversubscription, with the rejection meter populated and tick-drift
+  staying bounded throughout. **The validated scale envelope for this phase is: 100 bots fully
   connected, and up to 256 concurrent sessions safely enforced under oversubscription up to at least
   4x** — not "500" or "1000 concurrent bots," which the current admission-cap config does not permit
   and this run does not claim.
