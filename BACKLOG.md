@@ -19,6 +19,16 @@ per-reason rejection shares (e.g. an M5 dashboard or a tuning assay), **and** th
 asserting those shares in the default suite (they stay report-only). *Anchor:* `ServerMetricsScraper.scrape(...)`,
 `ReportSnapshot.BENCHMARK_METER_NAMES`; the `reason`+`source` tags on `AdmissionMetrics` `paralife.admission.rejected`.
 
+**Total-scrape time budget (→ Phase 22.1).** *Why deferred:* `ServerMetricsScraper.scrape(BENCHMARK_METER_NAMES)`
+GETs 7 meters serially, each bounded to 2s, so worst case ≈14s — and it runs inline on `LoadHarness`'s
+crash-safe shutdown-hook final write and every periodic write. In practice absent meters 404 fast (not a 2s
+timeout) and the write is `try/catch`-wrapped, so a benign run scrapes in well under a second; the worst case
+only bites if a genuinely hung server stalls all 7 meters — plausible under 1000-bot overload. P21 ships the
+plan-mandated inline design. *Trigger:* if the sync stall is observed to degrade report cadence or the
+shutdown write under real overload capture. *Fix options:* an overall scrape deadline (budget across meters),
+or run the scrape off the reporter/shutdown critical path. *Anchor:* `ServerMetricsScraper.scrape(...)`,
+`LoadHarness` report-assembly path. (Surfaced by the Phase 21 whole-branch review, 2026-07-04.)
+
 ## HARNESS EARS rollout (deferred, gated)
 
 **Why:** ADMISSION §0 landed (EARS Rollout #2); HARNESS is the deliberate next gate, not this slice.

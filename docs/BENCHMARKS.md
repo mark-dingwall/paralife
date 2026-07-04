@@ -93,6 +93,11 @@ no exception, OOM, or unresponsiveness was observed — this is the Phase 17 dur
 enforcing its configured ceiling under 2x and 4x oversubscription, not the server failing to sustain
 load.
 
+(The run-end `paralife.ws.active.sessions` figures — 168 at the 500-tier, 173 at the 1000-tier — sit
+*below* the `peak_registered=256` high-water mark: `peak_registered` is a monotonic maximum, while
+`active.sessions` is a point-in-time gauge sampled at report time, so ordinary admit/expire churn under
+sustained oversubscription leaves the instantaneous count under the peak. Not a discrepancy.)
+
 **So, per D1: the 500 and 1000-bot tiers are recorded as not-sustained *at their target concurrent
 count*** — that is an honest, real result, not a failure mode of the harness or the server. The
 failure mode, where one exists, is "admission-capped by design," not "degraded/crashed/OOM."

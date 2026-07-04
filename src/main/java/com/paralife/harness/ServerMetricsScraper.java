@@ -66,6 +66,11 @@ public final class ServerMetricsScraper {
                     Double v = parseMetricValue(res.body(), e.getValue());
                     if (v != null) out.put(e.getKey(), v);
                 }
+            } catch (InterruptedException ie) {
+                // Reporter/shutdown interrupt: restore the flag and stop promptly rather than
+                // blocking up to REQ_TIMEOUT on each remaining meter.
+                Thread.currentThread().interrupt();
+                return out;
             } catch (Exception ignored) { /* omit; a benchmark never dies (or hangs) on a missing meter */ }
         }
         return out;
