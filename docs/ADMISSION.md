@@ -113,9 +113,9 @@ Reserved but not emitted this phase: ingress-flood token (D-09 chose counter-onl
 
 ---
 
-## §2 Wire Shape Delta vs `SCHEMA.md` *(non-normative — canonical grammar is `SCHEMA.md` §8.3 / §0)*
+## §2 Wire Shape Delta vs `SCHEMA.md` *(non-normative — canonical grammar is `SCHEMA.md` §6 / §0)*
 
-See `SCHEMA.md` §8.3 for the canonical frame grammar. This doc adds only the resume-token slot:
+See `SCHEMA.md` §6 for the canonical frame grammar. This doc adds only the resume-token slot:
 `r|<entityType>|<resumeToken>` (optional third slot, stalled-session recovery, opaque 16-char hex,
 absent = fresh registration); `S|<entityId>|<resumeToken>` (emitted on every successful
 registration, before any `f<effects>` block); `E|<code>|<token>` (message slot now carries a
