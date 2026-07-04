@@ -26,9 +26,8 @@ The equivalent strategy is the four-layer tuning surface in §2: per-connection
 cost is reduced by JVM/Jetty/application/codec tuning, never by collapsing
 multiple entities onto a shared connection.
 
-**This is a deliberate choice, NOT a missing optimisation.** Future contributors
-who notice the 1000+ VT count or the per-session bounded queue should not "fix"
-the design without an ADR per Phase 18 D-21.
+**This is deliberate, not a missing optimisation** — don't "fix" the 1000+ VT
+count or per-session bounded queue without an ADR per Phase 18 D-21.
 
 **Forward note (D-03):** Revisit §1 only if Phase 21 evidence shows the
 per-connection overhead path is the binding constraint at 5000 conns/JVM (the
@@ -62,12 +61,12 @@ All eight are launch-only per Jetty 12's `Configurable` contract.
 
 ### §2.2 Layer 3 — Application knobs (`AppRuntimeConfig`)
 
-**Pass-2 Concern #7:** All four fields in `AppRuntimeConfig` are tagged `[reserved — no effect in Phase 20]`. The binding surface exists for future consumers (M5 admin UI, Phase 19.1 parallel encode, future codec API extension); changing any of these in Phase 20 is a no-op observable to operators.
+All four fields in `AppRuntimeConfig` are tagged `[reserved — no effect in Phase 20]`. The binding surface exists for future consumers (M5 admin UI, Phase 19.1 parallel encode, future codec API extension); changing any of these in Phase 20 is a no-op observable to operators.
 
 | Knob | Default | Notes |
 |------|---------|-------|
 | `paralife.runtime.app.outbound.queue-watermark-pct` | 80 | [reserved — no effect in Phase 20] slow-client warning threshold; consumer wiring deferred (M5 admin UI) |
-| `paralife.runtime.app.outbound.frame-size-budget-bytes` | 1024 | [reserved — no effect in Phase 20] codec sizing hint; PerceptionCodec.encode(Frame) takes no capacity arg, consumer wiring deferred (Pass-2 Concern #7 — Plan 5 forbids the API change required to consume this) |
+| `paralife.runtime.app.outbound.frame-size-budget-bytes` | 1024 | [reserved — no effect in Phase 20] codec sizing hint; PerceptionCodec.encode(Frame) takes no capacity arg, consumer wiring deferred (Plan 5 forbids the API change required to consume this) |
 | `paralife.runtime.app.encode.parallel-encode-threshold` | -1 | [reserved — no effect in Phase 20] Phase 19.1 reservation; -1 = disabled |
 | `paralife.runtime.app.encode.encode-batch-hint` | 8 | [reserved — no effect in Phase 20] tick-broadcast batch hint |
 
@@ -81,6 +80,15 @@ session-attach time (`WorldWebSocketHandler.afterConnectionEstablished` →
 `OutboundSender.attachSession` → fixed `ArrayBlockingQueue` capacity); changes
 apply to **new sessions only**, existing session queues stay at their
 creation-time depth. No mid-benchmark live-resize today (M5 admin UI follow-up).
+
+**Queue-watermark reserved note (§3 recipes cross-ref here):**
+`paralife.runtime.app.outbound.queue-watermark-pct` is `[reserved — no effect
+in Phase 20]` per the table above — it has no Phase 20 consumer and
+overriding it produces no measurable effect. §3 recipe yaml overrides omit
+it; the only attach-time-tunable backpressure knob in Phase 20 (new sessions
+only — see the Lifecycle note above) is
+`paralife.admission.backpressure.outbound-queue-size` (default 128, see
+Phase 17 ADMISSION.md §6 Backpressure for queue-depth sizing math).
 
 ### §2.3 Layer 4 — Codec impl (D-10, JFR-driven only)
 
@@ -101,14 +109,13 @@ LOCKED).
 > the placeholder JFR-driven markers with measured-justified statements.
 >
 > **Admission cap (`-Dparalife.admission.cap=1500`)** is a **benchmark-time JVM-flag
-> override** present in every recipe. Production default at `application.yml` is
-> `cap=256` (unchanged). The 1500 value matches the Plan 1c baseline capture
-> conditions (20-01c F1 resolution: cap is world-aggregate; cap=1500 is
-> non-binding for the 100/500/1000-bot tiers). Without this override, 500/1000-tier
-> recipes hit `world-full` rejections (~244 / ~744 bots dropped) AND do not
-> reproduce the cited baseline JFRs — re-introducing the exact F1 defect 20-01c
-> fixed. Per 20-01c-SUMMARY §F1: "Plan 20-04/05/06 should cite this as a
-> benchmark-time JVM-flag override, not a production default change."
+> override** present in every recipe (production default at `application.yml` is
+> `cap=256`, unchanged). It matches the Plan 1c baseline capture conditions
+> (20-01c-SUMMARY §F1: cap is world-aggregate, non-binding for the
+> 100/500/1000-bot tiers — cite it as a benchmark-time JVM-flag override, not
+> a production default change). Without it, 500/1000-tier recipes hit
+> `world-full` rejections (~244 / ~744 bots dropped) and fail to reproduce
+> the cited baseline JFRs — re-introducing the exact F1 defect 20-01c fixed.
 >
 > **Active vs churn profile (20-01c §Active-Population Workload).** The
 > `62c1b44`-anchored series is the **churn baseline** (default `nutrient-spawn-probability`);
@@ -131,79 +138,42 @@ LOCKED).
 > ```
 >
 > The **`--app-arg` form** is mandatory: passing the same value as a JVM
-> `-D` property after `-jar` is a silently-ignored application argument
-> (gemini R4 finding). The `-D` form works only if placed **before** `-jar`.
+> `-D` property after `-jar` is a silently-ignored application argument.
+> The `-D` form works only if placed **before** `-jar`.
 >
-> **Not baseline-reproducible.** This template will NOT byte-for-byte
-> reproduce the cited `profiles/jfr-Nbots-active-50xfood-103a615.jfr`
-> artifacts. The captured active profile used distinct per-tier parameters
-> (heap `-Xms2g -Xmx2g`, `parallelism=8`, `--duration 130s`, uniform 90s JFR
-> window after a 20s ramp). See `profiles/jfr-Nbots-active-50xfood-103a615.meta.json`
-> for the exact deltas. Phase 21 benchmark scripts needing baseline-comparable
-> active evidence MUST read the meta sidecars and override these template
-> values per tier; the reproducible per-tier active recipe shape is
-> documented as-is: the tuning-rig was a null-result (no rig was wired —
-> recipes stand as-documented, Phase 21 consumes them).
->
-> **Churn-baseline recipes — not byte-for-byte reproducible against the
-> `62c1b44` capture.** The §3.1 / §3.2 / §3.3 recipes are smoke-template
-> shapes (operator-friendly, run on a commodity host). They do NOT
-> reproduce the cited `profiles/jfr-Nbots-baseline-62c1b44.jfr` artifacts
-> bit-for-bit — the Plan 1c capture used `--duration 200`, harness
-> `rate:50`, `-Xms2g -Xmx2g`, and `-Djdk.virtualThreadScheduler.parallelism=8`
-> across all three tiers per `profiles/jfr-Nbots-baseline-62c1b44.meta.json`.
-> Phase 21 benchmark scripts that need baseline-comparable rerun evidence
-> MUST read the meta sidecars and override the recipe's `--duration` /
-> `--ramp-up` / `-Xms/-Xmx` / `parallelism=N` per tier. Reproducible
-> per-tier baseline recipe shapes are documented as-is: the tuning-rig was
-> a null-result (no rig was wired), so recipes stand as-documented and
-> Phase 21 consumes them.
->
-> **Heap presets (`-Xms/-Xmx`) — not JFR-validated for lower tiers.** Per-tier heap
-> values in §3.1 / §3.2 / §3.3 (`1g/1g`, `1g/2g`, `2g/2g`) are
-> **commodity-host placeholders**, not measured choices. All three Phase 20
-> captures — churn baseline `62c1b44`, active-scenario `103a615`, and
-> tuned `424e06d` — ran `-Xms2g -Xmx2g` per the respective
-> `profiles/jfr-Nbots-baseline-62c1b44.meta.json` and
-> `profiles/jfr-1000bots-active-50xfood-tuned-424e06d.meta.json`; the
-> lower-tier `1g/1g` and `1g/2g` presets here were never exercised by any
-> JFR run. No heap retune was performed in Phase 20. Baseline-comparable
-> reproduction MUST use the `2g/2g` capture shape from the meta sidecars;
-> the lower-tier presets are operator smoke presets sized by headroom
-> judgement only.
->
-> **JFR start delay / duration / SIGTERM timing.** Each recipe pins the JFR
-> `duration=` to the harness `--duration` and adds `delay=15s` so the
-> recording starts ~15 s after `-jar` launch — past Spring Boot startup and
-> aligned with the harness connect/ramp window. The JFR window therefore
-> covers the harness load period rather than the boot tail. The 15 s
-> cushion is a conservative placeholder; if Spring startup runs longer on
-> a given host the operator should bump `delay=` until JFR start lands
-> after `Started ParalifeApplication`. JFR auto-stops and dumps the file
-> at `duration` elapsed; operators should SIGTERM the server **after** the
-> harness exits AND after JFR is on disk. If you SIGTERM mid-recording,
-> JFR flushes a partial dump on JVM shutdown — usable but truncated.
-> Tradeoff: this template's 15 s boot cushion drops roughly the first
-> ~10 s of harness load (the ramp/connect window) from the JFR. With
-> server boot at ~5 s and the harness starting then, JFR starts at t=15 s
-> and ends at `15s + duration`, so the recording catches steady-state +
-> ~10 s of post-harness idle, but misses the ramp at the front. For
-> comparable full-load capture **including the ramp**, Phase 21
-> can reduce `delay=` (and accept boot noise in the recording front), or
-> switch to `jcmd JFR.start` invoked immediately after the server reports
-> ready (precise alignment, no fixed delay placeholder).
->
-> **Pass-2 Concern #8:** `paralife.runtime.app.outbound.queue-watermark-pct` is
-> `[reserved — no effect in Phase 20]` per §2.2 — it has no Phase 20 consumer
-> and overriding it produces no measurable effect. Recipe override examples
-> deliberately omit it; the only attach-time-tunable backpressure knob in
-> Phase 20 (new sessions only — see §2.2 lifecycle note) is
-> `paralife.admission.backpressure.outbound-queue-size` (default 128, see
-> Phase 17 ADMISSION.md §6 Backpressure for queue-depth sizing math).
+> **Reproducibility & meta-sidecar note.** None of the recipes below reproduce
+> their cited JFR captures byte-for-byte — they are operator-friendly smoke
+> shapes run on a commodity host; the tuning-rig was a null-result (no rig
+> was wired), so recipes stand as-documented and Phase 21 consumes them as-is.
+> Read the per-capture `.meta.json` sidecar for the exact deltas before
+> treating a rerun as baseline-comparable:
+> - Churn baseline (`profiles/jfr-Nbots-baseline-62c1b44.meta.json`): captured
+>   with `--duration 200`, harness `rate:50`, `-Xms2g -Xmx2g`, and
+>   `-Djdk.virtualThreadScheduler.parallelism=8` across all three tiers —
+>   Phase 21 baseline-comparable reruns MUST override the recipe's
+>   `--duration` / `--ramp-up` / `-Xms/-Xmx` / `parallelism=N` per tier.
+> - Active-50xfood (`profiles/jfr-Nbots-active-50xfood-103a615.meta.json`):
+>   captured with `-Xms2g -Xmx2g`, `parallelism=8`, `--duration 130s`, and a
+>   uniform 90s JFR window after a 20s ramp.
+> - Tuned active-50xfood, 1000-tier
+>   (`profiles/jfr-1000bots-active-50xfood-tuned-424e06d.meta.json`): also
+>   captured at `-Xms2g -Xmx2g`.
+> - Heap presets in §3.1/§3.2/§3.3 (`1g/1g`, `1g/2g`, `2g/2g`) are
+>   commodity-host placeholders, not JFR-validated — all three Phase 20
+>   captures above ran `2g/2g`; baseline-comparable reproduction MUST use
+>   `2g/2g` per the meta sidecars.
+> - JFR timing: each recipe pins `duration=` to the harness `--duration` and
+>   adds `delay=15s` so the recording starts past Spring Boot startup,
+>   aligned with the harness connect/ramp window; this drops roughly the
+>   first ~10s of harness load (the ramp/connect window) from the capture —
+>   Phase 21 can reduce `delay=` or switch to `jcmd JFR.start` immediately
+>   after the server reports ready for full-load capture including the ramp.
+>   SIGTERM the server only after the harness exits AND JFR is on disk
+>   (mid-recording SIGTERM still flushes a usable but truncated dump).
 
 ### §3.1 100-bot tier (operator-friendly, BotRunner-class)
 
-**Server launch:** (Pass-3 Concern #24 — `paralife-*.jar` is ambiguous; the wildcard matches both `paralife-*-SNAPSHOT.jar` and `paralife-*-load-harness.jar`. Pin the server jar via the same shell-variable pattern Plan 1c uses.)
+**Server launch:** (`paralife-*.jar` is ambiguous; the wildcard matches both `paralife-*-SNAPSHOT.jar` and `paralife-*-load-harness.jar`. Pin the server jar via the same shell-variable pattern Plan 1c uses.)
 ```bash
 SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | grep -v -- '-plain' | head -1)
 java \
@@ -231,13 +201,8 @@ java -jar "$HARNESS_JAR" \
 
 **Baseline JFR:** `profiles/jfr-100bots-baseline-62c1b44.jfr` (Plan 1c).
 
-**GC choice rationale (JFR-driven):** G1 confirmed for this tier. The baseline JFR
-`profiles/jfr-100bots-baseline-62c1b44.jfr` (Plan 1c, 200 s churn, 2g/2g heap)
-recorded 10 `jdk.GCPhasePause` events totalling 57.2 ms ≈ 0.03% of wall-clock
-(max single pause 11.8 ms) — normal G1 minor pauses, far below the >2%
-GC-pause-time ZGC trigger; the active-scenario capture
-`profiles/jfr-100bots-active-50xfood-103a615.jfr` (90 s window) recorded 0 pause
-events. No ZGC switch justified; G1 stays.
+**GC choice (JFR-driven):** G1 confirmed for this tier — no ZGC switch
+justified; see §4.3.1 for the JFR pause-event rationale.
 
 ### §3.2 500-bot tier (single-harness)
 
@@ -265,12 +230,7 @@ java -jar "$HARNESS_JAR" \
 
 **Yaml overrides (optional):**
 ```yaml
-# Pass-2 Concern #8: paralife.runtime.app.outbound.queue-watermark-pct is
-# [reserved — no effect in Phase 20] per §2.2 — see "Pass-2 Concern #8" note
-# at the top of §3 for rationale.
-# The attach-time-tunable backpressure knob (new sessions only — see §2.2 lifecycle note)
-# is paralife.admission.backpressure.outbound-queue-size (default 128); tighten cautiously
-# per ADMISSION.md §6 Backpressure.
+# Backpressure knob: reserved queue-watermark-pct has no Phase-20 consumer; see §2.2.
 paralife:
   admission:
     backpressure:
@@ -279,18 +239,13 @@ paralife:
 
 **Baseline JFR:** `profiles/jfr-500bots-baseline-62c1b44.jfr` (Plan 1c).
 
-**GC choice rationale (JFR-driven):** G1 confirmed for this tier. The baseline JFR
-`profiles/jfr-500bots-baseline-62c1b44.jfr` (Plan 1c, 200 s churn, 2g/2g heap)
-recorded 18 `jdk.GCPhasePause` events totalling 283.7 ms ≈ 0.14% of wall-clock
-(max single pause 41.9 ms) — normal G1 minor pauses under churn load; the
-active-scenario capture `profiles/jfr-500bots-active-50xfood-103a615.jfr`
-(90 s window) recorded 0 pause events. The ZGC threshold (>2% GC pause
-time) is not reached. G1 stays; ZGC switch would require Phase 21 evidence at this
-tier.
+**GC choice (JFR-driven):** G1 confirmed for this tier — the ZGC threshold
+(>2% GC pause time) is not reached; ZGC switch would require Phase 21
+evidence at this tier. See §4.3.2 for the JFR pause-event rationale.
 
 ### §3.3 1000-bot tier (M4 target)
 
-**Server launch:** (Pass-3 Concern #24 — same `SERVER_JAR` / `HARNESS_JAR` shell-variable pattern as §3.1.)
+**Server launch:** (same `SERVER_JAR` / `HARNESS_JAR` shell-variable pattern as §3.1.)
 ```bash
 SERVER_JAR=$(ls build/libs/paralife-*.jar | grep -v load-harness | grep -v -- '-plain' | head -1)
 java \
@@ -316,9 +271,7 @@ java -jar "$HARNESS_JAR" \
 
 **Yaml overrides (optional, JFR-driven):**
 ```yaml
-# Pass-2 Concern #8: paralife.runtime.app.outbound.queue-watermark-pct is
-# [reserved — no effect in Phase 20] per §2.2 — see "Pass-2 Concern #8" note
-# at the top of §3 for rationale.
+# Backpressure knob: reserved queue-watermark-pct has no Phase-20 consumer; see §2.2.
 paralife:
   runtime:
     jetty:
@@ -333,15 +286,9 @@ paralife:
 
 **Tuned JFR:** `profiles/jfr-1000bots-active-50xfood-tuned-424e06d.jfr` (Plan 5 — null-result equivalence capture).
 
-**GC choice rationale (JFR-driven):** G1 confirmed for this tier. The tuned JFR
-`profiles/jfr-1000bots-active-50xfood-tuned-424e06d.jfr` (Plan 5, 180 s
-active-50xfood, 2g/2g heap) recorded 4 `jdk.GCPhasePause` events totalling
-90.8 ms = 0.05% of 180 s wall-clock — far below the >2% GC-pause-time ZGC
-trigger. The baseline `profiles/jfr-1000bots-baseline-62c1b44.jfr` (Plan 1c,
-churn scenario, 200 s window) recorded 18 pauses totalling 213.0 ms ≈ 0.11%
-of wall-clock; the active-scenario baseline
-`profiles/jfr-1000bots-active-50xfood-103a615.jfr` (90 s window) recorded 0
-pause events. No GC switch is justified. G1 stays at 2g/2g for the M4 tier.
+**GC choice (JFR-driven):** G1 confirmed for this tier — no GC switch is
+justified; G1 stays at 2g/2g for the M4 tier. See §4.3.3 (GC findings) for
+the JFR pause-event rationale.
 
 **VT scheduler parallelism rationale (JFR-driven):** `parallelism=8` confirmed — no
 change. The Plan 1c lock flamegraph `profiles/lock-1000bots-baseline-62c1b44.html`
@@ -374,7 +321,7 @@ The Phase 20 capture ritual is documented in
 and `tools/async-profiler-bootstrap.md`. Every committed JFR cites the source
 SHA in its filename per D-19. **Headline gauges (`paralife.tick.health.work-time-ms`,
 `paralife.outbound.detach.timeout`) are sourced from `/actuator/metrics/{name}`
-JSON sidecars per Pass-2 Concern #10, not from server log grepping.** Noise-floor
+JSON sidecars, not from server log grepping.** Noise-floor
 convention per D-21: ±5% of baseline mean OR ±1σ, whichever is larger, computed
 across the JFR sample window.
 
@@ -412,13 +359,13 @@ under 2% CPU, consistent with the 1000-tier null-result conclusion: the codec is
 not the bottleneck at any tier.
 
 The G1 GC pause contribution at this tier is negligible — 0.03% of wall-clock
-(10 minor pauses, max 11.8 ms) confirms the 2g/2g heap is grossly oversized for
-100 bots; the active-scenario capture (`103a615`, 90 s) recorded 0 pause events
-outright. The tick work time of ~9 ms leaves ~491 ms of slack under the 500 ms
+(10 minor pauses totalling 57.2 ms, max 11.8 ms) confirms the 2g/2g heap is
+grossly oversized for 100 bots; the active-scenario capture (`103a615`, 90 s)
+recorded 0 pause events outright. The tick work time of ~9 ms leaves ~491 ms of slack under the 500 ms
 tick interval (`paralife.tick.interval-ms: 500`); there is no signal requiring
 any tuning at 100 bots.
 
-**Pass-2 Concern #17:** 100-bot tier is **baseline-only** in Phase 20. Per-tier
+100-bot tier is **baseline-only** in Phase 20. Per-tier
 benchmark evidence (i.e., re-running the harness against tuned HEAD) is Phase 21's
 deliverable; D-13 inheritance truth applies to the tier where tuning was shipped
 (1000-bot active-50xfood). Note: the `1g/1g` heap preset in §3.1 was not
@@ -446,7 +393,7 @@ sustained entity activity, but the allocation flamegraph
 attention. The ZGC threshold (>2% GC pause time) was not reached under either
 scenario. G1 stays at this tier.
 
-**Pass-2 Concern #17:** 500-bot tier is **baseline-only** in Phase 20 (same
+500-bot tier is **baseline-only** in Phase 20 (same
 rationale as §4.3.1). The `1g/2g` heap preset in §3.2 was not exercised by any
 JFR run — all captures used 2g/2g per meta.json. Baseline-comparable reproduction
 must use 2g/2g.
@@ -513,7 +460,7 @@ is unchanged and the equivalence capture is a clean baseline comparison.
 - **Reserved-field consumer wiring (Phase 999.4 + Phase 19.1):** The four `[reserved]` fields in `AppRuntimeConfig` await consumers — `parallel-encode-threshold` for Phase 19.1 parallel encode; `frame-size-budget-bytes` for any future PerceptionCodec API that accepts capacity hints; `queue-watermark-pct` and `encode-batch-hint` for M5 admin UI.
 - **Phase 19.1 follow-up:** parallel `PerceptionBroadcaster` will consume `AppRuntimeConfig.encode.parallelEncodeThreshold` (currently sentinel-disabled at -1).
 - **Phase 999.5:** Re-capture the baseline against post-M4 HEAD for fresh apples-to-apples comparison; the canonical `62c1b44` baseline (Plan 1c F6 re-anchor) is intentionally frozen for reproducibility.
-- **Phase 999.6 (added Pass-1 Concern #2 disposition):** `vt-pinning-reentrantlock-conversion` — lifts if Phase 21 benchmark evidence shows pinning is binding (Plan 5 confirmed 0 pinning events at 1000-bot active-50xfood; outcome 4 did not fire).
+- **Phase 999.6 (added Pass-1 disposition):** `vt-pinning-reentrantlock-conversion` — lifts if Phase 21 benchmark evidence shows pinning is binding (Plan 5 confirmed 0 pinning events at 1000-bot active-50xfood; outcome 4 did not fire).
 
 ***
 
@@ -529,7 +476,7 @@ is unchanged and the equivalence capture is a clean baseline comparison.
 | `profiles/cpu-1000bots-baseline-62c1b44.html` | async-profiler CPU @ 1000 | 62c1b44 | Plan 1c — 2026-05-20 | 80 KB | flamegraph |
 | `profiles/alloc-1000bots-baseline-62c1b44.html` | async-profiler alloc @ 1000 | 62c1b44 | Plan 1c — 2026-05-20 | 29 KB | flamegraph |
 | `profiles/lock-1000bots-baseline-62c1b44.html` | async-profiler lock @ 1000 | 62c1b44 | Plan 1c — 2026-05-20 | 19 KB | flamegraph |
-| `profiles/metrics-{100,500,1000}bots-baseline-62c1b44.json` | actuator metric sidecars (Pass-2 Concern #10) | 62c1b44 | Plan 1c — 2026-05-20 | ~13–14 KB each | 6-sample headline-gauge JSON snapshots |
+| `profiles/metrics-{100,500,1000}bots-baseline-62c1b44.json` | actuator metric sidecars | 62c1b44 | Plan 1c — 2026-05-20 | ~13–14 KB each | 6-sample headline-gauge JSON snapshots |
 | `profiles/jfr-{100,500,1000}bots-baseline-62c1b44.meta.json` | JFR capture metadata sidecars (baseline) | 62c1b44 | Plan 1c — 2026-05-20 | ~1.2 KB each | per-JFR provenance: SHA / cap / seed / asprof rate |
 | `profiles/jfr-{100,500,1000}bots-active-50xfood-103a615.jfr` | active-population scenario (50× food, sustained live pop) | 103a615 | Plan 1c §Active — 2026-05-25 (from metric sidecar) | ~0.35–0.8 MB each | transport-overhead evidence — Plan 5's tuning evidence set (null-result; see §4.4) |
 | `profiles/{cpu,alloc,lock}-{100,500,1000}bots-active-50xfood-103a615.html` | async-profiler flamegraphs (active scenario) | 103a615 | Plan 1c §Active — 2026-05-25 (from metric sidecar) | 16–153 KB each | active-profile flamegraphs |

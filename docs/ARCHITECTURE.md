@@ -23,8 +23,6 @@ Each connected WebSocket session is paired with one virtual thread that loops
 - `queue.size()` is the explicit backpressure signal — observable as
   `paralife.backpressure.stalled.sessions` gauge and per-session via `OutboundSender.queueDepth(sessionId)`.
 - Java 21 VTs scheduled on shared carriers; per-VT cost is a few KB heap. 1000+ VTs is acceptable.
-- Slow-client detection becomes implicit with Jetty native async (write-Future latency / Jetty internals);
-  the API surface differs across Jetty 12 minor versions.
 
 When the queue overflows, the session transitions to STALLED:
 - `OutboundSender.offer` invokes the overflow callback registered by `WorldWebSocketHandler`.
@@ -62,11 +60,6 @@ Full token taxonomy, STALLED FSM, and resume-token lifecycle: `docs/ADMISSION.md
 **WS:entity 1:1** — one WebSocket connection per entity, always. Every entity on the grid has
 exactly one WebSocket session; every WebSocket session owns exactly one entity during the Alive phase.
 
-Many concurrent WebSocket connections is a stated architectural goal. Scale-out is achieved by
-running more connections (more bots, more `LoadHarness` JVMs), never by multiplexing multiple
-entities over a single connection. Multi-entity-per-session is **strongly discouraged** and requires
-an explicit ADR with justification before any exception is considered.
-
 See `docs/HARNESS.md` §1 for full rationale, exception policy, and the 5 000-connections-per-JVM
 design ceiling (D-02).
 
@@ -89,7 +82,7 @@ The two metric gauges to watch when tuning are `paralife.tick.health.work-time-m
 to commit SHAs (e.g. `62c1b44` churn baseline, `103a615` active-scenario) for
 reproducibility per D-19. Headline-gauge
 values are sampled from `/actuator/metrics/{name}` into JSON sidecars at capture
-time (Pass-2 Concern #10) — `application.yml:15` exposes the `metrics` actuator
+time — `application.yml:15` exposes the `metrics` actuator
 endpoint that Plan 1c + Plan 5 capture from.
 
 D-20 keeps `paralife.admission.backpressure.outbound-queue-size` in

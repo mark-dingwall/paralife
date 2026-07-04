@@ -30,10 +30,6 @@ case-by-case; deviation requires an explicit justification in an ADR or future-p
 FSM, admission gate, resume-token registry, and per-session outbound queue are all designed around
 the 1:1 invariant. Violating it requires redesigning all four.
 
-**Rationale:** The project was founded as a testbed for emergent behavior arising from simple local
-rules. Massive parallelism is itself a testable, measurable property. Connection multiplexing would
-reduce observable parallelism in favor of protocol complexity — the wrong trade-off for this project.
-
 ### Scale Model (D-01 / D-02)
 
 - **Single JVM per harness process.** `LoadHarness` is a standalone fat-JAR that manages one pool
@@ -82,7 +78,7 @@ Server reads headers in `WorldWebSocketHandler.afterConnectionEstablished` via
 (`AttributionTagger.ATTR_SOURCE`, `AttributionTagger.ATTR_HARNESS`). These attributes are
 preserved across the STALLED-pivot rebind path (T-18-04 mitigation — see §9).
 
-**Canonical harness-id policy** (Round 2 doc-alignment amendment):
+**Canonical harness-id policy**:
 
 ```
 ^[A-Za-z0-9-]{1,32}$
@@ -258,12 +254,7 @@ Where `<reason>` ∈ `{graceful, stalled-held}`:
   held under grace window for potential rebind (Phase 17 D-13 STALLED-pivot). NEW in Phase 18 —
   emitted by `WorldWebSocketHandler.afterConnectionClosed` on the `wasStalled` branch (Plan 02).
 
-Operators grepping for stalled-held:
-```
-grep 'reason=stalled-held' server.log
-```
-Shows every entity that experienced STALLED-pivot graceful close — useful for triaging client-side
-disconnects vs server-side queue overflow.
+`reason=stalled-held` (STALLED-pivot graceful close) is greppable — see Operator Cheat Sheet below.
 
 ### HARNESS Overflow Marker (D-10)
 
@@ -359,8 +350,7 @@ meter). Meter → statistic:
 | `fatal-error` | Unrecoverable exception in main loop |
 
 Note: SIGINT and SIGTERM map to the same `signal` value — JVM shutdown hooks cannot reliably
-distinguish them (Round 2 Codex HIGH amendment). Operators needing to distinguish should use
-process supervisor tooling.
+distinguish them. Operators needing to distinguish should use process supervisor tooling.
 
 ### Write Modes
 
@@ -371,21 +361,9 @@ process supervisor tooling.
 
 ---
 
-## §7 Sample Benchmark Commands
+## §7 Sample Benchmark Commands *(non-normative)*
 
 All examples use integer seconds for `--duration` per D-16.
-
-### 100-bot baseline (Phase 21 smoke)
-
-```bash
-java -jar build/libs/paralife-*-load-harness.jar \
-  --server-uri ws://localhost:8080/ws/world \
-  --count 100 \
-  --harness-id baseline-100 \
-  --ramp-up rate:50 \
-  --duration 300 \
-  --report-out ./baseline-100-report.json
-```
 
 ### 500-bot sustained run
 
@@ -402,39 +380,9 @@ java -jar build/libs/paralife-*-load-harness.jar \
   --report-interval 30
 ```
 
-### 500-bot stress (2×250 multi-instance)
-
-Run two independent harness processes simultaneously, each contributing 250 bots. The pattern
-generalises trivially — for 4×250, add Terminal 3/4 with `stress-C`/`stress-D` and pass all four
-files to `jq` at the bottom:
-
-```bash
-# Terminal 1
-java -jar build/libs/paralife-*-load-harness.jar \
-  --server-uri ws://host:8080/ws/world \
-  --count 250 \
-  --harness-id stress-A \
-  --ramp-up wave:25:500 \
-  --duration 900 \
-  --report-out ./stress-A.json
-
-# Terminal 2
-java -jar build/libs/paralife-*-load-harness.jar \
-  --server-uri ws://host:8080/ws/world \
-  --count 250 \
-  --harness-id stress-B \
-  --ramp-up wave:25:500 \
-  --duration 900 \
-  --report-out ./stress-B.json
-
-# Aggregate via jq after run:
-jq -s '{peak: map(.peak_registered) | add, failures: map(.connect_failures_total) | add}' \
-  stress-A.json stress-B.json
-```
-
-For synchronised ramp-across-JVMs, use a shell sleep barrier before each harness invocation.
-Per-harness identity (`harness=stress-A`, `harness=stress-B`) lets server-side `active.entities`
-gauge per-instance without any built-in coordinator.
+Multi-instance pattern: run N independent harness JVMs with distinct `--harness-id`/`--report-out`
+values, then aggregate the JSONL reports post-run via `jq -s` — see §10 Multi-Instance Harness
+Coordination.
 
 ---
 
@@ -460,26 +408,8 @@ gauge per-instance without any built-in coordinator.
 
 ## §9 Security Domain
 
-### Header Injection (T-18-01)
-
-`AttributionSanitizer.sanitizeHarnessId(String)` is the single server-side enforcement point.
-Two-step gate — no truncation, no character stripping:
-
-1. Null / blank → `Optional.empty()` (no `X-Paralife-Harness` attribute stored).
-2. Regex match `^[A-Za-z0-9-]{1,32}$` — non-matching → `Optional.empty()`.
-
-The regex character class already excludes ASCII control chars (including CR/LF), spaces,
-and over-length input, so explicit truncation/stripping steps are unnecessary. See §2 for
-the canonical-id policy this enforces.
-
-`AttributionTagger.sourceOf(session)` validates source against `SOURCE_TAXONOMY`. Any value not in
-the taxonomy falls back to `unknown`.
-
-### Canonical Harness-Id Policy
-
-As documented in §2 Identity Wire Shape: `^[A-Za-z0-9-]{1,32}$` is the **single source of truth**.
-Both `BotIdentity#harness` (client) and `AttributionSanitizer#sanitizeHarnessId` (server) implement
-this policy. Code review should cross-check against this anchor when either implementation changes.
+- **Header Injection (T-18-01):** see §8 STRIDE register for the threat and mitigation.
+- **Canonical Harness-Id Policy:** see §2 Identity Wire Shape for the regex and single-source-of-truth statement.
 
 ---
 
@@ -494,7 +424,7 @@ this policy. Code review should cross-check against this anchor when either impl
 
 ### Multi-Entity-per-Session (D-21)
 
-Strongly discouraged. Default policy is WS:entity 1:1. If an exception is ever reviewed:
+Default policy is WS:entity 1:1 (§1). If an exception is ever reviewed:
 - Requires explicit ADR with justification.
 - Four subsystems must be redesigned: session FSM, admission gate, resume-token registry, per-session outbound queue.
 - Fresh-WS-per-offspring (default 999.2 path) avoids this entirely — a new bot mints a fresh WS
@@ -529,9 +459,10 @@ minting a fresh WS connection to the same entity. No fleet-abstraction rework re
 can be folded into the harness benchmark report. It is pure/side-effect-free beyond the HTTP GET:
 an injected `HttpClient`, a per-meter statistic map (the meter set is heterogeneous — Counter→
 `COUNT`, Gauge→`VALUE`, DistributionSummary→`MAX` — so the statistic is chosen per meter, not once
-for the whole list), a bounded 2s request timeout, and fail-soft omission (a missing, erroring, or
-timed-out meter is left out of the result, never thrown) — a benchmark run never fails on a
-missing meter.
+for the whole list), a per-request timeout under an overall ~2s whole-scrape budget
+(`ServerMetricsScraper.TOTAL_BUDGET`, so the shutdown-hook final write can't stall for
+`meters × timeout`), and fail-soft omission (a missing, erroring, or timed-out meter is left out of
+the result, never thrown) — a benchmark run never fails on a missing meter.
 
 **Endpoint dependency:** `ServerMetricsScraper.actuatorBaseFrom(serverUri)` derives the actuator
 base from `--server-uri` (`ws→http`, `wss→https`, `/ws/world`→`/actuator/`). Root-deployment only —
@@ -553,12 +484,14 @@ into `ReportSnapshot.serverMetrics()` (Task 3, §6 above).
 (100 / 500 / 1000), invoking `build/libs/*-load-harness.jar` per tier with pinned
 `--ramp-up rate:50`, and writes each tier's report to a **fresh per-sweep directory**
 `reports/run-<epoch-seconds>/bench-<tier>.json` — a new directory per invocation, so a stale
-report from a prior sweep can never satisfy a verify glob. Fail-soft per tier: one tier's
-non-zero exit is logged (`>>> tier=<n> FAILED (recorded, continuing)`) and the loop proceeds to
-the next tier rather than aborting the sweep.
+report from a prior sweep can never satisfy a verify glob. Each tier is gated in-script: a harness
+non-zero exit **or** a degenerate report (`peak_registered == 0`, or no non-null server metric —
+i.e. a dead / wrong server) is counted as a failure; the loop continues but the sweep exits
+non-zero if any tier failed, rather than masking a bad run as green.
 
 "Repeatable" means a re-runnable command with a saved report per tier — **not** bit-identical
-numbers across runs (live-WS timing is unseeded).
+numbers across runs (live-WS timing is unseeded). Keep `duration-seconds` inside Micrometer's
+distribution-statistic-expiry window (~2 min) or the tick-drift MAX becomes recency-weighted.
 
 ```bash
 ./gradlew loadHarnessJar
@@ -566,12 +499,13 @@ numbers across runs (live-WS timing is unseeded).
 bash tools/benchmark/run-tiers.sh ws://localhost:8080/ws/world 120
 ```
 
-Verify gate — check the report(s) from *this* sweep, never a prior one:
+The in-script per-report gate (also runnable by hand over *this* sweep's dir, never a prior one):
 
 ```bash
 RUN=$(ls -td reports/run-*/ | head -1)
 for f in "$RUN"bench-*.json; do
-  jq -e '.server_metrics | to_entries | map(select(.value != null)) | length > 0' "$f"
+  jq -e '(.peak_registered // 0) > 0
+         and ((.server_metrics // {}) | to_entries | any(.value != null))' "$f"
 done
 ```
 
@@ -588,5 +522,5 @@ server on a random port and asserts `ServerMetricsScraper` returns a non-null
 
 ---
 
-*Authored: Phase 18 Plan 06 execution. Canonical harness spec for downstream Phase 21 benchmark scripts.*
+*Canonical harness spec for downstream Phase 21 benchmark scripts.*
 *Cross-references: `ADMISSION.md` §1 (token taxonomy), `SCHEMA.md` §6.1 (`r|` grammar).*

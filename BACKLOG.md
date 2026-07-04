@@ -71,6 +71,10 @@ constant-referential blind spots.
 - Precedence-isolation tests that **arm the `reservedSlots` cap gate** (`@PostConstruct` doesn't fire
   in the current unit tests) so the maintenance > overload, overload > cap, and rebind > cap edges go
   red on regression — promoting them from prose to clauses.
+- Shape-pin the three `BACKPRESSURE` marker shapes emitted but asserted by no test —
+  `held-on-close`, `rebind-stale`, `transport-error-held` (STALLED-lifecycle edge transitions;
+  the other 7 of 10 marker shapes are pinned by `AdmissionLogMarkersIntegrationTest` /
+  `TickHealthGateIntegrationTest`).
 
 **Trigger:** opportunistic / next admission-touching change.
 
@@ -78,6 +82,48 @@ constant-referential blind spots.
 `PlacementDensityIntegrationTest`, `StallRecoveryIntegrationTest`; new codec `E`-frame test in
 `src/test/java/com/paralife/codec/`; strengthens `ADMISSION.md` §0 A4/A6/A14/A22 + the partial/orphan
 deferrals.
+
+## Post-MVP / M005 follow-ups (ex-SCHEMA §13)
+
+**Why:** folded from `SCHEMA.md` §13 (docs editorial pass, Task 2) — the heading stays as a stub
+pointing here. These are M005 / post-MVP **FEATURE** deferrals, not docs housekeeping.
+
+- Precompress fan-out infrastructure (`BroadcastChannel`, `CompressedFrame`) → M005.
+- Visualizer UI + observer endpoint → M005.
+- Composite rotation, multi-tick gestation, persistent POISONED debuff, Poisson-disk rock generator,
+  per-session pseudonym IDs → post-MVP.
+- Bot memory / fog-of-war / A* / shadowcasting → post-MVP (curCoords is the foundation).
+- FEEDER / ATTACKER / REPRODUCER advanced target-selection heuristics (authority-lite client-side
+  brain branches) → post-MVP (MVP ships fallback-auto + server-side dispatch only).
+- **`paralife.ws.bytes.saved` metric deferred** — Jetty 12 does not expose per-frame post-deflate byte
+  length without reaching into extension internals. Phase 15 ships only `paralife.ws.active.sessions`
+  (Gauge) and `paralife.ws.tick.frame.bytes` (DistributionSummary). The bytes-saved Counter lands once
+  Jetty exposes a stable post-deflate length hook, or via observer-phase (M005) fan-out
+  instrumentation. See plan 15-10.
+
+**Trigger:** M005 milestone start (fan-out/visualizer/bytes-saved items); opportunistic for the
+post-MVP feature items.
+
+**Anchor:** `SCHEMA.md` §13 (stub); `WebSocketMetrics.java:26` (bytes.saved javadoc);
+`MetricsEndpointIntegrationTest.java:73,79` (deferred-metric assertions).
+
+## Docs housekeeping
+
+**Why:** two note-ref/broken-cite cleanups routed from the docs editorial pass R1/R2 review,
+backlog-dispositioned so they land rather than silently dropped.
+
+- *Convert note↔note raw-line refs to section anchors* — `headless-feedback-loop-adr.md:54` cites
+  `pelagia-comparison.md:58-60` by raw line range; survives this pass only by position. A future
+  re-trim above pelagia L58 breaks it invisibly.
+- *Fix broken doc-section cite in test* — `LoadHarnessOptionsTest.java:190` cites `HARNESS.md §158`
+  (no such section; likely §2, the harness-id regex). Pre-existing source rot; this docs-only pass
+  cannot edit `src/`, so it is banked here.
+
+**Trigger:** opportunistic; the broken-cite item needs a `src/test` edit (out of scope for a docs-only
+pass).
+
+**Anchor:** `docs/notes/headless-feedback-loop-adr.md:54`, `docs/notes/pelagia-comparison.md`;
+`LoadHarnessOptionsTest.java:190`, `docs/HARNESS.md`.
 
 ## Codec decode-semantic unit tests (CoordTest / Base64CodecTest) — CLOSED (done)
 

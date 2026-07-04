@@ -43,7 +43,7 @@ and its live-scrape integration path exercised in Task 4.)
 Gate applied to every report (per `docs/HARNESS.md` §12):
 
 ```bash
-jq -e '.server_metrics | to_entries | map(select(.value != null)) | length > 0' docs/benchmarks/bench-<tier>.json
+jq -e '(.peak_registered // 0) > 0 and ((.server_metrics // {}) | to_entries | any(.value != null))' docs/benchmarks/bench-<tier>.json
 ```
 
 All three: `true`.
@@ -144,5 +144,5 @@ magnitudes already published by Tasks 1–3's metrics/scraper work; it does not 
 
 ---
 
-*Authored: Phase 21 Task 5. Source reports: `docs/benchmarks/bench-{100,500,1000}.json`. Companion:
-`docs/HARNESS.md` §12 (the sweep script + live-scrape control this evidence was captured with).*
+*Source reports: `docs/benchmarks/bench-{100,500,1000}.json`. Companion: `docs/HARNESS.md` §12 (the
+sweep script + live-scrape control this evidence was captured with).*
