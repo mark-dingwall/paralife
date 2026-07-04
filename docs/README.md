@@ -35,3 +35,4 @@ The canonical, source-referenced specifications. Code javadoc cites these by nam
 | `ARCHITECTURE.md` | Deep subsystem rationale (outbound concurrency / backpressure FSM, connection model, runtime tuning) — the detail factored out of CLAUDE.md §Architecture |
 | `gsd-graduation.md` | Dated decision record: why we graduated off GSD, the reject fence, open questions (archival, non-normative) |
 | `leak-audit-2026-06-09.md` | Dated one-off resource-leak investigation (archival reference) |
+| `STYLE.md` | Standing editorial rules (G1–G10) for docs/. |
