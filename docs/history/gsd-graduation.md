@@ -1,21 +1,17 @@
 # GSD Graduation — decision record
 
-Dated rationale (archival, non-normative) behind graduating Paralife's workflow *off* GSD onto the
-lean "June loop" now encoded in [`/CLAUDE.md`](../CLAUDE.md) §How-we-work. Distilled from a
-read-only investigation (workflow A/B/C bake-off + a 16-primitive learning diff + a four-part
-OpenSpec deep-dive), 2026-06. Kept for the **why** and the **what-we-deliberately-left-out** — not a
-process to follow. Where this disagrees with CLAUDE.md or the code, they win.
+Dated rationale (archival, non-normative) for graduating off GSD onto the "June loop" in
+[`/CLAUDE.md`](../../CLAUDE.md) §How-we-work — distilled 2026-06 from a read-only investigation
+(workflow bake-off + learning diff + OpenSpec deep-dive). Kept for the **why** and the
+**what-we-deliberately-left-out**, not as a process to follow. Where this disagrees with CLAUDE.md
+or the code, they win.
 
 ## Thesis
 
 OpenSpec's core stance is ~80% the June loop already — it disagrees with **GSD**, not with us, and
-names GSD's failure mode (phase-locking, fixed-depth ceremony) as the field-wide anti-pattern. So the
-investigation produced **external validation for graduating, not a new tool to install**. Nothing in
-the adopt set was machinery: every keeper is a habit, a markdown section, or a one-line forcing
-function — and they are now folded into CLAUDE.md (the spec-doc skeleton, EARS as the mechanism-spec
-notation + emergence firewall, evidence-bound "done", scope-diff, merge-back close-out, the rigor
-dial). The whole CLI lifecycle, four-artifact folder, schema/DAG engine, and SQLite ledger were
-rejected — they re-grow exactly the ceremony we shed.
+names GSD's failure mode (phase-locking, fixed-depth ceremony) as the field-wide anti-pattern:
+external validation for graduating, not a new tool to install. Every adopted keeper is folded into
+CLAUDE.md §How-we-work (see there for the list); everything left out is the reject fence below.
 
 **Standing prerequisite, still load-bearing:** gate- and scenario-shaped habits (EARS-RED,
 scope-diff, merge-back) are only as honest as the test signal. De-flaking the golden-trace gate

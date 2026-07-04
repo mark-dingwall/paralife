@@ -4,27 +4,19 @@ Branch: `claude/test-resource-leak-audit`
 
 ## Why
 
-`build.gradle.kts` pins `forkEvery = 1` / `maxParallelForks = 1` as a band-aid for the
-2026-05-03 incident (a `WorldGridTest` hang behind ~497 live threads in a shared JVM; see
-Phase 22 `SEED.md`). This deep-dive set out to find what the band-aid is actually masking —
-whether by bug, flawed implementation, or test hygiene — before deciding whether it can be removed.
-
-A first single-pass audit produced **mistaken** findings (it claimed 12 leaked tick threads while
-`TickEngine.java:85` has a `@PreDestroy`). That miss is what motivated a rigorous,
-verification-driven re-audit backed by empirical measurement.
+`build.gradle.kts` pins `forkEvery = 1` / `maxParallelForks = 1` as a band-aid for the 2026-05-03
+`WorldGridTest` hang (~497 live threads in a shared JVM; Phase 22 `SEED.md`). A first single-pass
+audit was **mistaken** (claimed 12 leaked tick threads despite `TickEngine.java:85`'s
+`@PreDestroy`), motivating this verification-driven, empirically-backed re-audit.
 
 ## Method
 
-1. **Three verification-driven static audits** (production concurrency lifecycle; production
-   memory/handle leaks; test infrastructure). Each required file:line evidence for *both* the
-   resource *and* its cleanup, a confidence rating, and a prod-vs-test classification.
-2. **Empirical probe** — booted the real app, attached a registered WebSocket session, and
-   measured actual `ws-sender-*` VT survival across context close (reading the
-   `OutboundSender.senderThreads` map by reflection, because `Thread.getAllStackTraces()` does
-   **not** enumerate virtual threads).
-3. **`forkEvery=0` experiment** — ran 9 heavy integration classes (incl. the 100-client
-   `HundredBotIntegrationTest`) together in one shared JVM with an end-of-suite platform-thread
-   census.
+Three static audits (prod concurrency lifecycle; prod memory/handle leaks; test infra — each with
+file:line evidence for resource + cleanup, a confidence rating, a prod-vs-test classification); an
+empirical probe (real app, registered WebSocket session, `ws-sender-*` VT survival across context
+close, reading `OutboundSender.senderThreads` by reflection since `Thread.getAllStackTraces()`
+doesn't enumerate virtual threads); and a `forkEvery=0` experiment (9 heavy integration classes
+incl. `HundredBotIntegrationTest` in one shared JVM with an end-of-suite platform-thread census).
 
 ## Corrections to the initial audit (all three re-audits concurred)
 

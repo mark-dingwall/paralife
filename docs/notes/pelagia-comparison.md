@@ -58,7 +58,7 @@ The core value made concrete — but the **architectural crux is unresolved and 
 | Fixed-topology MLP brain (17→10→3 tanh, flat `float[]` genome) beside HeuristicBrain | `brain.ts forward`/`mutateGenome` | new `bot/NeuralBrain` (same `decide(Frame.TickFrame, BotState, Random)` sig) | M | high | **qualified** — ports cleanly, but as written it lands client-side = just a differently-scripted bot. Value contingent on inheritance below. |
 | Genome inheritance + mutation on reproduce | `population.ts reproduce`, `life_cycle.wgsl repro` (NaN/Inf gene healing) | `ActionResolver.resolveReproduce`, `Entity.Particle`, new `MutationConfig` | L→**redesign** | high | **poor-fit as scoped.** Brains live in external WS clients; server spawns brainless `Particle` clones with no session. Inheriting at the R verb means relocating inference **server-side** → N forward passes on the single-threaded hot path, breaks the "bots become standalone clients" intent + 100-bot cap + admission model. This is *where intelligence lives*, not a field add. |
 | Evolved-vs-random foraging assay (deterministic "learning" test) | `metrics.ts evaluateGate`/`assayForaging` (≥3× random across ≥75% seeds, frozen-lifecycle arena) | new `EvolvedVsRandomForagingTest` `@Tag("slow")`; needs genome-injecting headless driver | M | high | **qualified** — methodologically the strongest idea in the whole set, legitimately pinnable. Fully downstream of MLP+inheritance; cannot be built first. |
-| Per-entity phenotype/trade-off genes scaling existing defaults | `brain.ts` morphology genes → real trade-offs | layer onto `MetabolicProfile`, combat math, env layer | L | med | **qualified** — `MetabolicProfile.forType` is per-TYPE (3 profiles); per-ENTITY genes force a genome lookup every entity every tick on the hot path = tick-pipeline change, GUI-gated. |
+| Per-entity phenotype/trade-off genes scaling existing defaults | `brain.ts` morphology genes → real trade-offs | layer onto `MetabolicProfile`, combat math, env layer | L | med | **qualified** — `MetabolicProfile.forType` is per-TYPE (3 profiles); per-ENTITY genes force a genome lookup every entity every tick on the hot path = tick-pipeline change, GUI-gated. The behaviour/phenotype gene split is the right template for the genetic milestone — phenotype genes port cleanly here; behaviour genes still hit the client-vs-server wall (see MLP-brain row). |
 | Activation genes (grow/lose neurons in fixed vector); sexual crossover + lineage tree | `brain.ts` activation gate; `life_cycle.wgsl` crossover/mate-choice | — | S / L | low | **backlog.** Speculative, gated on MLP+inheritance + M5. Crossover-on-BondedPair misreads semantics (BondedPair is predator+prey *fusion*, not mating). |
 
 **Recommendation:** sequence is MLP (client, as baseline) → **decide brain location** → server-side genome + inheritance → foraging assay. Until the location decision is made, the neural work produces no evolution.
@@ -81,12 +81,10 @@ Build order is **keystone → cheap eyes → richer views**.
 | Pause / step / variable-speed transport | `ui.ts` transport bar | `TickEngine` (has start/stop, **no pause/step/speed**) + spectator-authority guard | M | med | **qualified** — single-step is high-value for the deterministic core. Speed = mutating immutable `TickConfig.intervalMs` → same config-mutability wall as god-mode. |
 | God-mode live sliders (unblocks tuning) | `god.ts` writes params uniform | runtime-mutable overlay in `runtime` (cf. `AppRuntimeConfig`); route hot-path reads through it | **M→L** | high | **qualified** — strategically right but underscoped. All tunables are `private final @ConfigurationProperties` records bound once; needs an overlay + safe publication from WS virtual threads into the single-threaded core. Restrict to runtime-safe params (no grid resize). |
 | Share-by-seed token (seed + god-params) | `share.ts` (pure encode/decode, versioned, defensive) | new `ShareToken` + thread one `WorldSeed` through `config.seed()` accessors | M | med | **qualified** — pure codec is clean mechanism (EARS+TDD). But "bit-exact, stronger than Pelagia" is overstated: prod is unseeded, and live-bot action ordering depends on WS/VT timing → bit-exact only for a **closed headless run**. Downstream of god-mode. |
-| Two-level friendly/technical tooltips | `tooltip.ts` | M5 frontend | S | med | **strong** — pure frontend, portfolio value (self-explaining RPS model). |
-| Floating panel toolkit + "render only while open" | `ui.ts` makeDraggable/Resizable | M5 frontend | S | low | **strong** — right structural pattern; keep server accumulation to cheap scalars. |
-| Watch-list / track-a-creature | `brainView.ts` Track + `observatory.ts renderWatched` | `DeathDiagnostics` (birthTick/lifespan) + per-entity stream | M | low | **qualified** — leaf feature on two unbuilt pieces (#inspector + cost-gated diagnostics). |
+| Two-level friendly/technical tooltips | `tooltip.ts` | M5 frontend | S | med | **strong** — pure frontend, high demo/explainer value (self-explaining RPS model). |
 | Display-name sidecar off the authoritative id | `lineageNames.ts` (`Map<id,name>`, never mutates sim) | future — when lineage substrate exists | L | med | **qualified** — sound principle, no substrate today (no ancestry). File, don't schedule. |
 
-**Poor-fits for now:** full Observatory/Muller/cladogram *as an artifact* (DOM/canvas frontend doesn't exist — capture the **data-contract lesson**: a vision-unscoped god-view snapshot sampled off the tick). Inline-SVG icons / i18n `t(key)` / OG branding — browser-only, no server analog; M5 bookmarks.
+**Poor-fits for now:** full Observatory/Muller/cladogram *as an artifact* (DOM/canvas frontend doesn't exist — capture the **data-contract lesson**: a vision-unscoped god-view snapshot sampled off the tick). Floating panel toolkit (right structural pattern, but low payoff), watch-list/track-a-creature (leaf feature on two unbuilt pieces), inline-SVG icons / i18n `t(key)` / OG branding — browser-only or unbuilt-substrate, no server analog; M5 bookmarks.
 
 ---
 
@@ -115,16 +113,6 @@ Build order is **keystone → cheap eyes → richer views**.
 
 ---
 
-## 5. Other points of interest
-
-- **The death-treadmill is conceptually Pelagia's selection engine** — but a valid *future* property gated on server-side genome inheritance (§2c) + M5, not an actionable reframe today. (inspiration, S/med)
-- **Genome split (behaviour weights vs phenotype genes)** is the right template for the genetic milestone; phenotype half ports cleanly onto `MetabolicProfile`/combat, behaviour half hits the same client-vs-server wall. (inspiration, L/med)
-- **Double-buffered sense/think/move** — paralife already gets perception double-buffering free (bots act on prev-tick frame) and resolves contention via seeded `Collections.shuffle` + `claimedCells` first-claim-wins. The gather-then-resolve pass is more principled but solves a mitigated problem. (poor-fit, L/low)
-- **Counting-sort spatial hash** — N/A; paralife's one-occupant grid is already O(1) neighbour. The real gap (census full-scan, `livingEntityCount` 65k cells) is already in-house via `LiveEntityRegistry`; remaining work is per-species typing on the registry to avoid the scan. (poor-fit as import, in-house refactor)
-- **Paralife's coroner is already better than Pelagia's** — `DeathDiagnostics` *measures* cause at engine sinks; Pelagia *infers* from traits. Don't port the inference; port only the narrative presentation (subsumed by §2a). (footnote)
-
----
-
 ## 6. Honest non-fits
 
 | Item | Why it doesn't port |
@@ -134,6 +122,8 @@ Build order is **keystone → cheap eyes → richer views**.
 | **God-mode / live speed control as "sliders"** | Config is immutable `@ConfigurationProperties` bound once; there is no params-uniform to write. Needs a bespoke mutable overlay + safe cross-thread publication. Doable but M→L, and partly bends the "immutable records throughout" convention. |
 | **SoA entity layout** | Violates "immutable records / sealed Entity hierarchy"; the codec + `Cell.withOccupant` assume records. Only the bounded `int[]` side-store survives, and it splits the energy source-of-truth the tests pin. |
 | **Double-buffer grid (read-frozen/write-next)** | Pelagia's phases are independent; paralife's pipeline is sequentially dependent (intra-tick mutated-grid reads). Read-frozen would break visibility; lock is uncontended anyway. |
+| **Double-buffered sense/think/move** | Paralife already gets this free — bots act on the prev-tick frame, contention resolved via seeded `Collections.shuffle` + `claimedCells` first-claim-wins. The gather-then-resolve pass is more principled but solves an already-mitigated problem. |
+| **Counting-sort spatial hash** | N/A — paralife's one-occupant grid is already O(1) neighbour lookup. The real gap (census full-scan, `livingEntityCount` over 65k cells) is already in-house via `LiveEntityRegistry`; remaining work is per-species typing on the registry, not a spatial-hash import. |
 | **Share-by-URL "bit-exact replay" superiority claim** | Prod runs unseeded; live-bot action ordering is WS/VT-timing dependent. Bit-exact only for closed headless runs, not the live system. |
 | **Pelagia's trait-inference coroner; sexual crossover on BondedPair; pellet drift** | Trait inference is worse than paralife's measured causes; BondedPair is predator+prey fusion not mating; pellet drift is a client immersion touch with negative server value (grid churn + wire deltas). |
 | **Lineage-name sidecar, Observatory/cladogram, inline-SVG icons, i18n, OG branding** | No substrate (no ancestry) or no surface (no frontend). M5 references, not current-reality ports. |

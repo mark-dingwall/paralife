@@ -4,13 +4,8 @@
 **Pinned by:** `PerceptionCodecRoundTripTest` (round-trip vectors, §10), `PerceptionCodecErrorTest`
 (negative paths + DoS bounds, §12), `TickBroadcasterProjectionTest` (vision / tier projection, §7–§8).
 
-This document is the single source of truth for the compact wire protocol; `PerceptionCodec` and its
-tests bind to it. **Any change updates this doc *and* its §10 round-trip vectors before code lands**
-— the merge-back contract.
-
-> **Normative layer:** the EARS clauses in **§0** are the contract. The prose sections (§1–§13) are
-> rationale, tables, and worked examples — where prose reads as a requirement, the §0 clause governs.
-> Reference-only sections are tagged *(non-normative)*.
+> **Normative layer:** the EARS clauses in **§0** are the contract; the prose sections (§1–§13) are
+> rationale, tables, and worked examples — non-normative unless tagged otherwise.
 
 ---
 
@@ -135,8 +130,6 @@ Blocks whose entries describe a **type anchor** put code first, coord as trailin
 | `a` | C→S | Action (M/E/A/R/V/L) | 0..1 per tick |
 | `E` | S→C | Error (includes `E|429` on respawn cap) | Opportunistic |
 
-**Dropped from initial D-45 / D-46 proposal:** `W` (Welcome), standalone `R` (Registered) frame, separate `CT` / `MT` frames, standalone `v|` vote frame, `a|S` sleep keepalive, `a|H` heal.
-
 ### World constants not on wire
 
 `worldSize`, `yearTicks`, `seasonAmp`, `reproduceCooldowns` are delivered by shared compiled classes (`com.paralife.config` / `com.paralife.world`) that `BotClient` imports from the same build as the server. Zero wire cost. This replaces the anticipated `season=<season>,<multiplier>` tagged slot in D-07.
@@ -241,15 +234,17 @@ Three tiers determine which `T` form a bot receives and what actions are accepte
 | **Authority-lite** | composite **FEEDER**, **ATTACKER**, **REPRODUCER** | Full, no `p`/`g` | 1 (adjacent cells only) | E (FEEDER), A (ATTACKER), R (REPRODUCER), L |
 | **Passive** | composite **SENSOR**, **DEFENDER** | Minimal | — | L only |
 
+**Per-role notes** *(non-normative)*:
+- LOCOMOTOR — V primary; M fallback if size = 1. Sensor scope: Composite-stitched (SENSORs' combined field) — distinct from the radius above. Orchestrates composite movement.
+- Bonded Pair — Primary decides.
+- DEFENDER — Passive absorber.
+- SENSOR — feeds stitched vision to LOCOMOTOR.
+
 ### Authority-lite rationale
 
-FEEDER / ATTACKER / REPRODUCER can see radius-1 because they may have multiple valid targets (adjacent nutrients, prey, empty cells). They **may** submit an action to choose among them; server auto-picks a fallback if nothing arrives — preserves MVP's "server-autonomous" parity. As bots gain post-MVP abilities they override the fallback.
+FEEDER / ATTACKER / REPRODUCER see radius-1 (multiple valid targets); they may submit an action to choose, else the server auto-picks a fallback. Phase 15 ships server-side dispatch only (E/A/R verbs + auto-fallback); authority-lite **client-side brain logic** is out of scope for Phase 15 — the MVP `HeuristicBrain` handles solo/bonded/LOCOMOTOR only, and authority-lite brain branches land post-MVP. Tracked in §13.
 
-**Phase 15 scope note (authority-lite client submission):** Phase 15 ships authority-lite server-side support — the dispatcher accepts E/A/R verbs from FEEDER/ATTACKER/REPRODUCER and the auto-fallback kicks in when nothing arrives. Authority-lite **client-side brain logic** (FEEDER heuristic choosing between two adjacent nutrients, etc.) is **out of scope for Phase 15**; the MVP `HeuristicBrain` handles solo + bonded + LOCOMOTOR only. Authority-lite brain branches land post-MVP. Tracked in §13.
-
-### Alarm ubiquity
-
-All composite members (regardless of tier) may submit `a|L`. Routed via `BotRegistry` composite lookup; delivered to LOCOMOTOR as a `vN<coord>` event in its next `T`.
+All composite members (regardless of tier) may submit `a|L` (routed via `BotRegistry` composite lookup — see §8.6 for the alarm delivery mechanics).
 
 ---
 
@@ -389,10 +384,6 @@ Temporary, timed. Sent once on initial application unless otherwise noted. `<exp
 | `S` | SENSOR_PLUS_1 (7×7 vision) | — | once |
 | `U` | UPKEEP_MINUS_1 (slower decay) | — | once |
 
-**Removed from initial D-16 set:**
-- `X` (phantom) — never implemented.
-- `R` / `CR` (reproduce cooldown) — client derives from shared `TypeProfile.reproduceCooldown()` + own `lastReproducedTick` (the latter is server state; clients infer cooldown window from own reproduce event + shared constant).
-
 ### 8.4 `v` block — event list (coord-first)
 
 ```
@@ -426,8 +417,6 @@ Magnitude bound to code per the table below; parser knows per-code whether to co
 | `N` | Member alarm (LOCOMOTOR-only) | no | alarming member's cell (rel/numpad) |
 | `S` | Reproduced successfully | no | — |
 | `D` | Died | no | — |
-
-**Renames from initial D-14:** damage-received `D` → `H` (frees `D` for died). Role code dropped from `N` entry (LOCOMOTOR reads role from the `g` roster it already holds). Member alarm absorbed into `v` (no standalone `m` block).
 
 **Lightning coord range.** Lightning damage is currently surfaced via the `FLEEING` state change, which carries the strike as an **absolute** `XXYY` coord (`fF:` effect context) — so the ±63 relative bound does not bite on the live path. The documented `L`-event-with-relative-coord wire form (Vector 9) would, if emitted, use the same 4-char relative coord as any other `v` event, type-bounded to ±63 by `Coord.Relative`; lightning visibility already requires proximity enough to flee, so >±63 is not reachable in practice. There is NO special 6-char "extended relative" coord for lightning.
 
@@ -561,23 +550,6 @@ These MUST all satisfy `PerceptionCodec.encode(decode(x)) == x` byte-for-byte. I
 
 ---
 
-## 11. Authority / Behaviour Matrix
-
-*(Reference. The normative tier → frame-form rule is §0 R10.)*
-
-| Role / Entity | Tick frame | Sensor radius | Actions allowed | Notes |
-|---|---|---|---|---|
-| Solo Particle | Full `T` | 2 (3 with SENSOR_PLUS_1) | M, E, A, R | Own authority |
-| Bonded Pair | Full `T` | 2 (3 with SENSOR_PLUS_1) | M, E, A, R | Primary decides |
-| LOCOMOTOR | Full `T` + `p` + `g`; receives `vN` alarms | Composite-stitched (SENSORs' combined field) | V primary; M fallback if size = 1 | Orchestrates composite movement |
-| FEEDER | Full `T` (no `p`/`g`) | 1 (adjacent cells) | E, L | Authority-lite; server auto-picks fallback; client-side target choice deferred post-MVP |
-| ATTACKER | Full `T` (no `p`/`g`) | 1 | A, L | Authority-lite; client-side target choice deferred post-MVP |
-| REPRODUCER | Full `T` (no `p`/`g`) | 1 | R, L | Authority-lite; client-side target choice deferred post-MVP |
-| DEFENDER | Minimal `T` | — | L | Passive absorber |
-| SENSOR | Minimal `T` | — | L | Passive; feeds stitched vision to LOCOMOTOR |
-
----
-
 ## 12. Parser Implementation Notes
 
 Implementer hints (non-normative), **except the DoS bounds, which are wire-observable and normative —
@@ -594,16 +566,6 @@ pinned by §0 R18**.
 
 ## 13. Known Follow-ups (out of scope)
 
-*(Non-normative — backlog.)*
-
-- Precompress fan-out infrastructure (`BroadcastChannel`, `CompressedFrame`) → M005.
-- Visualizer UI + observer endpoint → M005.
-- Composite rotation, multi-tick gestation, persistent POISONED debuff, Poisson-disk rock generator, per-session pseudonym IDs → post-MVP.
-- Bot memory / fog-of-war / A* / shadowcasting → post-MVP (curCoords is the foundation).
-- FEEDER / ATTACKER / REPRODUCER advanced target-selection heuristics (authority-lite client-side brain branches) → post-MVP (MVP ships fallback-auto + server-side dispatch only).
-- **`paralife.ws.bytes.saved` metric deferred** — Jetty 12 does not expose per-frame post-deflate byte length without reaching into extension internals. Phase 15 ships only `paralife.ws.active.sessions` (Gauge) and `paralife.ws.tick.frame.bytes` (DistributionSummary). The bytes-saved Counter lands once Jetty exposes a stable post-deflate length hook, or via observer-phase (M005) fan-out instrumentation. See plan 15-10.
+> Known follow-ups are tracked in BACKLOG.md.
 
 ---
-
-*Wire format is byte-exact and milestone-locked. Any change updates §0, the §10 round-trip vectors,
-and the codec in lockstep.*

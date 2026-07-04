@@ -5,8 +5,8 @@
 `ResumeTokenRegistryTest` (resume-token FSM), `TickHealthMonitorTest` (overload gate),
 `OutboundSenderTest` (backpressure).
 
-Durable admission, overload backpressure, the resume-token FSM, and the STALLED connection lifecycle.
-All wire-emitted rejection reasons are stable machine-readable tokens (§1). Any change updates this
+Durable admission, overload backpressure, the resume-token FSM, and the STALLED connection
+lifecycle. Rejection reasons are stable machine-readable tokens (§1); any change updates this
 doc before code lands.
 
 > **Normative layer:** the EARS clauses in **§0** are the contract. The prose sections (§1–§9) are
@@ -113,38 +113,13 @@ Reserved but not emitted this phase: ingress-flood token (D-09 chose counter-onl
 
 ---
 
-## §2 Wire Shape Delta vs `SCHEMA.md` *(non-normative — canonical grammar is `SCHEMA.md` §8.3 / §0)*
+## §2 Wire Shape Delta vs `SCHEMA.md` *(non-normative — canonical grammar is `SCHEMA.md` §6 / §0)*
 
-See `SCHEMA.md` §8.3 for the canonical frame grammar; this document only defines the new resume-token slot and the closed token vocabulary in §1.
-
-### `r` frame (client → server)
-
-```
-r|<entityType>                       (existing) — fresh registration
-r|<entityType>|<resumeToken>         (NEW Phase 17) — stalled-session recovery
-```
-
-- `<entityType>` ∈ `{C, M, S}` — mandatory, unchanged.
-- `<resumeToken>` — optional third slot. Present only on stalled-session recovery. Opaque 16-char hex string. Absent = fresh registration (backward-compatible; older clients continue to work).
-
-### `S` frame (server → client)
-
-```
-S|<entityId>                         (existing — initial sync, no effects)
-S|<entityId>|<resumeToken>           (NEW Phase 17) — first sync after register
-S|<entityId>|<resumeToken>|f<effects> — fully populated sync (resumeToken + effects)
-```
-
-- `<resumeToken>` is emitted on every successful registration (fresh or re-bind). It is always the second slot when present, before the optional `f<effects>` block.
-- The `f<effects>` effects block continues to use the `f` prefix to disambiguate from the resume token (which has no `f`-prefix).
-
-### `E` frame (server → client)
-
-```
-E|<code>|<token>                     (token slot now mandatory for admission rejections)
-```
-
-- Prior to Phase 17 the message slot held human-readable text. Phase 17 replaces free-text with machine-readable tokens from §1. The frame shape `E|<code>|<message>` is unchanged; only the content of `<message>` changes.
+See `SCHEMA.md` §6 for the canonical frame grammar. This doc adds only the resume-token slot:
+`r|<entityType>|<resumeToken>` (optional third slot, stalled-session recovery, opaque 16-char hex,
+absent = fresh registration); `S|<entityId>|<resumeToken>` (emitted on every successful
+registration, before any `f<effects>` block); `E|<code>|<token>` (message slot now carries a
+machine-readable token from §1 — frame shape unchanged).
 
 ---
 
@@ -165,58 +140,14 @@ Predicate definitions:
 - `isDead(session)`: `entityId` absent AND `entityType` present AND `stallTick` absent
 - `isStalled(session)`: `stallTick` attr present
 
-### FSM Diagram *(non-normative — illustrative; the transition clauses A7/A8 are the contract)*
+### FSM Summary *(non-normative — illustrative; transition clauses A7/A8 are the contract)*
 
-```
-                    ┌─────────────────────────────────────────┐
-                    │                                         │
-            ┌───────▼────────┐                               │
-   connect  │  Unregistered  │                               │
-  ─────────►│                │                               │
-            └───────┬────────┘                               │
-                    │ r| (fresh)                             │
-                    │ AdmissionGate.evaluate OK              │
-                    ▼                                         │
-            ┌───────────────┐     r| (fresh or re-bind)     │
-            │     Alive     │◄────after reconnect/respawn────┘
-            │               │
-            └──┬────────┬───┘
-               │        │
-    D (death   │        │  outbound queue full ×
-    event via  │        │  window-ticks (D-11)
-    Phase 15.2)│        │
-               ▼        ▼
-        ┌─────────┐  ┌──────────────────┐
-        │  Dead   │  │    STALLED       │
-        │  (WS    │  │    (WS closed    │
-        │  open)  │  │    by server     │
-        └────┬────┘  │    after E|408)  │
-             │       └────────┬─────────┘
-    r| fresh │                │
-    (respawn)│  grace window  │
-             │  expires or    │
-             │  resume token  │
-             │  re-bind       │
-             │                ▼
-             │       ┌────────────────┐
-             │       │    Reaped      │
-             │       │ (entity removed│
-             │       │ from grid)     │
-             └──────►└────────────────┘
-                (or stays in Alive
-                 if respawn succeeds)
-```
-
-### Death-Pivot vs Stall-Pivot Orthogonality *(non-normative)*
-
-| Dimension | Death-Pivot (Phase 15.2) | Stall-Pivot (Phase 17) |
-|-----------|--------------------------|------------------------|
-| WS state | Stays open | Closed by server |
-| entityId continuity | New entity on respawn | Same entity on re-bind |
-| Client signal | `D` event in `v` block | `E|408|reconnect-required` |
-| Recovery action | `r|<type>` (fresh entity) | `r|<type>|<resumeToken>` (re-bind) |
-| Entity on grid | Removed immediately | Held for `graceWindowTicks` |
-| Token issued | None | Resume token in `S` reply |
+- Unregistered → (`r|`, AdmissionGate OK) → Alive
+- Alive → (`D` event, Phase 15.2) → Dead → (`r|` fresh) → Alive (new entityId, WS stays open)
+- Alive → (outbound queue full, D-11) → STALLED (WS closed, `E|408`) → (resume-token re-bind) → Alive (same entityId)
+- STALLED → (grace window expires) → Reaped (entity removed from grid)
+- Death-Pivot vs Stall-Pivot: death keeps the WS open and mints a new entityId on respawn with no
+  token; stall closes the WS, holds the entity for `graceWindowTicks`, and re-binds via resume token.
 
 ---
 
@@ -267,9 +198,8 @@ Old token is consumed (purged) on every successful re-bind. Fresh token issued. 
 
 ### Threats
 
-- **Token guessing:** 64-bit entropy = 1.8×10¹⁹ possible tokens. Brute-force is infeasible within a 10-tick (≈1 second) grace window.
-- **Token leak:** Token travels on WebSocket (TLS in production). Plain-text only in dev/test.
-- **Replay:** Token is consumed on re-bind — cannot be replayed. Grace expiry further limits window.
+64-bit token entropy (1.8×10¹⁹ combinations) makes guessing infeasible within the grace window;
+TLS protects transit in production; consumption-on-re-bind plus grace expiry prevents replay.
 
 ---
 
@@ -299,7 +229,9 @@ Old token is consumed (purged) on every successful re-bind. Fresh token issued. 
 
 ### Operator Caveat — Gauge Sampling Lag
 
-The `paralife.tick.health.work-time-ms` gauge value reflects the most recently completed tick — that is, samples lag by 1 tick relative to the dispatching `TickEvent`. During tick-overload episodes, operators reading the gauge live see N-1 latency compared to the tick that triggered the gate transition. This is acceptable for hysteresis correctness (the rolling mean is still computed over a contiguous window) but worth noting when correlating gauge spikes against `ADMISSION rejected reason=tick-overload` log markers. The N-1 lag means a gauge spike may appear one tick after the corresponding admission rejection in the log.
+`paralife.tick.health.work-time-ms` lags the dispatching `TickEvent` by one sample (N-1), so a
+gauge spike can appear one tick after the corresponding `ADMISSION rejected reason=tick-overload`
+log line; hysteresis correctness is unaffected. → BACKLOG.
 
 ---
 
@@ -319,7 +251,9 @@ if (session.isOpen()) {
 - Queue: `ArrayBlockingQueue<Frame>(outboundQueueSize)` — default 128 frames. At the 30ms test tick with 2 frames/tick/bot (perception + tick snapshot) this gives ≈2s of buffered frames per session — survives GC pauses and scheduler jitter at sustained 100-bot fan-out without false-positive STALLED. Production tick at 500ms makes the same 128 frames a ~64s buffer; tune for workload.
 - `TickBroadcaster` enqueues frames via `queue.offer(frame)` (non-blocking). If `offer` returns `false` (queue full), the session transitions to STALLED immediately (single-shot, not windowed).
 
-**Rationale (D-10)** *(non-normative)*: Matches Paralife's VT philosophy (simple blocking code, VTs do concurrency). Per-session isolation is structural — one slow socket cannot block the tick thread or any other session. `queue.size()` is the explicit backpressure signal, trivially observable as a gauge. Java 21 VTs are cheap (few KB heap each); 1000+ VTs is acceptable.
+**Rationale (D-10)** *(non-normative)*: Matches Paralife's VT philosophy — per-session isolation is
+structural (one slow socket can't block the tick thread or other sessions); `queue.size()` is the
+explicit backpressure gauge; VTs are cheap enough for 1000+ sessions.
 
 ### Inbound: Last-Write-Wins Collapse (D-09)
 
@@ -368,16 +302,8 @@ Grep-friendly single-line structured markers — same style as Phase 16 `EMERGEN
 
 ```
 ADMISSION rejected tick=1234 session=abc reason=world-full active=256/256
-ADMISSION rejected tick=1235 session=def reason=tick-overload work-ms=420 budget=500
-ADMISSION rejected tick=1236 session=ghi reason=maintenance
-ADMISSION rejected tick=1237 session=jkl reason=respawn-cap count=5/5
-ADMISSION rejected tick=1238 session=mno reason=already-registered
-ADMISSION rejected tick=1239 session=pqr reason=grid-full
-ADMISSION maintenance state=on
 BACKPRESSURE stalled tick=1240 session=abc queue-depth=16 limit=16
-BACKPRESSURE resumed tick=1247 session=ghi entity=entity-old-r2 grace-remaining=4
 TICK-HEALTH degraded tick=1234 work-ms=420 high-water-pct=80
-TICK-HEALTH recovered tick=1260 work-ms=180 low-water-pct=60
 ```
 
 **Operator cheat sheet:** `grep -E 'ADMISSION|BACKPRESSURE|TICK-HEALTH' server.log`
@@ -414,11 +340,6 @@ Log channel pays forward to M5 visualizer / observer — no redesign of emission
   - `"no active entity"` → `"no-active-entity"`
   - `"Client cannot send S"` / `"Client cannot send T"` → `"malformed"`
 
-### Test Migration
-
-- `WorldWebSocketHandlerPopulationCapTest` rewritten as `AdmissionGateTest` (Plan 10).
-- `LoadTest` property `paralife.websocket.max-active-entities=1000000` migrated to `paralife.admission.cap=1000000`.
-
 ---
 
 ## §9 Forward Notes *(non-normative)*
@@ -428,7 +349,3 @@ Log channel pays forward to M5 visualizer / observer — no redesign of emission
 - **`/actuator/prometheus`:** Deferred to M5 (D-20). Phase 21 benchmark gate reads `/actuator/metrics/<name>` directly.
 - **Maintenance actuator endpoint:** Deferred to M5. Config-flag-only this phase; restart required to flip.
 - **Per-type quotas:** Deferred pending Phase 21 benchmark evidence. Single-counter design admits trivial extension.
-
----
-
-*Authored: Phase 17 Plan 01 execution. Canonical source for downstream phases 18–21 and M5 observer.*
