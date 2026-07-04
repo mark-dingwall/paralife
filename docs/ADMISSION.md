@@ -81,8 +81,8 @@ precedence regression on those edges would not go red. → BACKLOG.
 - **Integration / `@slow`-only anchors (A14, A22):** real but excluded from `./gradlew test` (run via
   `-PincludeLong=true`). Engine-direct unit decomposition → BACKLOG.
 - **Orphans (excluded from §0):** `no-active-entity`/404 (zero tests — grep-confirmed); inbound
-  collapse-to-one *behaviour* (only the counter A24 is pinned); the §5 N-1 gauge-lag caveat (prose).
-  → BACKLOG.
+  collapse-to-one *behaviour* (only the counter A24 is pinned). → BACKLOG. (The §5 N-1 gauge-lag
+  caveat is a documented observability note, not a deferred item — see §5.)
 - **Cross-guard precedence edges** beyond A6 (maintenance > overload, overload > cap, rebind > cap):
   documented in the guard-order prose above from source, **not pinned** (the unit tests don't arm the
   `reservedSlots` cap gate). → BACKLOG.
@@ -231,7 +231,7 @@ TLS protects transit in production; consumption-on-re-bind plus grace expiry pre
 
 `paralife.tick.health.work-time-ms` lags the dispatching `TickEvent` by one sample (N-1), so a
 gauge spike can appear one tick after the corresponding `ADMISSION rejected reason=tick-overload`
-log line; hysteresis correctness is unaffected. → BACKLOG.
+log line; hysteresis correctness is unaffected. Observability note only — no deferred action.
 
 ---
 
@@ -305,6 +305,11 @@ ADMISSION rejected tick=1234 session=abc reason=world-full active=256/256
 BACKPRESSURE stalled tick=1240 session=abc queue-depth=16 limit=16
 TICK-HEALTH degraded tick=1234 work-ms=420 high-water-pct=80
 ```
+
+The block above is illustrative (one shape per prefix), not exhaustive. **Full marker vocabulary
+(source-of-truth, zero staleness risk):** `grep -rhoE '"(ADMISSION|BACKPRESSURE|TICK-HEALTH)[^"{]*' src/main/java`
+(10 shapes as of Phase 20); a subset is shape-pinned by `AdmissionLogMarkersIntegrationTest` and
+`TickHealthGateIntegrationTest`.
 
 **Operator cheat sheet:** `grep -E 'ADMISSION|BACKPRESSURE|TICK-HEALTH' server.log`
 

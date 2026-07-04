@@ -51,6 +51,10 @@ constant-referential blind spots.
 - Precedence-isolation tests that **arm the `reservedSlots` cap gate** (`@PostConstruct` doesn't fire
   in the current unit tests) so the maintenance > overload, overload > cap, and rebind > cap edges go
   red on regression — promoting them from prose to clauses.
+- Shape-pin the three `BACKPRESSURE` marker shapes emitted but asserted by no test —
+  `held-on-close`, `rebind-stale`, `transport-error-held` (STALLED-lifecycle edge transitions;
+  the other 7 of 10 marker shapes are pinned by `AdmissionLogMarkersIntegrationTest` /
+  `TickHealthGateIntegrationTest`).
 
 **Trigger:** opportunistic / next admission-touching change.
 
