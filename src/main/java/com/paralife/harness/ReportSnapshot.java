@@ -2,7 +2,6 @@ package com.paralife.harness;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
-
 import java.util.LinkedHashMap;
 import java.util.Map;
 

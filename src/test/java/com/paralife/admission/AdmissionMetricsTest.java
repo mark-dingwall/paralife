@@ -1,12 +1,12 @@
 package com.paralife.admission;
 
-import io.micrometer.core.instrument.DistributionSummary;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.Test;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.Test;
 
 /**
  * Unit tests for {@link AdmissionMetrics} — updated for the Phase 18 four-arg constructor

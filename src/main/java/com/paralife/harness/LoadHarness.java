@@ -6,12 +6,6 @@ import com.paralife.bot.BotFleet;
 import com.paralife.bot.BotIdentity;
 import com.paralife.bot.RampUpSpec;
 import com.paralife.bot.SpeciesMix;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import picocli.CommandLine;
-import picocli.CommandLine.Command;
-import picocli.CommandLine.Option;
-
 import java.net.http.HttpClient;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -21,6 +15,11 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import picocli.CommandLine;
+import picocli.CommandLine.Command;
+import picocli.CommandLine.Option;
 
 /**
  * Standalone Paralife load harness (Phase 18 D-15).

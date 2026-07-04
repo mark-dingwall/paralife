@@ -1,14 +1,13 @@
 package com.paralife.harness;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.net.http.HttpClient;
+import java.util.Map;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
-
-import java.net.http.HttpClient;
-import java.util.Map;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Task 4 — live end-to-end retrieval path for {@link ServerMetricsScraper}: URI derivation
