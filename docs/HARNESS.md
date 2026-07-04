@@ -322,9 +322,33 @@ Written periodically (`report_interval_seconds`; default 30):
   "perceptions_received_total": 298000,
   "syncs_received_total": 1009,
   "wall_time_seconds_elapsed": 120,
-  "exit_reason": null
+  "exit_reason": null,
+  "server_metrics": {
+    "paralife.tick.drift.millis": 4.2,
+    "paralife.ws.active.sessions": 994.0,
+    "paralife.backpressure.stalled.sessions": 0.0,
+    "paralife.backpressure.stalled.total": 0.0,
+    "paralife.backpressure.rebound": 0.0,
+    "paralife.backpressure.terminal.dropouts": 0.0,
+    "paralife.admission.rejected": 3.0
+  }
 }
 ```
+
+`server_metrics` (Task 3, Phase 21) folds a fixed set of server-side `/actuator/metrics` readings
+into every counter write — always the full `ReportSnapshot.BENCHMARK_METER_NAMES` key set, with
+`null` for any meter the scrape couldn't reach (fail-soft; a benchmark run never fails on a missing
+meter). Meter → statistic:
+
+| Meter | Statistic | SC category |
+|-------|-----------|--------------|
+| `paralife.tick.drift.millis` | `MAX` | Tick drift |
+| `paralife.ws.active.sessions` | `VALUE` | Session stability |
+| `paralife.backpressure.stalled.sessions` | `VALUE` | Session stability |
+| `paralife.backpressure.stalled.total` | `COUNT` | Session stability |
+| `paralife.backpressure.rebound` | `COUNT` | Session stability |
+| `paralife.backpressure.terminal.dropouts` | `COUNT` | Session stability |
+| `paralife.admission.rejected` | `COUNT` (aggregate; by-reason breakdown deferred to BACKLOG) | Rejection counts |
 
 `exit_reason` is present **only on the final write**. Values:
 

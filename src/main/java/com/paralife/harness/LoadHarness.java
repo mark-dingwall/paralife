@@ -12,6 +12,7 @@ import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
+import java.net.http.HttpClient;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
@@ -103,6 +104,10 @@ public final class LoadHarness implements Callable<Integer> {
 
     // Retained for overwrite-mode header-merge across interval writes.
     private ReportSnapshot initialHeader;
+
+    // Server /actuator scraper (Task 3), built once per run from --server-uri. Bounded 2s connect
+    // timeout so an overloaded server can't stall the shutdown-hook final-report write.
+    private ServerMetricsScraper metricsScraper;
 
     // H-02/H-03 + M-01 (Round B): live state retained as instance fields so the
     // shutdown hook body and tests can drive the same final-report code path.
@@ -212,6 +217,8 @@ public final class LoadHarness implements Callable<Integer> {
         // Build initial header snapshot (retained across all interval writes for overwrite-mode merge).
         initialHeader = ReportSnapshot.header(harnessId, serverUri, count,
                 startedAt.toString(), System.getProperty("java.version"));
+        metricsScraper = new ServerMetricsScraper(ServerMetricsScraper.actuatorBaseFrom(serverUri),
+                HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build());
 
         // Write initial report.
         try {
@@ -425,10 +432,12 @@ public final class LoadHarness implements Callable<Integer> {
         }
         long failures = fleet.connectFailuresTotal();           // added in Task 2
         long elapsedSec = Duration.between(startedAt, Instant.now()).toSeconds();
-        return ReportSnapshot.counters(
+        ReportSnapshot counters = ReportSnapshot.counters(
                 fleet.peakRegistered(), fleet.currentRegistered(),
                 failures, e408, respawns,
                 actions, perceptions, syncs,
                 elapsedSec, exitReason);
+        return ReportSnapshot.withServerMetrics(counters,
+                metricsScraper.scrape(ReportSnapshot.BENCHMARK_METER_NAMES));
     }
 }
