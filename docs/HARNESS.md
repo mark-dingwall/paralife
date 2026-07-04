@@ -544,8 +544,47 @@ endpoint, which returns the aggregate sum across all tags/buckets — a whole-se
 per-reason or per-source breakdown. Per-tag breakdown (`?tag=k:v` per `availableTags` value) is
 deferred to `BACKLOG.md` §Phase-21 follow-ups.
 
-Which meters are scraped and how the result folds into the report is wired by a later Phase 21
-task, not `ServerMetricsScraper` itself.
+Which meters are scraped and how the result folds into the report is wired by `LoadHarness`
+into `ReportSnapshot.serverMetrics()` (Task 3, §6 above).
+
+## §12 Repeatable Tier Sweep (Task 4)
+
+`tools/benchmark/run-tiers.sh <ws-uri> [duration-seconds]` loops the three benchmark tiers
+(100 / 500 / 1000), invoking `build/libs/*-load-harness.jar` per tier with pinned
+`--ramp-up rate:50`, and writes each tier's report to a **fresh per-sweep directory**
+`reports/run-<epoch-seconds>/bench-<tier>.json` — a new directory per invocation, so a stale
+report from a prior sweep can never satisfy a verify glob. Fail-soft per tier: one tier's
+non-zero exit is logged (`>>> tier=<n> FAILED (recorded, continuing)`) and the loop proceeds to
+the next tier rather than aborting the sweep.
+
+"Repeatable" means a re-runnable command with a saved report per tier — **not** bit-identical
+numbers across runs (live-WS timing is unseeded).
+
+```bash
+./gradlew loadHarnessJar
+./gradlew bootRun &
+bash tools/benchmark/run-tiers.sh ws://localhost:8080/ws/world 120
+```
+
+Verify gate — check the report(s) from *this* sweep, never a prior one:
+
+```bash
+RUN=$(ls -td reports/run-*/ | head -1)
+for f in "$RUN"bench-*.json; do
+  jq -e '.server_metrics | to_entries | map(select(.value != null)) | length > 0' "$f"
+done
+```
+
+`paralife.tick.drift.millis` (MAX) and `paralife.ws.active.sessions` (VALUE) populate in any run.
+`paralife.admission.rejected` and the `paralife.backpressure.*` stall meters are lazily
+registered and event-gated — they read absent/`0` until the server actually rejects or stalls,
+so a benign run legitimately leaves those categories empty; that is not a scraper defect.
+
+A `@Tag("slow")` positive control for the scrape path itself — `ScrapeLiveIntegrationTest`
+(`src/test/java/com/paralife/harness/`) — boots a `@SpringBootTest(webEnvironment = RANDOM_PORT)`
+server on a random port and asserts `ServerMetricsScraper` returns a non-null
+`paralife.ws.active.sessions` reading, with zero bots connected. Excluded from the default
+`./gradlew test`; runs under `-PincludeLong=true`.
 
 ---
 
