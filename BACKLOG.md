@@ -9,6 +9,16 @@ Format: each item names **why deferred**, the **trigger** to pick it up, and the
 
 ---
 
+## Phase-21 follow-ups
+
+**By-reason rejection scrape.** *Why deferred:* Phase 21's `ServerMetricsScraper` carries the **aggregate**
+`paralife.admission.rejected` COUNT only. The by-reason breakdown needs a two-phase actuator call (GET base →
+read `availableTags` for `reason` → GET `?tag=reason:<v>` per value) — extra HTTP round-trips for an
+observe-only emergence *count*, not needed to close M4. *Trigger:* a consumer that actually needs
+per-reason rejection shares (e.g. an M5 dashboard or a tuning assay), **and** the firewall still forbids
+asserting those shares in the default suite (they stay report-only). *Anchor:* `ServerMetricsScraper.scrape(...)`,
+`ReportSnapshot.BENCHMARK_METER_NAMES`; the `reason`+`source` tags on `AdmissionMetrics` `paralife.admission.rejected`.
+
 ## HARNESS EARS rollout (deferred, gated)
 
 **Why:** ADMISSION §0 landed (EARS Rollout #2); HARNESS is the deliberate next gate, not this slice.
