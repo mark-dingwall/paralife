@@ -498,5 +498,32 @@ minting a fresh WS connection to the same entity. No fleet-abstraction rework re
 
 ---
 
+## §11 Server-Side Metrics Scraping (Phase 21)
+
+`com.paralife.harness.ServerMetricsScraper` is a read-only client for
+`GET /actuator/metrics/{name}`, so server-side meters (tick-drift, rejections, session counts)
+can be folded into the harness benchmark report. It is pure/side-effect-free beyond the HTTP GET:
+an injected `HttpClient`, a per-meter statistic map (the meter set is heterogeneous — Counter→
+`COUNT`, Gauge→`VALUE`, DistributionSummary→`MAX` — so the statistic is chosen per meter, not once
+for the whole list), a bounded 2s request timeout, and fail-soft omission (a missing, erroring, or
+timed-out meter is left out of the result, never thrown) — a benchmark run never fails on a
+missing meter.
+
+**Endpoint dependency:** `ServerMetricsScraper.actuatorBaseFrom(serverUri)` derives the actuator
+base from `--server-uri` (`ws→http`, `wss→https`, `/ws/world`→`/actuator/`). Root-deployment only —
+no context-path handling.
+
+**Aggregation caveat:** two-tag counters (e.g. `paralife.admission.rejected`, tagged by
+`reason`+`source`) and multi-bucket gauges (e.g. `paralife.ws.active.sessions`,
+`paralife.backpressure.stalled.sessions`, tagged by `source`+`harness`) are read via the base
+endpoint, which returns the aggregate sum across all tags/buckets — a whole-server figure, not a
+per-reason or per-source breakdown. Per-tag breakdown (`?tag=k:v` per `availableTags` value) is
+deferred to `BACKLOG.md` §Phase-21 follow-ups.
+
+Which meters are scraped and how the result folds into the report is wired by a later Phase 21
+task, not `ServerMetricsScraper` itself.
+
+---
+
 *Authored: Phase 18 Plan 06 execution. Canonical harness spec for downstream Phase 21 benchmark scripts.*
 *Cross-references: `ADMISSION.md` §1 (token taxonomy), `SCHEMA.md` §6.1 (`r|` grammar).*
