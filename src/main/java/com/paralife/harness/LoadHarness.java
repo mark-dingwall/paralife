@@ -6,20 +6,21 @@ import com.paralife.bot.BotFleet;
 import com.paralife.bot.BotIdentity;
 import com.paralife.bot.RampUpSpec;
 import com.paralife.bot.SpeciesMix;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import picocli.CommandLine;
-import picocli.CommandLine.Command;
-import picocli.CommandLine.Option;
-
+import java.net.http.HttpClient;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import picocli.CommandLine;
+import picocli.CommandLine.Command;
+import picocli.CommandLine.Option;
 
 /**
  * Standalone Paralife load harness (Phase 18 D-15).
@@ -103,6 +104,15 @@ public final class LoadHarness implements Callable<Integer> {
 
     // Retained for overwrite-mode header-merge across interval writes.
     private ReportSnapshot initialHeader;
+
+    // Server /actuator scraper (Task 3), built once per run from --server-uri. The scrape is bounded
+    // by an overall ~2s budget (see ServerMetricsScraper) so an overloaded server can't stall the
+    // shutdown-hook final-report write. volatile: read on the shutdown-hook thread (scrape), written
+    // on the run thread — same cross-thread visibility contract as the active* live-state fields.
+    private volatile ServerMetricsScraper metricsScraper;
+    // Owned scraper HTTP client, closed in runInternal()'s finally (Java 21 HttpClient is
+    // AutoCloseable) so a reused instance / leak-sensitive test JVM doesn't accrete client threads.
+    private volatile HttpClient metricsHttp;
 
     // H-02/H-03 + M-01 (Round B): live state retained as instance fields so the
     // shutdown hook body and tests can drive the same final-report code path.
@@ -225,6 +235,20 @@ public final class LoadHarness implements Callable<Integer> {
             return 2;
         }
 
+        // Build the scraper AFTER the initial write (which doesn't need it) so an initial-write
+        // early-return can't bypass the finally that closes the owned client and leak it. Fail-soft on a
+        // malformed --server-uri: actuatorBaseFrom does URI.create (can throw), and this runs before the
+        // main try/finally — an uncaught throw here would crash the run with the wrong exit code and leak
+        // the client. Degrade to "no server metrics" instead, consistent with the scraper's own contract.
+        metricsHttp = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        try {
+            metricsScraper = new ServerMetricsScraper(ServerMetricsScraper.actuatorBaseFrom(serverUri), metricsHttp);
+        } catch (RuntimeException e) {
+            log.warn("Server-metrics scraping disabled — could not derive actuator base from '{}': {}",
+                    serverUri, e.getMessage());
+            metricsScraper = null;
+        }
+
         // Periodic counter-write virtual thread.
         Thread reporterVT = Thread.ofVirtual().start(() -> {
             while (exitReason.get() == null) {
@@ -312,6 +336,17 @@ public final class LoadHarness implements Callable<Integer> {
                 // JVM is already shutting down — hook is being executed; removal not possible.
             }
             reporterVT.interrupt();
+            // Close the owned scraper client — the reporter VT is already drained (writeFinalReportOnce
+            // interrupt+join above), so no scrape is in flight and close() returns promptly. Guarded so a
+            // close failure (UncheckedIOException) can't shadow the return or skip the active* cleanup below.
+            if (metricsHttp != null) {
+                try {
+                    metricsHttp.close();
+                } catch (RuntimeException ignored) {
+                    // best-effort; a reused instance rebuilds the client on its next run
+                }
+                metricsHttp = null;
+            }
             // Release strong refs so a reused harness instance doesn't pin prior state.
             activeFleet = null;
             activeWriter = null;
@@ -425,10 +460,14 @@ public final class LoadHarness implements Callable<Integer> {
         }
         long failures = fleet.connectFailuresTotal();           // added in Task 2
         long elapsedSec = Duration.between(startedAt, Instant.now()).toSeconds();
-        return ReportSnapshot.counters(
+        ReportSnapshot counters = ReportSnapshot.counters(
                 fleet.peakRegistered(), fleet.currentRegistered(),
                 failures, e408, respawns,
                 actions, perceptions, syncs,
                 elapsedSec, exitReason);
+        Map<String, Double> scraped = (metricsScraper != null)
+                ? metricsScraper.scrape(ReportSnapshot.BENCHMARK_METER_NAMES)
+                : Map.of();   // fail-soft: no scraper -> withServerMetrics null-fills every category key
+        return ReportSnapshot.withServerMetrics(counters, scraped);
     }
 }

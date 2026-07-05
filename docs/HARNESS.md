@@ -313,9 +313,33 @@ Written periodically (`report_interval_seconds`; default 30):
   "perceptions_received_total": 298000,
   "syncs_received_total": 1009,
   "wall_time_seconds_elapsed": 120,
-  "exit_reason": null
+  "exit_reason": null,
+  "server_metrics": {
+    "paralife.tick.work.ms": 4.2,
+    "paralife.ws.active.sessions": 994.0,
+    "paralife.backpressure.stalled.sessions": 0.0,
+    "paralife.backpressure.stalled.total": 0.0,
+    "paralife.backpressure.rebound": 0.0,
+    "paralife.backpressure.terminal.dropouts": 0.0,
+    "paralife.admission.rejected": 3.0
+  }
 }
 ```
+
+`server_metrics` (Task 3, Phase 21) folds a fixed set of server-side `/actuator/metrics` readings
+into every counter write — always the full `ReportSnapshot.BENCHMARK_METER_NAMES` key set, with
+`null` for any meter the scrape couldn't reach (fail-soft; a benchmark run never fails on a missing
+meter). Meter → statistic:
+
+| Meter | Statistic | SC category |
+|-------|-----------|--------------|
+| `paralife.tick.work.ms` | `MAX` | Tick work-time |
+| `paralife.ws.active.sessions` | `VALUE` | Session stability |
+| `paralife.backpressure.stalled.sessions` | `VALUE` | Session stability |
+| `paralife.backpressure.stalled.total` | `COUNT` | Session stability |
+| `paralife.backpressure.rebound` | `COUNT` | Session stability |
+| `paralife.backpressure.terminal.dropouts` | `COUNT` | Session stability |
+| `paralife.admission.rejected` | `COUNT` (aggregate; by-reason breakdown deferred to BACKLOG) | Rejection counts |
 
 `exit_reason` is present **only on the final write**. Values:
 
@@ -425,6 +449,79 @@ is the single choke-point for bot construction. `claimEntityId` / `claimToken` p
 no-ops today (always `Optional.empty()` from current call sites). When 999.2 ships,
 a new bot-driven offspring event will trigger `BotFactory.create` with a non-null claim token,
 minting a fresh WS connection to the same entity. No fleet-abstraction rework required.
+
+---
+
+## §11 Server-Side Metrics Scraping (Phase 21)
+
+`com.paralife.harness.ServerMetricsScraper` is a read-only client for
+`GET /actuator/metrics/{name}`, so server-side meters (tick work-time, rejections, session counts)
+can be folded into the harness benchmark report. It is pure/side-effect-free beyond the HTTP GET:
+an injected `HttpClient`, a per-meter statistic map (the meter set is heterogeneous — Counter→
+`COUNT`, Gauge→`VALUE`, DistributionSummary→`MAX` — so the statistic is chosen per meter, not once
+for the whole list), and fail-soft omission (a missing, erroring, or timed-out meter is left out of
+the result, never thrown) — a benchmark run never fails on a missing meter. All meters are
+requested concurrently (`HttpClient.sendAsync`) and harvested within one shared ~2s deadline
+(`ServerMetricsScraper.TOTAL_BUDGET`), so a stalled response — even one whose headers already
+arrived — can't stall the caller for `meters × timeout`.
+
+**Endpoint dependency:** `ServerMetricsScraper.actuatorBaseFrom(serverUri)` derives the actuator
+base from `--server-uri` (`ws→http`, `wss→https`, `/ws/world`→`/actuator/`). Root-deployment only —
+no context-path handling.
+
+**Aggregation caveat:** two-tag counters (e.g. `paralife.admission.rejected`, tagged by
+`reason`+`source`) and multi-bucket gauges (e.g. `paralife.ws.active.sessions`,
+`paralife.backpressure.stalled.sessions`, tagged by `source`+`harness`) are read via the base
+endpoint, which returns the aggregate sum across all tags/buckets — a whole-server figure, not a
+per-reason or per-source breakdown. Per-tag breakdown (`?tag=k:v` per `availableTags` value) is
+deferred to `BACKLOG.md` §Phase-21 follow-ups.
+
+Which meters are scraped and how the result folds into the report is wired by `LoadHarness`
+into `ReportSnapshot.serverMetrics()` (Task 3, §6 above).
+
+## §12 Repeatable Tier Sweep (Task 4)
+
+`tools/benchmark/run-tiers.sh <ws-uri> [duration-seconds]` loops the three benchmark tiers
+(100 / 500 / 1000), invoking `build/libs/*-load-harness.jar` per tier with pinned
+`--ramp-up rate:50`, and writes each tier's report to a **fresh per-sweep directory**
+`reports/run-<epoch-seconds>/bench-<tier>.json` — a new directory per invocation, so a stale
+report from a prior sweep can never satisfy a verify glob. Each tier is gated in-script: a harness
+non-zero exit **or** a degenerate report (`peak_registered == 0`, or no non-null server metric —
+i.e. a dead / wrong server) is counted as a failure; the loop continues but the sweep exits
+non-zero if any tier failed, rather than masking a bad run as green.
+
+"Repeatable" means a re-runnable command with a saved report per tier — **not** bit-identical
+numbers across runs (live-WS timing is unseeded). Keep `duration-seconds` inside Micrometer's
+distribution-statistic-expiry window (~2 min) or the tick work-time MAX becomes recency-weighted.
+
+```bash
+./gradlew loadHarnessJar
+./gradlew bootRun &
+bash tools/benchmark/run-tiers.sh ws://localhost:8080/ws/world 120
+```
+
+The in-script per-report gate (also runnable by hand over *this* sweep's dir, never a prior one):
+
+```bash
+RUN=$(ls -td reports/run-*/ | head -1)
+for f in "$RUN"bench-*.json; do
+  jq -e '(.peak_registered // 0) > 0
+         and ((.server_metrics // {}) | to_entries | any(.value != null))' "$f"
+done
+```
+
+`paralife.tick.work.ms` (MAX) and `paralife.ws.active.sessions` (VALUE) populate in any run.
+`paralife.backpressure.stalled.total` / `.rebound` / `.terminal.dropouts` are eagerly-registered
+counters — they read `0.0` (not null) from tick 0 until an event increments them. Only
+`paralife.backpressure.stalled.sessions` and `paralife.admission.rejected` are lazily/tag-registered,
+reading `null` until the first stall/rejection — so a benign run legitimately leaves those two null;
+that is not a scraper defect.
+
+A `@Tag("slow")` positive control for the scrape path itself — `ScrapeLiveIntegrationTest`
+(`src/test/java/com/paralife/harness/`) — boots a `@SpringBootTest(webEnvironment = RANDOM_PORT)`
+server on a random port and asserts `ServerMetricsScraper` returns a non-null
+`paralife.ws.active.sessions` reading, with zero bots connected. Excluded from the default
+`./gradlew test`; runs under `-PincludeLong=true`.
 
 ---
 

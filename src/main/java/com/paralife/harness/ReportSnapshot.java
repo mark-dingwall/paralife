@@ -2,6 +2,9 @@ package com.paralife.harness;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Immutable snapshot of load-harness run state, serialised to JSON / JSONL (D-17).
@@ -41,8 +44,33 @@ public record ReportSnapshot(
         Long perceptionsReceivedTotal,  // → "perceptions_received_total"
         Long syncsReceivedTotal,        // → "syncs_received_total"
         Long wallTimeSecondsElapsed,    // → "wall_time_seconds_elapsed"
-        String exitReason               // → "exit_reason" (final write only)
+        String exitReason,              // → "exit_reason" (final write only)
+        Map<String, Double> serverMetrics // → "server_metrics" (Task 3); empty map, never null
 ) {
+    /**
+     * Meter → statistic for the server-side {@code /actuator/metrics} scrape folded into the
+     * report (Task 3). Exact meter names — no wildcard {@code /actuator/metrics} endpoint exists,
+     * so {@code paralife.backpressure.*} meters are spelled out individually. By-reason breakdown
+     * of {@code paralife.admission.rejected} is deferred to BACKLOG.
+     *
+     * <p>Insertion-ordered (not {@code Map.of}, whose per-JVM salted iteration order shuffled the
+     * {@code server_metrics} key order between runs) so the report schema is byte-stable and
+     * successive reports diff cleanly.
+     */
+    public static final Map<String, String> BENCHMARK_METER_NAMES = benchmarkMeterNames();
+
+    private static Map<String, String> benchmarkMeterNames() {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("paralife.tick.work.ms", "MAX");
+        m.put("paralife.ws.active.sessions", "VALUE");
+        m.put("paralife.backpressure.stalled.sessions", "VALUE");
+        m.put("paralife.backpressure.stalled.total", "COUNT");
+        m.put("paralife.backpressure.rebound", "COUNT");
+        m.put("paralife.backpressure.terminal.dropouts", "COUNT");
+        m.put("paralife.admission.rejected", "COUNT");
+        return Collections.unmodifiableMap(m);
+    }
+
     /**
      * Build a static-config-only header snapshot. Counter fields are all null so
      * {@code @JsonInclude(NON_NULL)} omits them from the JSON output.
@@ -50,7 +78,7 @@ public record ReportSnapshot(
     public static ReportSnapshot header(String harnessId, String serverUri, int targetCount,
                                         String startWallTime, String jvmVersion) {
         return new ReportSnapshot(harnessId, serverUri, targetCount, startWallTime, jvmVersion,
-                null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, Map.of());
     }
 
     /**
@@ -64,7 +92,7 @@ public record ReportSnapshot(
                                           Long wallSecs, String exitReason) {
         return new ReportSnapshot(null, null, null, null, null,
                 peakRegistered, currentRegistered, connectFailures, e408,
-                respawns, actions, perceptions, syncs, wallSecs, exitReason);
+                respawns, actions, perceptions, syncs, wallSecs, exitReason, Map.of());
     }
 
     /**
@@ -80,6 +108,28 @@ public record ReportSnapshot(
                 counters.connectFailuresTotal, counters.e408ReconnectRequiredTotal,
                 counters.respawnsTotal, counters.actionsSentTotal,
                 counters.perceptionsReceivedTotal, counters.syncsReceivedTotal,
-                counters.wallTimeSecondsElapsed, counters.exitReason);
+                counters.wallTimeSecondsElapsed, counters.exitReason,
+                counters.serverMetrics);
+    }
+
+    /**
+     * Returns a copy of {@code base} whose {@code serverMetrics} is {@code scraped} normalized to
+     * the full {@link #BENCHMARK_METER_NAMES} key set — any meter the scraper omitted is null-filled
+     * so the category is always visible in the schema, absent only in value.
+     */
+    public static ReportSnapshot withServerMetrics(ReportSnapshot base, Map<String, Double> scraped) {
+        Map<String, Double> normalized = new LinkedHashMap<>();
+        for (String meter : BENCHMARK_METER_NAMES.keySet()) {
+            normalized.put(meter, scraped.get(meter));
+        }
+        return new ReportSnapshot(
+                base.harnessId, base.serverUri, base.targetCount,
+                base.startWallTime, base.jvmVersion,
+                base.peakRegistered, base.currentRegistered,
+                base.connectFailuresTotal, base.e408ReconnectRequiredTotal,
+                base.respawnsTotal, base.actionsSentTotal,
+                base.perceptionsReceivedTotal, base.syncsReceivedTotal,
+                base.wallTimeSecondsElapsed, base.exitReason,
+                normalized);
     }
 }

@@ -1,9 +1,13 @@
 package com.paralife.engine;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.paralife.bot.BotClient;
 import com.paralife.bot.HeuristicBrain;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Tag;
@@ -16,11 +20,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
 
-import java.util.ArrayList;
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 /**
  * Performance gate for the encode+deflate path under target load.
  *
@@ -32,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * does not starve the tick loop.
  *
  * <p><b>Drift metric path (preferred):</b> If the application publishes a
- * {@code paralife.tick.drift.millis} {@link DistributionSummary}, the gate reads
+ * {@code paralife.tick.work.ms} {@link DistributionSummary}, the gate reads
  * its p99 and asserts {@code p99 < 2 × paralife.tick.interval-ms}. Higher drift
  * = encode+deflate is eating the tick budget; the gate catches that regression.
  *
@@ -160,7 +159,7 @@ class EncodeDeflatePerformanceGateTest {
 
         // Preferred assertion — p99 tick-drift (if TickEngine publishes it).
         DistributionSummary drift =
-                meterRegistry.find("paralife.tick.drift.millis").summary();
+                meterRegistry.find("paralife.tick.work.ms").summary();
         if (drift != null && drift.count() > 0) {
             double p99 = drift.percentile(0.99);
             double budget = 2.0 * intervalMillis;
