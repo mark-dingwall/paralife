@@ -42,4 +42,4 @@ harness-*-report.json
 
 # Benchmark sweep raw output — timestamped, non-reproducible (Phase 21 D4/B3). Curated
 # per-tier fixtures the doc cites live under docs/benchmarks/, committed separately.
-reports/
+/reports/

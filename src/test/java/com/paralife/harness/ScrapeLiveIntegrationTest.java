@@ -30,12 +30,14 @@ class ScrapeLiveIntegrationTest {
 
     @Test
     void scrapePopulatesServerMetricsAgainstLiveServer() {
-        var scraper = new ServerMetricsScraper(
-                ServerMetricsScraper.actuatorBaseFrom("ws://localhost:" + port + "/ws/world"),
-                HttpClient.newHttpClient());
+        try (HttpClient http = HttpClient.newHttpClient()) {
+            var scraper = new ServerMetricsScraper(
+                    ServerMetricsScraper.actuatorBaseFrom("ws://localhost:" + port + "/ws/world"),
+                    http);
 
-        Map<String, Double> result = scraper.scrape(Map.of("paralife.ws.active.sessions", "VALUE"));
+            Map<String, Double> result = scraper.scrape(Map.of("paralife.ws.active.sessions", "VALUE"));
 
-        assertThat(result.get("paralife.ws.active.sessions")).isNotNull();
+            assertThat(result.get("paralife.ws.active.sessions")).isNotNull();
+        }
     }
 }

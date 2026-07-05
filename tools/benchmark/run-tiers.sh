@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # tools/benchmark/run-tiers.sh — repeatable scale sweep. "Repeatable" = re-runnable command +
 # saved report per tier; NOT bit-identical numbers (live-WS timing is unseeded — see spec Assumptions).
-# NOTE: after creating this file, `chmod +x tools/benchmark/run-tiers.sh` (a patch leaves it 0644) OR
-# always invoke it as `bash tools/benchmark/run-tiers.sh …`. `set -e` is deliberately OMITTED — the
+# NOTE: `set -e` is deliberately OMITTED — the
 # per-tier fail-soft path needs a non-fatal error branch; failures are accumulated and surfaced via the
 # EXIT CODE instead (a masked non-zero would let a dead-server / all-zero sweep look successful).
 # Duration note: keep DURATION under Micrometer's distribution-statistic-expiry window (~2 min) or the
@@ -25,6 +24,10 @@ JAR="${JARS[0]}"
 
 FAILURES=0
 for TIER in 100 500 1000; do
+  # NB: paralife.admission.rejected is a SERVER-LIFETIME counter. This loop drives ONE persistent
+  # server, so its rejected COUNT is CUMULATIVE across tiers (tier 1000 includes tier 500's rejections).
+  # The committed docs/benchmarks fixtures were captured with a FRESH server per tier (see docs/BENCHMARKS.md
+  # "Commands run") to get per-tier-isolated counts; restart the server between tiers to reproduce them.
   OUT_FILE="${RUN}/bench-${TIER}.json"
   echo ">>> tier=${TIER} report=${OUT_FILE}"
   if ! java -jar "$JAR" \
