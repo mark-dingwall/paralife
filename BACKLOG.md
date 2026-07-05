@@ -42,16 +42,26 @@ fresh-server-per-tier protocol (HIGH-3 fix) is currently manual, per `docs/BENCH
 whole sweep. *Trigger:* wanting a one-command isolated sweep instead of hand-run per-tier restarts.
 *Anchor:* `tools/benchmark/run-tiers.sh`; `docs/HARNESS.md` §12.
 
-**`scrape()` fail-soft unit coverage (test-debt).** *Why deferred:* `ServerMetricsScraper.scrape()` holds the
-hard contract (omit on non-200, omit on exception + continue to next meter, `InterruptedException` → restore
-flag + return partial, whole-set budget) but has **no** direct unit test — the injected `HttpClient` makes it
-trivially mockable (stub returning 404 / junk-200 / throwing `HttpTimeoutException` / throwing
-`InterruptedException`). The contract is verified-by-reading (4 reviewers) and by the `@Tag("slow")`
-`ScrapeLiveIntegrationTest` happy path, but a regression in the fail-soft loop or interrupt handling would ship
-green. Same file: `actuatorBaseFrom` no-port branch and a bare-`NaN`-token parse case are untested; the public
+**`scrape()` fail-soft unit coverage (test-debt, partially resolved).** *Why deferred:* `ServerMetricsScraper.scrape()`
+holds the hard contract (omit on non-200, omit on exception + continue to next meter, `InterruptedException` →
+restore flag + return partial, whole-set budget). The **whole-scrape budget + omit-stalled** leg now has a direct
+Mockito unit test (`ServerMetricsScraperTest.scrapeOmitsStalledMeterAndStaysWithinBudget`, added in the Phase-21
+review remediation). Still untested: the non-200 (404) omit, the junk-200 parse-omit, and the `InterruptedException`
+→ restore-flag-and-return-partial legs — all trivially mockable via the injected `HttpClient`. Also same file:
+`actuatorBaseFrom` no-port branch and a bare-`NaN`-token parse case are untested; the public
 `ServerMetricsScraper(URI,...)` constructor's load-bearing trailing-slash invariant is undocumented. *Trigger:*
 next touch of `ServerMetricsScraper`, or a P22.1 harness-hardening slice. *Anchor:* `ServerMetricsScraperTest`.
-(Surfaced by the Phase 21 post-implementation review, 2026-07-04.)
+(Surfaced by the Phase 21 post-implementation review, 2026-07-04; budget leg closed 2026-07-05.)
+
+**`EncodeDeflatePerformanceGateTest` must be `@Tag("slow")` when re-enabled (firewall, latent).** *Why deferred:*
+the test is `@Disabled` (bisect-scoped to 22.1) so there is no active breach. But `build.gradle.kts:92` excludes
+only `@Tag("slow")` from the default gate — `@Tag("performance")` is **not** excluded. The Phase-21 meter rename
+made `paralife.tick.work.ms` always resolvable (TickEngine publishes it every tick), so if 22.1 removes the
+`@Disabled` as its annotation invites, the test flips from its survival-proxy fallback into the live
+`p99 < 2×interval-ms` branch — a live tick-work-aggregate assertion running in the **non-excluded** default suite,
+a firewall breach. *Fix when re-enabling:* add `@Tag("slow")` to the class (or exclude `performance` at
+`build.gradle.kts:92`). *Anchor:* `EncodeDeflatePerformanceGateTest`; `build.gradle.kts:86-92`. (Surfaced by the
+Phase-21 review-remediation final whole-branch review, 2026-07-05.)
 
 ## HARNESS EARS rollout (deferred, gated)
 
