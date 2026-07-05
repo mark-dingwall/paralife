@@ -14,7 +14,7 @@ Paralife is a distributed living simulation — a toroidal 2D world where three 
 
 **Core Value:** Emergent spatial behaviour — spiral waves, population oscillations, and niche formation — arising from simple local rules. A testbed for evolving entity intelligence from heuristic bots toward genetic/learning systems.
 
-**Milestones:** v1.0 Foundation (Phases 01–10) ✅ · v2.0 Combination & Emergence (Phases 11–16) ✅ · v3.0 Scale Engineering (Phases 17–21) 🚧 active. **Current position and what's next live in [`ROADMAP.md`](ROADMAP.md)** — this file does not track them, to stay lean. Phase history, decision registers, and per-phase detail are frozen under `.planning/` (see `.planning/README.md`).
+**Milestones:** v1.0 Foundation · v2.0 Combination & Emergence · v3.0 Scale Engineering (M4) · M5 Observability & Operations. **Milestone ranges, per-phase status, current position, and what's next are tracked solely in [`ROADMAP.md`](ROADMAP.md)** — the single source of truth; this file names the lineage only, to stay lean and avoid drift. Phase history, decision registers, and per-phase detail are frozen under `.planning/` (see `.planning/README.md`).
 
 ## How we work
 
