@@ -1,8 +1,19 @@
 package com.paralife.harness;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -46,5 +57,44 @@ class ServerMetricsScraperTest {
                 .isEqualTo(URI.create("http://h:8080/actuator/"));
         assertThat(ServerMetricsScraper.actuatorBaseFrom("wss://h:8443/ws/world"))
                 .isEqualTo(URI.create("https://h:8443/actuator/"));
+    }
+
+    @Test
+    void derivesHttpsForWssRegardlessOfCase() {   // LOW-7: schemes are case-insensitive
+        assertThat(ServerMetricsScraper.actuatorBaseFrom("wss://h/ws/world").getScheme()).isEqualTo("https");
+        assertThat(ServerMetricsScraper.actuatorBaseFrom("WSS://h/ws/world").getScheme()).isEqualTo("https");
+        assertThat(ServerMetricsScraper.actuatorBaseFrom("ws://h/ws/world").getScheme()).isEqualTo("http");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void scrapeOmitsStalledMeterAndStaysWithinBudget() {
+        // Mechanism, test-owned: one meter's response completes instantly; the other NEVER completes
+        // (simulates a stalled body — the exact case HttpRequest.timeout does NOT bound). scrape() must
+        // harvest the fast meter and OMIT the stalled one, returning within the injected budget.
+        HttpClient http = mock(HttpClient.class);
+        HttpResponse<String> ok = mock(HttpResponse.class);
+        when(ok.statusCode()).thenReturn(200);
+        when(ok.body()).thenReturn("{\"measurements\":[{\"statistic\":\"MAX\",\"value\":7.0}]}");
+
+        CompletableFuture<HttpResponse<String>> fast = CompletableFuture.completedFuture(ok);
+        CompletableFuture<HttpResponse<String>> stalled = new CompletableFuture<>(); // never completes
+        when(http.sendAsync(any(HttpRequest.class), any())).thenAnswer(inv -> {
+            HttpRequest req = inv.getArgument(0);
+            return req.uri().getPath().endsWith("/fast") ? fast : stalled;
+        });
+
+        var scraper = new ServerMetricsScraper(
+                URI.create("http://h/actuator/"), http, Duration.ofMillis(150));
+        Map<String, String> meters = new LinkedHashMap<>();
+        meters.put("fast", "MAX");
+        meters.put("slow", "MAX");
+
+        long t0 = System.nanoTime();
+        Map<String, Double> out = scraper.scrape(meters);
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
+
+        assertThat(out).containsExactly(entry("fast", 7.0)); // fast harvested; stalled omitted (positive+negative pair)
+        assertThat(elapsedMs).isLessThan(1000);              // positive control: bounded by the 150ms budget, not the 2s per-req timeout
     }
 }
