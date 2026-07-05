@@ -69,6 +69,36 @@ class ReportSnapshotTest {
     }
 
     @Test
+    void withServerMetricsPreservesEveryBaseFieldUnchanged() {
+        // Guard (not RED-first — no current defect): the 16-arg positional withServerMetrics/merge
+        // constructors are transposition-prone. Distinct sentinel per field so any swap of two same-typed
+        // components (esp. the adjacent Longs) fails here instead of silently shipping.
+        ReportSnapshot base = new ReportSnapshot(
+                "hID", "ws://u", 100, "startT", "21",
+                50, 40, 2L, 1L, 3L, 1000L, 5000L, 200L, 30L, "duration-reached", Map.of());
+
+        ReportSnapshot out =
+                ReportSnapshot.withServerMetrics(base, Map.of("paralife.admission.rejected", 9.0));
+
+        assertThat(out.harnessId()).isEqualTo("hID");
+        assertThat(out.serverUri()).isEqualTo("ws://u");
+        assertThat(out.targetCount()).isEqualTo(100);
+        assertThat(out.startWallTime()).isEqualTo("startT");
+        assertThat(out.jvmVersion()).isEqualTo("21");
+        assertThat(out.peakRegistered()).isEqualTo(50);
+        assertThat(out.currentRegistered()).isEqualTo(40);
+        assertThat(out.connectFailuresTotal()).isEqualTo(2L);
+        assertThat(out.e408ReconnectRequiredTotal()).isEqualTo(1L);
+        assertThat(out.respawnsTotal()).isEqualTo(3L);
+        assertThat(out.actionsSentTotal()).isEqualTo(1000L);
+        assertThat(out.perceptionsReceivedTotal()).isEqualTo(5000L);
+        assertThat(out.syncsReceivedTotal()).isEqualTo(200L);
+        assertThat(out.wallTimeSecondsElapsed()).isEqualTo(30L);
+        assertThat(out.exitReason()).isEqualTo("duration-reached");
+        assertThat(out.serverMetrics()).containsEntry("paralife.admission.rejected", 9.0);
+    }
+
+    @Test
     void absentMeterNormalizesToNullValuedCategoryKey() throws Exception {
         // scraper omitted every meter -> withServerMetrics normalizes to the full BENCHMARK_METER_NAMES key
         // set, value null. Completeness is thus enforceable: every category key is present even with zero
