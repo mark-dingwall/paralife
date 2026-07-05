@@ -10,6 +10,7 @@ import java.net.http.HttpClient;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -235,9 +236,18 @@ public final class LoadHarness implements Callable<Integer> {
         }
 
         // Build the scraper AFTER the initial write (which doesn't need it) so an initial-write
-        // early-return can't bypass the finally that closes the owned client and leak it.
+        // early-return can't bypass the finally that closes the owned client and leak it. Fail-soft on a
+        // malformed --server-uri: actuatorBaseFrom does URI.create (can throw), and this runs before the
+        // main try/finally — an uncaught throw here would crash the run with the wrong exit code and leak
+        // the client. Degrade to "no server metrics" instead, consistent with the scraper's own contract.
         metricsHttp = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
-        metricsScraper = new ServerMetricsScraper(ServerMetricsScraper.actuatorBaseFrom(serverUri), metricsHttp);
+        try {
+            metricsScraper = new ServerMetricsScraper(ServerMetricsScraper.actuatorBaseFrom(serverUri), metricsHttp);
+        } catch (RuntimeException e) {
+            log.warn("Server-metrics scraping disabled — could not derive actuator base from '{}': {}",
+                    serverUri, e.getMessage());
+            metricsScraper = null;
+        }
 
         // Periodic counter-write virtual thread.
         Thread reporterVT = Thread.ofVirtual().start(() -> {
@@ -455,7 +465,9 @@ public final class LoadHarness implements Callable<Integer> {
                 failures, e408, respawns,
                 actions, perceptions, syncs,
                 elapsedSec, exitReason);
-        return ReportSnapshot.withServerMetrics(counters,
-                metricsScraper.scrape(ReportSnapshot.BENCHMARK_METER_NAMES));
+        Map<String, Double> scraped = (metricsScraper != null)
+                ? metricsScraper.scrape(ReportSnapshot.BENCHMARK_METER_NAMES)
+                : Map.of();   // fail-soft: no scraper -> withServerMetrics null-fills every category key
+        return ReportSnapshot.withServerMetrics(counters, scraped);
     }
 }
