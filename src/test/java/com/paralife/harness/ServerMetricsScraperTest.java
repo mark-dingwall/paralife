@@ -17,7 +17,7 @@ class ServerMetricsScraperTest {
     @Test
     void parsesRequestedStatisticFromCannedActuatorJson() {
         String json = """
-            {"name":"paralife.tick.drift.millis",
+            {"name":"paralife.tick.work.ms",
              "measurements":[{"statistic":"COUNT","value":50.0},
                              {"statistic":"MAX","value":11.0}]}""";
         // test OWNS this input → asserting extracted values is parser-mechanism, not a live-aggregate assert

@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * does not starve the tick loop.
  *
  * <p><b>Drift metric path (preferred):</b> If the application publishes a
- * {@code paralife.tick.drift.millis} {@link DistributionSummary}, the gate reads
+ * {@code paralife.tick.work.ms} {@link DistributionSummary}, the gate reads
  * its p99 and asserts {@code p99 < 2 × paralife.tick.interval-ms}. Higher drift
  * = encode+deflate is eating the tick budget; the gate catches that regression.
  *
@@ -160,7 +160,7 @@ class EncodeDeflatePerformanceGateTest {
 
         // Preferred assertion — p99 tick-drift (if TickEngine publishes it).
         DistributionSummary drift =
-                meterRegistry.find("paralife.tick.drift.millis").summary();
+                meterRegistry.find("paralife.tick.work.ms").summary();
         if (drift != null && drift.count() > 0) {
             double p99 = drift.percentile(0.99);
             double budget = 2.0 * intervalMillis;

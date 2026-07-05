@@ -61,7 +61,7 @@ public record ReportSnapshot(
 
     private static Map<String, String> benchmarkMeterNames() {
         Map<String, String> m = new LinkedHashMap<>();
-        m.put("paralife.tick.drift.millis", "MAX");
+        m.put("paralife.tick.work.ms", "MAX");
         m.put("paralife.ws.active.sessions", "VALUE");
         m.put("paralife.backpressure.stalled.sessions", "VALUE");
         m.put("paralife.backpressure.stalled.total", "COUNT");

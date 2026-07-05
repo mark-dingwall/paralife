@@ -30,13 +30,13 @@ class ReportSnapshotTest {
     @Test
     void snapshotCarriesServerMetricsBlockSerializedSnakeCase() throws Exception {
         Map<String, Double> server = new LinkedHashMap<>();
-        server.put("paralife.tick.drift.millis", 11.0);      // test-owned
+        server.put("paralife.tick.work.ms", 11.0);      // test-owned
         server.put("paralife.admission.rejected", 3.0);      // test-owned
         ReportSnapshot snap = ReportSnapshot.withServerMetrics(baseSnap(), server);
 
         String json = MAPPER.writeValueAsString(snap);        // mirrors ReportWriter's mapper
         assertThat(json).contains("\"server_metrics\"");
-        assertThat(snap.serverMetrics()).containsEntry("paralife.tick.drift.millis", 11.0);
+        assertThat(snap.serverMetrics()).containsEntry("paralife.tick.work.ms", 11.0);
     }
 
     @Test
@@ -59,7 +59,7 @@ class ReportSnapshotTest {
         ReportSnapshot snap = ReportSnapshot.withServerMetrics(baseSnap(), Map.of());
         assertThat(snap.serverMetrics().keySet())
                 .containsExactly(
-                        "paralife.tick.drift.millis",
+                        "paralife.tick.work.ms",
                         "paralife.ws.active.sessions",
                         "paralife.backpressure.stalled.sessions",
                         "paralife.backpressure.stalled.total",
@@ -76,8 +76,8 @@ class ReportSnapshotTest {
         ReportSnapshot snap = ReportSnapshot.withServerMetrics(baseSnap(), Map.of());
         assertThat(snap.serverMetrics().keySet())
                 .containsExactlyInAnyOrderElementsOf(ReportSnapshot.BENCHMARK_METER_NAMES.keySet());
-        assertThat(snap.serverMetrics().get("paralife.tick.drift.millis")).isNull(); // absent -> null, not missing
+        assertThat(snap.serverMetrics().get("paralife.tick.work.ms")).isNull(); // absent -> null, not missing
         // JSON-level: the null-valued key is VISIBLE (not stripped) -- pins Jackson content-inclusion behaviour
-        assertThat(MAPPER.writeValueAsString(snap)).contains("\"paralife.tick.drift.millis\":null");
+        assertThat(MAPPER.writeValueAsString(snap)).contains("\"paralife.tick.work.ms\":null");
     }
 }
