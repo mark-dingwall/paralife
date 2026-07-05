@@ -19,14 +19,28 @@ per-reason rejection shares (e.g. an M5 dashboard or a tuning assay), **and** th
 asserting those shares in the default suite (they stay report-only). *Anchor:* `ServerMetricsScraper.scrape(...)`,
 `ReportSnapshot.BENCHMARK_METER_NAMES`; the `reason`+`source` tags on `AdmissionMetrics` `paralife.admission.rejected`.
 
-**Total-scrape time budget — ✅ RESOLVED (post-review, 2026-07-04).** Originally deferred to 22.1: 7 serial
-meters × 2s ≈ 14s worst case on the inline shutdown-hook final write could lose the most-stressed tier's
-report under a bounded supervisor kill-grace. The Phase-21 post-implementation review (codex + whole-branch
-adversarial both flagged it) took the "overall scrape deadline" fix option: `ServerMetricsScraper.scrape`
-now bounds the **whole** meter set to a ~2s budget (`TOTAL_BUDGET`; per-request timeout = min(2s, remaining)),
-which also closes the reporter-VT clobber race (the `join(2000)` drain reliably beats a ≤2s scrape). *Anchor:*
-`ServerMetricsScraper.TOTAL_BUDGET`. Off-critical-path scraping (a cached background snapshot) remains a
-possible future refinement but is no longer needed for report safety.
+**Total-scrape time budget — ✅ RESOLVED — concurrent `sendAsync` + single shared harvest deadline
+bounds the whole scrape (connect+headers+body), not just header receipt (Phase-21 review
+remediation).** Originally deferred to 22.1: 7 serial meters × 2s ≈ 14s worst case on the inline
+shutdown-hook final write could lose the most-stressed tier's report under a bounded supervisor
+kill-grace. The Phase-21 post-implementation review (codex + whole-branch adversarial both flagged
+it) took the "overall scrape deadline" fix option: `ServerMetricsScraper.scrape` now fires every
+meter request concurrently and harvests each within one shared ~2s budget (`TOTAL_BUDGET`), which
+also closes the reporter-VT clobber race (the `join(2000)` drain reliably beats a ≤2s scrape).
+*Anchor:* `ServerMetricsScraper.TOTAL_BUDGET`. Off-critical-path scraping (a cached background
+snapshot) remains a possible future refinement but is no longer needed for report safety.
+
+**`--actuator-uri` override (deferred).** *Why deferred:* `ServerMetricsScraper.actuatorBaseFrom`
+derives the actuator base from `--server-uri` root-only (`ws→http`, `wss→https`); context-path or
+`management.port`-separated deployments have no way to point the scraper at the right base. *Trigger:*
+a deployment that puts actuator behind a context path or a separate management port. *Anchor:*
+`ServerMetricsScraper.actuatorBaseFrom`; `docs/HARNESS.md` §11 "Endpoint dependency."
+
+**`run-tiers.sh` server-lifecycle ownership (deferred).** *Why deferred:* the isolated
+fresh-server-per-tier protocol (HIGH-3 fix) is currently manual, per `docs/BENCHMARKS.md`
+"Commands run" — `tools/benchmark/run-tiers.sh` still assumes one long-lived server across the
+whole sweep. *Trigger:* wanting a one-command isolated sweep instead of hand-run per-tier restarts.
+*Anchor:* `tools/benchmark/run-tiers.sh`; `docs/HARNESS.md` §12.
 
 **`scrape()` fail-soft unit coverage (test-debt).** *Why deferred:* `ServerMetricsScraper.scrape()` holds the
 hard contract (omit on non-200, omit on exception + continue to next meter, `InterruptedException` → restore

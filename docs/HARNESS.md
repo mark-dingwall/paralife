@@ -315,7 +315,7 @@ Written periodically (`report_interval_seconds`; default 30):
   "wall_time_seconds_elapsed": 120,
   "exit_reason": null,
   "server_metrics": {
-    "paralife.tick.drift.millis": 4.2,
+    "paralife.tick.work.ms": 4.2,
     "paralife.ws.active.sessions": 994.0,
     "paralife.backpressure.stalled.sessions": 0.0,
     "paralife.backpressure.stalled.total": 0.0,
@@ -333,7 +333,7 @@ meter). Meter → statistic:
 
 | Meter | Statistic | SC category |
 |-------|-----------|--------------|
-| `paralife.tick.drift.millis` | `MAX` | Tick drift |
+| `paralife.tick.work.ms` | `MAX` | Tick work-time |
 | `paralife.ws.active.sessions` | `VALUE` | Session stability |
 | `paralife.backpressure.stalled.sessions` | `VALUE` | Session stability |
 | `paralife.backpressure.stalled.total` | `COUNT` | Session stability |
@@ -455,14 +455,15 @@ minting a fresh WS connection to the same entity. No fleet-abstraction rework re
 ## §11 Server-Side Metrics Scraping (Phase 21)
 
 `com.paralife.harness.ServerMetricsScraper` is a read-only client for
-`GET /actuator/metrics/{name}`, so server-side meters (tick-drift, rejections, session counts)
+`GET /actuator/metrics/{name}`, so server-side meters (tick work-time, rejections, session counts)
 can be folded into the harness benchmark report. It is pure/side-effect-free beyond the HTTP GET:
 an injected `HttpClient`, a per-meter statistic map (the meter set is heterogeneous — Counter→
 `COUNT`, Gauge→`VALUE`, DistributionSummary→`MAX` — so the statistic is chosen per meter, not once
-for the whole list), a per-request timeout under an overall ~2s whole-scrape budget
-(`ServerMetricsScraper.TOTAL_BUDGET`, so the shutdown-hook final write can't stall for
-`meters × timeout`), and fail-soft omission (a missing, erroring, or timed-out meter is left out of
-the result, never thrown) — a benchmark run never fails on a missing meter.
+for the whole list), and fail-soft omission (a missing, erroring, or timed-out meter is left out of
+the result, never thrown) — a benchmark run never fails on a missing meter. All meters are
+requested concurrently (`HttpClient.sendAsync`) and harvested within one shared ~2s deadline
+(`ServerMetricsScraper.TOTAL_BUDGET`), so a stalled response — even one whose headers already
+arrived — can't stall the caller for `meters × timeout`.
 
 **Endpoint dependency:** `ServerMetricsScraper.actuatorBaseFrom(serverUri)` derives the actuator
 base from `--server-uri` (`ws→http`, `wss→https`, `/ws/world`→`/actuator/`). Root-deployment only —
@@ -491,7 +492,7 @@ non-zero if any tier failed, rather than masking a bad run as green.
 
 "Repeatable" means a re-runnable command with a saved report per tier — **not** bit-identical
 numbers across runs (live-WS timing is unseeded). Keep `duration-seconds` inside Micrometer's
-distribution-statistic-expiry window (~2 min) or the tick-drift MAX becomes recency-weighted.
+distribution-statistic-expiry window (~2 min) or the tick work-time MAX becomes recency-weighted.
 
 ```bash
 ./gradlew loadHarnessJar
@@ -509,10 +510,12 @@ for f in "$RUN"bench-*.json; do
 done
 ```
 
-`paralife.tick.drift.millis` (MAX) and `paralife.ws.active.sessions` (VALUE) populate in any run.
-`paralife.admission.rejected` and the `paralife.backpressure.*` stall meters are lazily
-registered and event-gated — they read absent/`0` until the server actually rejects or stalls,
-so a benign run legitimately leaves those categories empty; that is not a scraper defect.
+`paralife.tick.work.ms` (MAX) and `paralife.ws.active.sessions` (VALUE) populate in any run.
+`paralife.backpressure.stalled.total` / `.rebound` / `.terminal.dropouts` are eagerly-registered
+counters — they read `0.0` (not null) from tick 0 until an event increments them. Only
+`paralife.backpressure.stalled.sessions` and `paralife.admission.rejected` are lazily/tag-registered,
+reading `null` until the first stall/rejection — so a benign run legitimately leaves those two null;
+that is not a scraper defect.
 
 A `@Tag("slow")` positive control for the scrape path itself — `ScrapeLiveIntegrationTest`
 (`src/test/java/com/paralife/harness/`) — boots a `@SpringBootTest(webEnvironment = RANDOM_PORT)`
