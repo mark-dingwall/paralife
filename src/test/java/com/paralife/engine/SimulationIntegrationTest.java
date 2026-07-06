@@ -1,10 +1,14 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.paralife.world.Cell;
 import com.paralife.world.Entity.Nutrient;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.WorldGrid;
+import java.util.EnumMap;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -12,11 +16,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.TestPropertySource;
-
-import java.util.EnumMap;
-import java.util.Map;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Integration test: seeds the grid with mixed particles, runs simulation ticks,
@@ -134,9 +133,18 @@ class SimulationIntegrationTest {
         assertThat(worldGrid.getCell(15, 15).hasOccupant()).isTrue();
 
         simulationEngine.processTick(2);
-        assertThat(worldGrid.getCell(15, 15).isEmpty())
+        // Assert the dead particle specifically is gone — NOT that the cell is empty.
+        // Death removal (@Order 10, phase 3) frees (15,15) BEFORE nutrient spawning
+        // (phase 4) runs in the same tick, so at nutrient-spawn-probability=0.01 a
+        // nutrient legitimately lands here ~1% of runs. That is not the dead particle
+        // reappearing; the contract is "zero-energy particle removed", which a spawned
+        // Nutrient does not violate. (null → false, Nutrient → false, surviving
+        // Particle → true, so this still fails if the dead particle is not removed.)
+        boolean deadParticleStillPresent =
+                worldGrid.getCell(15, 15).occupant() instanceof Particle;
+        assertThat(deadParticleStillPresent)
                 .as("Particle with energy 0 should be removed from grid")
-                .isTrue();
+                .isFalse();
     }
 
     @Test
