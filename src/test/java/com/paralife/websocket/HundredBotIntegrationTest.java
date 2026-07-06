@@ -1,7 +1,19 @@
 package com.paralife.websocket;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.eclipse.jetty.websocket.api.Callback;
 import org.eclipse.jetty.websocket.api.Session;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
@@ -16,19 +28,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
-
-import java.net.URI;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
-import java.util.TreeSet;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Plan 15-11: 100 concurrent bots connect and receive sequential tick frames.
@@ -51,6 +50,16 @@ class HundredBotIntegrationTest {
     private static final Logger log = LoggerFactory.getLogger(HundredBotIntegrationTest.class);
     private static final int BOT_COUNT = 100;
     private static final int TICKS_TO_COLLECT = 5;
+
+    /**
+     * Latch timeout for concurrent connect + tick-receipt. Widened from 30s (Phase 22.1): under the
+     * shared-JVM default gate on a CPU-constrained box, 100 bots each spinning up their own Jetty
+     * {@link WebSocketClient} contend for VT carriers with the server's broadcast VTs, and 30s could
+     * time out under that starvation (documented pre-existing flake — {@code .planning} 20-01c
+     * SUMMARY §1). This test asserts liveness, not latency, so a generous deadline removes the false
+     * negative without weakening what it verifies.
+     */
+    private static final int AWAIT_SECONDS = 60;
 
     @LocalServerPort
     private int port;
@@ -89,8 +98,8 @@ class HundredBotIntegrationTest {
             });
         }
 
-        assertThat(connectLatch.await(30, TimeUnit.SECONDS))
-                .as("All %d bots should attempt connection within 30s", BOT_COUNT)
+        assertThat(connectLatch.await(AWAIT_SECONDS, TimeUnit.SECONDS))
+                .as("All %d bots should attempt connection within %ds", BOT_COUNT, AWAIT_SECONDS)
                 .isTrue();
         assertThat(connectErrors.get())
                 .as("No connection errors expected")
@@ -99,8 +108,8 @@ class HundredBotIntegrationTest {
         log.info("All {} bots connected", BOT_COUNT);
 
         // Wait for each bot to receive enough tick frames.
-        assertThat(allReceivedTicks.await(30, TimeUnit.SECONDS))
-                .as("All %d bots should receive %d ticks within 30s", BOT_COUNT, TICKS_TO_COLLECT)
+        assertThat(allReceivedTicks.await(AWAIT_SECONDS, TimeUnit.SECONDS))
+                .as("All %d bots should receive %d ticks within %ds", BOT_COUNT, TICKS_TO_COLLECT, AWAIT_SECONDS)
                 .isTrue();
 
         log.info("All {} bots received {} ticks", BOT_COUNT, TICKS_TO_COLLECT);
