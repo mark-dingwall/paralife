@@ -1,6 +1,8 @@
 package com.paralife.codec;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,8 +24,11 @@ import org.junit.jupiter.api.Test;
  * joint backstop.
  *
  * <p>RED-tested 2026-07-07: each assertion was shown to fire on a targeted encoder
- * perturbation (';' entry separator; s-block code-first; permuted block order). See the
- * slice PR scope-diff for which of these round-trip also caught vs. caught here alone.
+ * perturbation (';' entry separator; dropped primary intra-entry ':'; s-block
+ * presence-before-coord; f-before-c block order). See the slice PR scope-diff for which
+ * of these round-trip also caught vs. caught here alone — only the R6 block-order gate
+ * closes a round-trip blind spot (no §10 vector carries both a {@code c} and an
+ * {@code f} block).
  */
 class PerceptionCodecEncodeContractTest {
 
@@ -63,9 +68,12 @@ class PerceptionCodecEncodeContractTest {
 
         String wire = PerceptionCodec.encode(f);
 
-        assertThat(blockSegment(wire, 's')).as("',' between s entries").contains(",");
-        assertThat(blockSegment(wire, 'f')).as("':' intra-entry in f effect").contains(":");
-        assertThat(wire).as("';' never appears anywhere (§3)").doesNotContain(";");
+        assertTrue(blockSegment(wire, 's').contains(","), "',' between s entries");
+        // Pin the PRIMARY intra-entry separator (code:expiry), not merely "a colon exists":
+        // the f effect also carries a ctx colon, so a bare contains(":") is subsumed by it.
+        // "F:" is the effect code immediately followed by its intra-entry ':'.
+        assertTrue(blockSegment(wire, 'f').contains("F:"), "':' after the effect code (primary intra-entry sep)");
+        assertFalse(wire.contains(";"), "';' never appears anywhere (§3)");
     }
 
     @Test
@@ -79,15 +87,15 @@ class PerceptionCodecEncodeContractTest {
 
         String wire = PerceptionCodec.encode(f);
         String sEntry = blockSegment(wire, 's').substring(1);   // drop 's' prefix → "61F"
-        String fEntry = blockSegment(wire, 'f').substring(1);   // drop 'f' prefix → "F:2E:0F03"
+        String fEntry = blockSegment(wire, 'f').substring(1);   // drop 'f' prefix → "F:k:0F03"
 
         // Spatial (§4): the coord leads the entry; the kind code follows it.
-        assertThat(sEntry.charAt(0)).as("s entry leads with the coord token").isEqualTo('6');
-        assertThat(sEntry.indexOf('F')).as("kind code follows the coord").isGreaterThan(0);
+        assertEquals('6', sEntry.charAt(0), "s entry leads with the coord token");
+        assertTrue(sEntry.indexOf('F') > 0, "kind code follows the coord");
 
         // Type (§4): the code leads the entry; the trailing ctx coord comes after it.
-        assertThat(fEntry.charAt(0)).as("f entry leads with the effect code").isEqualTo('F');
-        assertThat(fEntry.indexOf("0F03")).as("trailing ctx coord comes after the code").isGreaterThan(0);
+        assertEquals('F', fEntry.charAt(0), "f entry leads with the effect code");
+        assertTrue(fEntry.indexOf("0F03") > 0, "trailing ctx coord comes after the code");
     }
 
     @Test
@@ -106,6 +114,7 @@ class PerceptionCodecEncodeContractTest {
         List<Character> blockPrefixes = new ArrayList<>();
         for (int i = 5; i < seg.length; i++) blockPrefixes.add(seg[i].charAt(0));
 
-        assertThat(blockPrefixes).containsExactly('s', 'c', 'f', 'v', 'p', 'g');
+        assertEquals(List.of('s', 'c', 'f', 'v', 'p', 'g'), blockPrefixes,
+                "present optional blocks in canonical order");
     }
 }
