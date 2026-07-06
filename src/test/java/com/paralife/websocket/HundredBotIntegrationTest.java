@@ -52,12 +52,15 @@ class HundredBotIntegrationTest {
     private static final int TICKS_TO_COLLECT = 5;
 
     /**
-     * Latch timeout for concurrent connect + tick-receipt. Widened from 30s (Phase 22.1): under the
-     * shared-JVM default gate on a CPU-constrained box, 100 bots each spinning up their own Jetty
-     * {@link WebSocketClient} contend for VT carriers with the server's broadcast VTs, and 30s could
-     * time out under that starvation (documented pre-existing flake — {@code .planning} 20-01c
-     * SUMMARY §1). This test asserts liveness, not latency, so a generous deadline removes the false
-     * negative without weakening what it verifies.
+     * Deadline for the concurrent-connect + tick-receipt latches AND each bot's own WebSocket
+     * handshake. Widened from 30s/10s (Phase 22.1): under the shared-JVM default gate on a
+     * CPU-constrained box, 100 bots each spinning up their own Jetty {@link WebSocketClient} contend
+     * for VT carriers with the server's broadcast VTs, so both the aggregate latches (was 30s) and a
+     * single bot's handshake (was 10s) could time out under that starvation (documented pre-existing
+     * flake — {@code .planning} 20-01c SUMMARY §1). Applied uniformly on purpose: if only the latches
+     * widened, a slow handshake would slip through as a {@code connectErrors != 0} assertion failure
+     * instead of the latch timeout it replaced. This test asserts liveness, not latency, so a generous
+     * deadline removes the false negative without weakening what it verifies.
      */
     private static final int AWAIT_SECONDS = 60;
 
@@ -168,7 +171,7 @@ class HundredBotIntegrationTest {
             req.addExtensions("permessage-deflate; server_no_context_takeover");
             session = client.connect(new Endpoint(this),
                             URI.create("ws://localhost:" + port + "/ws/world"), req)
-                    .get(10, TimeUnit.SECONDS);
+                    .get(AWAIT_SECONDS, TimeUnit.SECONDS);
             // Post-plan-15: server only sends T frames to registered bots.
             // Send r|C immediately after the upgrade so T frames start flowing.
             session.sendText(com.paralife.codec.PerceptionCodec.encode(

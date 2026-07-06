@@ -187,7 +187,7 @@ class EncodeDeflatePerformanceGateTest {
                     "Expected at least " + SURVIVAL_FLOOR
                             + " of " + BOT_COUNT + " bots still connected after "
                             + elapsedMillis + "ms; got " + stillConnected
-                            + ". (TickEngine does not publish drift metric;"
+                            + ". (drift metric unexpectedly absent — stripped context?;"
                             + " using connection-survival proxy.)");
         }
     }
