@@ -1,5 +1,6 @@
 package com.paralife.engine;
 
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.paralife.bot.BotClient;
@@ -29,28 +30,29 @@ import org.springframework.test.context.TestPropertySource;
  * combination runs at target scale. The gate asserts the encode+deflate path
  * does not starve the tick loop.
  *
- * <p><b>Drift metric path (live — the assertion this gate actually runs):</b>
- * {@code TickEngine} publishes {@code paralife.tick.work.ms} (a percentile
- * {@link DistributionSummary}, registered in the {@code TickEngine} constructor)
- * every tick, so the gate reads its p99 and asserts
+ * <p><b>The assertion:</b> {@code TickEngine} publishes
+ * {@code paralife.tick.work.ms} (a percentile {@link DistributionSummary},
+ * registered unconditionally in the {@code TickEngine} constructor) every tick,
+ * so the gate reads its p99 and asserts
  * {@code p99 < 2 × paralife.tick.interval-ms}. Higher drift = encode+deflate is
  * eating the tick budget; the gate catches that. The bound is relative to the
  * configured tick budget, not an absolute millisecond count, so it stays
  * meaningful when transplanted to a weaker machine — it fails honestly there iff
- * that box genuinely cannot host the sim within budget.
- *
- * <p><b>Survival proxy (defensive fallback):</b> if the meter is ever absent
- * (e.g. a stripped test context), the gate falls back to a connection-survival
- * check — a starved tick loop manifests as bot disconnects — asserting at least
- * 90 of the {@value #BOT_COUNT} bots remain connected.
+ * that box genuinely cannot host the sim within budget. The meter's presence is
+ * asserted up front: it is always registered when {@code TickEngine} is in the
+ * context, so its absence (or zero samples) is a setup/tick-loop failure the gate
+ * must surface loudly — never silently downgrade to a weaker proxy. (An earlier
+ * connection-survival fallback was scaffolding from when the meter did not yet
+ * exist (plan 15-11); the follow-up that added it (2026-04-21) made the fallback
+ * dead, and it was removed in Phase 22.1.)
  *
  * <p><b>Scale:</b> The plan envelope targets 100 bots × 500 ticks. At
  * {@code interval-ms=200}, 500 ticks = 100s wallclock, which is too slow for
  * routine CI. This test runs the same 100-bot setup but shortens the sampling
  * window to {@link #TARGET_TICKS} ticks (~{@code TARGET_TICKS × interval-ms}
  * wallclock). CI can scale up by raising {@link #TARGET_TICKS} — the assertion
- * is p99 drift relative to target (or survival ratio), not absolute wallclock,
- * so the bound stays meaningful at either scale.
+ * is p99 drift relative to target, not absolute wallclock, so the bound stays
+ * meaningful at either scale.
  *
  * <p>Per review Codex #c (MEDIUM). Complements correctness tests in 15-02 /
  * 15-05 / 15-08.
@@ -86,13 +88,6 @@ class EncodeDeflatePerformanceGateTest {
      * 500 when closing on a perf-regression review.
      */
     private static final int TARGET_TICKS = 50;
-
-    /**
-     * Survival floor for the fallback path. If fewer than this many of the
-     * {@link #BOT_COUNT} bots remain connected at the end of the run, the tick
-     * loop is likely starved — fail the gate.
-     */
-    private static final int SURVIVAL_FLOOR = 90;
 
     @LocalServerPort int port;
     @Autowired MeterRegistry meterRegistry;
@@ -149,7 +144,7 @@ class EncodeDeflatePerformanceGateTest {
         // Lenient registration floor — some bots may fail to register under
         // concurrent-connect pressure, but the encode+deflate path is already
         // exercised by the ones that did. Keep consistent with LoadTest's
-        // 80% floor; the post-run survival check is the actual gate.
+        // 80% floor; the post-run p99 tick-drift check is the actual gate.
         assertTrue(registered >= (int) (BOT_COUNT * 0.8),
                 "Expected at least 80% of bots registered; got "
                         + registered + "/" + BOT_COUNT);
@@ -158,37 +153,27 @@ class EncodeDeflatePerformanceGateTest {
         long runMillis = intervalMillis * TARGET_TICKS;
         log.info("Sampling for {} ticks × {}ms = {}ms wallclock",
                 TARGET_TICKS, intervalMillis, runMillis);
-        long startNanos = System.nanoTime();
         Thread.sleep(runMillis);
-        long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
 
-        // Preferred assertion — p99 tick-drift (if TickEngine publishes it).
+        // The gate: p99 tick-work drift. The meter is registered unconditionally
+        // in the TickEngine constructor, so its absence — or zero samples after a
+        // full sampling window — means the tick loop never ran, which the gate
+        // must fail loudly rather than paper over. (No survival-proxy fallback:
+        // that was scaffolding from before the meter existed; see class javadoc.)
         DistributionSummary drift =
                 meterRegistry.find("paralife.tick.work.ms").summary();
-        if (drift != null && drift.count() > 0) {
-            double p99 = drift.percentile(0.99);
-            double budget = 2.0 * intervalMillis;
-            log.info("Drift metric found: p99={}ms budget={}ms samples={}",
-                    p99, budget, drift.count());
-            assertTrue(p99 < budget,
-                    "Tick drift p99=" + p99 + "ms exceeded 2× target ("
-                            + budget + "ms). Encode+deflate path may be over budget.");
-        } else {
-            // Fallback — connection-survival proxy. A starved tick loop
-            // manifests as bot disconnects (WebSocket pongs time out, server
-            // idle-kicks sessions, etc.).
-            int stillConnected = 0;
-            for (BotClient b : bots) {
-                if (b.isConnected()) stillConnected++;
-            }
-            log.info("Drift metric absent; connection-survival proxy: {}/{} bots still connected after {}ms",
-                    stillConnected, BOT_COUNT, elapsedMillis);
-            assertTrue(stillConnected >= SURVIVAL_FLOOR,
-                    "Expected at least " + SURVIVAL_FLOOR
-                            + " of " + BOT_COUNT + " bots still connected after "
-                            + elapsedMillis + "ms; got " + stillConnected
-                            + ". (drift metric unexpectedly absent — stripped context?;"
-                            + " using connection-survival proxy.)");
-        }
+        assertNotNull(drift,
+                "paralife.tick.work.ms meter absent — TickEngine registers it in its"
+                        + " constructor, so absence means the tick engine is not wired up.");
+        assertTrue(drift.count() > 0,
+                "No tick-work samples recorded after " + runMillis
+                        + "ms — the tick loop produced zero ticks (starved or not started).");
+
+        double p99 = drift.percentile(0.99);
+        double budget = 2.0 * intervalMillis;
+        log.info("Drift metric: p99={}ms budget={}ms samples={}", p99, budget, drift.count());
+        assertTrue(p99 < budget,
+                "Tick drift p99=" + p99 + "ms exceeded 2× target ("
+                        + budget + "ms). Encode+deflate path may be over budget.");
     }
 }
