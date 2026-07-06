@@ -9,7 +9,6 @@ import java.util.Comparator;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
-
 import org.junit.platform.launcher.TestExecutionListener;
 import org.junit.platform.launcher.TestPlan;
 
@@ -17,8 +16,9 @@ import org.junit.platform.launcher.TestPlan;
  * Opt-in end-of-suite platform-thread census for the Phase 22.1 cache-cap experiment.
  *
  * <p>Registered globally via {@code META-INF/services} but <strong>inert unless</strong> the
- * system property {@code paralife.leakprobe} is set — so the pinned {@code forkEvery=1}
- * {@code test} task is unaffected. Only the dedicated {@code leakProbe} Gradle task enables it.
+ * system property {@code paralife.leakprobe} is set — so the default {@code test} task (which runs
+ * {@code forkEvery=0} at HEAD) is unaffected. Only the dedicated {@code leakProbe} Gradle task
+ * enables it.
  *
  * <p>Captured at {@link #testPlanExecutionFinished} — i.e. while Spring's
  * {@code TestContext} cache still holds its contexts (Spring closes them at JVM shutdown).

@@ -100,8 +100,9 @@ tasks.withType<Test> {
     // proving leaks now exist outside slow-tagged tests too. Made unconditional until
     // the integration-test resource-leak audit (Phase 22 / 22.1) could safely remove it.
     // 2026-06-17 (`876c8b1`): flipped to 0 so the whole suite shares ONE JVM. This shipped
-    // as the leak-fix commit, NOT a formal Phase 22.1 execution — P22.1 revalidation is still
-    // unexecuted (see .planning/STATE.md). Closing three root causes made the flip safe:
+    // as the leak-fix commit; the formal Phase 22.1 revalidation confirming the flip holds is
+    // now recorded in .planning/STATE.md (TD-22-B, 2026-07-06). Closing three root causes made
+    // the flip safe:
     // (A) WorldWebSocketHandler @PreDestroy close-aware mass-detach → 0 "did not exit" drain-VT
     // WARNs; (B) test client-stop hygiene (BlockingWebSocketClient self-clean +
     // register-before-connect) → 0 HttpClient/scheduler residue in the end-of-suite census;
@@ -134,8 +135,9 @@ tasks.jacocoTestReport {
 // @TestPropertySource, hence a DISTINCT cached Spring context — together in ONE shared
 // JVM (forkEvery=0), then LeakCensusListener dumps an end-of-suite platform-thread census.
 //
-// This deliberately does NOT touch the pinned `test` task (invariant I-04: forkEvery=1
-// must stay until the P22.1 exit gate passes). It is a measurement harness, not a config change.
+// This deliberately does NOT touch the `test` task (which runs forkEvery=0 at HEAD — see the
+// `forkEvery` comment above; the P22.1 revalidation confirming that flip holds is recorded in
+// .planning/STATE.md). It is a measurement harness, not a config change.
 //
 //   ./gradlew leakProbe -PcacheMax=32 -Plabel=uncapped   # baseline (all contexts coexist)
 //   ./gradlew leakProbe -PcacheMax=1  -Plabel=cap1        # forces eviction within the run
