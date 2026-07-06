@@ -77,7 +77,7 @@ Multi-cell organisms (composites) with shared state that move and act as a unit 
 - **D-32:** REPRODUCER buds a solo Particle into adjacent empty cell. Reuses existing reproduce mechanic and energy cost (from shared pool). Particle type inherited or random. Maintains lifecycle: Particle → BondedPair → Composite.
 
 ### Bot Control (Scale Demo Preservation)
-- **D-33:** All bot sessions stay connected when their entities join a composite. No disconnections. Preserves hundreds/thousands of active WebSocket connections for portfolio demo.
+- **D-33:** All bot sessions stay connected when their entities join a composite. No disconnections. Preserves hundreds/thousands of active WebSocket connections.
 - **D-34:** Reactive roles auto-act without consensus: FEEDER eats if food in range, ATTACKER attacks if prey in range, DEFENDER defends if under attack, REPRODUCER buds if energy sufficient. SENSOR is passive.
 - **D-35:** Only movement requires consensus (LOCOMOTOR STV voting). All other roles are autonomous based on local conditions.
 - **D-36:** All member bots receive composite's stitched perception each tick. All remain active WebSocket clients sending and receiving messages.

@@ -187,7 +187,7 @@ class LoadHarnessOptionsTest {
     @Test
     void envVar_harnessId_namedCorrectly() throws Exception {
         // M-03 (Round B): the env var name is PARALIFE_HARNESS_ID, not the duplicated
-        // PARALIFE_HARNESS_HARNESS_ID — spec at HARNESS.md §158 is the source of truth.
+        // PARALIFE_HARNESS_HARNESS_ID — spec at HARNESS.md §2 (Identity Wire Shape) is the source of truth.
         var field = LoadHarness.class.getDeclaredField("harnessId");
         var option = field.getAnnotation(picocli.CommandLine.Option.class);
         assertThat(option).isNotNull();

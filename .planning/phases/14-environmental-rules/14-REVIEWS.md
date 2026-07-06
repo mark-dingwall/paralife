@@ -60,7 +60,7 @@ The plans are among the most detailed and well-coordinated seen in the project t
 
 Architecture is sound after 6-7 cycles of review. Bean-cycle resolution, same-tick death model, and identity-transition matrix are well-specified. Remaining risk is almost entirely **scope and execution complexity**, not design. Cycle-7 just caught two BLOCKER compile errors from hallucinated API signatures (`compositeRegistry.all()`, wrong `snapshot()` return type) — this is a late-stage red flag that similar undetected hallucinations may exist elsewhere.
 
-**Core concern:** 6 plans, ~30+ new files, 22+ tests per plan, multi-cycle state transitions, 4 concurrent effect types, 4 buff types × 4 wire sites each, deterministic test harnesses, @SpringBootTest proliferation. For a portfolio piece, this has drifted into specification-as-artifact territory rather than code-as-artifact. Execution will take considerably longer than initially estimated and will likely surface more API hallucinations at compile time.
+**Core concern:** 6 plans, ~30+ new files, 22+ tests per plan, multi-cycle state transitions, 4 concurrent effect types, 4 buff types × 4 wire sites each, deterministic test harnesses, @SpringBootTest proliferation. This has drifted into specification-as-artifact territory rather than code-as-artifact. Execution will take considerably longer than initially estimated and will likely surface more API hallucinations at compile time.
 
 ---
 
@@ -244,7 +244,7 @@ Two-file split: deterministic env-only harness (`EnvironmentDeterminismTest`) + 
 
 Plans 14-01, 14-02, 14-04, 14-06 are in good shape. 14-03 has a mechanical frontmatter gap. 14-05 has two potential API hallucinations that mirror the cycle-7 BLOCKER findings and should be verified against live source first.
 
-**Separately: the phase is vastly over-engineered for a Canva-interview portfolio piece.** 6 plans, 7 review cycles, 22-test files, extensive same-tick reconciliation machinery — the complexity is disproportionate to what the interview signal needs. This is not a "fix before execution" concern; it's a feedback point for future phase scoping. The project exists to demonstrate scale engineering on Java 21 virtual threads; adding four environmental effects doesn't need this much orchestration. Ship what exists, but trim ambition on Phase 15 / 16.
+**Separately: the phase is over-engineered for its goals.** 6 plans, 7 review cycles, 22-test files, extensive same-tick reconciliation machinery — the complexity is disproportionate to what these four environmental effects need. This is not a "fix before execution" concern; it's a feedback point for future phase scoping. The project exists to demonstrate scale engineering on Java 21 virtual threads; adding four environmental effects doesn't need this much orchestration. Ship what exists, but trim ambition on Phase 15 / 16.
 
 ---
 

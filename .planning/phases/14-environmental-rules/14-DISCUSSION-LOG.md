@@ -49,7 +49,7 @@ Expanded into full protocol redesign:
 - User asked about encoding control (UTF-8 vs ISO 8859-1) — locked ASCII-safe TextMessage
 - User proposed **server-precomputed event sequences** via virtual thread → multicast to all bots
 - User questioned always-on deflate → explored `permessage-deflate` handshake negotiation
-- User explored **precompress + fan-out** optimization → locked (memorable for portfolio showcase value)
+- User explored **precompress + fan-out** optimization → locked
 - Explored `server_no_context_takeover` trade-offs → locked `=true` for shareable compressed frames
 - User questioned double-compression → explained RSV1 bit + Jetty `WebSocketExtension` API
 - User asked about sending DEFLATE dictionary to clients → protocol supports it (priming), but doesn't help
@@ -59,13 +59,10 @@ Expanded into full protocol redesign:
 - User's instinct: "do we need a broadcast channel?" → locked **single per-bot channel** (bots react to what they see, season derivable from tick number)
 - User considered client-side rock stitching → locked **zero-trust perception** instead (following WoW radar-hack lesson)
 
-### 8. Portfolio context saved to memory
-User disclosed goal: portfolio project targeting Canva backend engineer role. Saved as project memory. Elevated precompress fan-out from "over-engineered" to "valuable showcase pattern." Never to be mentioned in code/commits/docs.
-
-### 9. Phase split
+### 8. Phase split
 Scope became too large. Split into Phase 14 (env effects) and Phase 15 (protocol/transport), with Phase 16 becoming the emergence tests. Phase 14 ships with existing JSON protocol.
 
-### 10. Remaining Phase 14 details
+### 9. Remaining Phase 14 details
 - Seasonal Poisson rates per event type
 - Sine-scaled λ formula verified correct
 - Max 1 active event per type (debuff stacking post-MVP)
@@ -74,7 +71,7 @@ Scope became too large. Split into Phase 14 (env effects) and Phase 15 (protocol
 - Compost formula (100% cell, 50% neighbors)
 - Rock gen deferred to Phase 15
 
-### 11. Status bitmasks
+### 10. Status bitmasks
 - Base64 alphabet `0-9A-Za-z_-` locked
 - Two separate bitmasks: cell + entity (user caught conflation mid-discussion)
 - Fixed-width (not omit-if-zero) — parse simplicity wins
@@ -83,7 +80,7 @@ Scope became too large. Split into Phase 14 (env effects) and Phase 15 (protocol
 - BONDED/COMPOSITE_MEMBER are distinct entity types, not status flags
 - Vision-scoped overcrowding: server computes per bot using only visible neighbors
 
-### 12. Behavioral implications
+### 11. Behavioral implications
 - STARVING: easy prey (Phase 13 progressive scaling)
 - TOXIC: attacker splash damage
 - MUTATING: attacks accelerate cure (gamble)
@@ -94,9 +91,6 @@ Scope became too large. Split into Phase 14 (env effects) and Phase 15 (protocol
 - "What is the purpose of message tick?" — Claude made observability assumptions without grounding
 - Typo correction: "send entire state on init" (not "in it")
 - "I think we already mapped out starvation modifiers" — Claude re-proposed Phase 13 work
-
-## Memory Written
-- `project_portfolio_goal.md` — project targets Canva backend role, favor impressive Spring patterns, never mention in code/commits/docs
 
 ## Outcome
 - `14-CONTEXT.md` — 48 locked decisions for Phase 14

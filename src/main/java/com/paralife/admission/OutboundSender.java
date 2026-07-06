@@ -31,7 +31,7 @@ import org.springframework.web.socket.WebSocketSession;
  * the actual {@code sendMessage} invocation. Encoding and metric recording stay outside the
  * monitor (they don't touch the session).
  *
- * <p><b>Outbound concurrency rationale</b> (D-10; mirrored in {@code CLAUDE.md} "Outbound concurrency"):
+ * <p><b>Outbound concurrency rationale</b> (D-10; mirrored in {@code docs/ARCHITECTURE.md} §Outbound concurrency):
  * <ul>
  *   <li>Matches Paralife's stated philosophy: simple blocking code, virtual threads do concurrency
  *       ({@code spring.threads.virtual.enabled: true}).</li>
@@ -135,7 +135,7 @@ public class OutboundSender {
         queues.put(id, queue);
         overflowFiredFlags.put(id, new AtomicBoolean(false));
         // Phase 20 D-02 — One drain VT per session is structural per the WS:entity 1:1
-        // model (CLAUDE.md §Connection model, HARNESS.md §1, RUNTIME.md §1).
+        // model (docs/ARCHITECTURE.md §Connection model, HARNESS.md §1, RUNTIME.md §1).
         // Per-VT cost is a few KB heap; 1000+ VTs is acceptable. Per-connection cost
         // is reduced via paralife.runtime.* tuning (see RUNTIME.md §3), NOT by
         // sharing the drain VT across sessions. Multi-entity-per-VT requires explicit

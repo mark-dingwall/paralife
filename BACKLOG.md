@@ -156,15 +156,10 @@ backlog-dispositioned so they land rather than silently dropped.
 - *Convert note↔note raw-line refs to section anchors* — `headless-feedback-loop-adr.md:54` cites
   `pelagia-comparison.md:58-60` by raw line range; survives this pass only by position. A future
   re-trim above pelagia L58 breaks it invisibly.
-- *Fix broken doc-section cite in test* — `LoadHarnessOptionsTest.java:190` cites `HARNESS.md §158`
-  (no such section; likely §2, the harness-id regex). Pre-existing source rot; this docs-only pass
-  cannot edit `src/`, so it is banked here.
 
-**Trigger:** opportunistic; the broken-cite item needs a `src/test` edit (out of scope for a docs-only
-pass).
+**Trigger:** opportunistic.
 
-**Anchor:** `docs/notes/headless-feedback-loop-adr.md:54`, `docs/notes/pelagia-comparison.md`;
-`LoadHarnessOptionsTest.java:190`, `docs/HARNESS.md`.
+**Anchor:** `docs/notes/headless-feedback-loop-adr.md:54`, `docs/notes/pelagia-comparison.md`.
 
 ## Codec decode-semantic unit tests (CoordTest / Base64CodecTest) — CLOSED (done)
 

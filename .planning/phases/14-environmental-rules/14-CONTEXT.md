@@ -284,7 +284,7 @@ Protocol/transport redesign (compact text perception, Jetty, precompress fan-out
 - **Vision-scoped overcrowding** — server authoritative, but computed per-bot from visible neighbors only. Bot at vision edge may misread cell as non-overcrowded. Natural incomplete-information model without client-side calculation.
 - **Toxic zones as cover** — prey in toxic cells harder to hunt (attacker takes splash). Emergent tactical terrain without scripting it. Expect observed behavior: weak entities gravitate toward toxin edges.
 - **Composite role-aware buff rewards** — composite member mutagen rewards use role-specific perk tables (+ universal `-1 upkeep`). Avoids e.g. `+1 attack` on LOCOMOTOR waste.
-- **Shadow grid parallelism** — independent grids per effect trivially parallelizable in future (per-effect virtual thread doing its own CA pass). Shows up as perf lever in interview narrative.
+- **Shadow grid parallelism** — independent grids per effect trivially parallelizable in future (per-effect virtual thread doing its own CA pass).
 
 </specifics>
 

@@ -234,7 +234,7 @@ class OutboundSenderTest {
     @AfterEach
     void releaseStuckVT() throws InterruptedException {
         // G4 (pass-6 triage 2026-05-04) — unblock the drain VT so the test class
-        // does not leak a parked VT across forkEvery=1 runs. Count down `never`
+        // does not leak a parked VT across the shared-JVM (forkEvery=0) suite. Count down `never`
         // so the fake sendMessage returns, then interrupt the thread so the drain
         // loop exits if it re-enters queue.take().
         if (never != null) {

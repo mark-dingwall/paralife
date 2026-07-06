@@ -167,7 +167,7 @@ Pick 2–4 of:
 
 If only ONE of these is done, pick (1) — it's the structural fix; the others are useful but secondary.
 
-Side note on the "interview portfolio" framing pinned in memory: this review should be told straight regardless. The honest framing — "we measured the wrong thing, here's the cap interaction, here's the right re-measurement" — is more impressive than a fragile clean baseline that downstream tuning then contradicts.
+Side note: this review should be told straight regardless. The honest framing — "we measured the wrong thing, here's the cap interaction, here's the right re-measurement" — is more realistic than a fragile clean baseline that downstream tuning then contradicts.
 
 ---
 

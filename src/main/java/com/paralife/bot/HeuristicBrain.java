@@ -303,7 +303,6 @@ public class HeuristicBrain {
      * is NOT treated as an immediate threat. The LOCOMOTOR will not strongly flee a
      * predator currently near a far SENSOR. This is accepted for Phase 20.1; the
      * ROADMAP success criteria require SENSOR-stitched FOV, not threat-via-SENSOR.
-     * See PLAN.md §accepted-tech-debt for full rationale.
      */
     private List<Direction> rankDirections(Frame.TickFrame frame, BotState state, Random rng) {
         ParticleType myType = speciesToParticleType(state.species());

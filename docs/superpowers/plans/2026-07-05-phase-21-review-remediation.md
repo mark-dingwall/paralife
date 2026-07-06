@@ -17,7 +17,7 @@
 - **Merge-back.** A slice isn't done until the canonical doc matches shipped code.
 - **Do not re-capture.** The fixtures under `docs/benchmarks/` are authoritative. Read numbers **from** them; never invent or recompute them.
 - **Match existing style.** `docs/` edits follow `docs/STYLE.md` G1–G10 (cite `file:line`/`D-xx` on contract claims, stable section numbering, terse clause voice, no GSD review-round residue). Touch only what each task requires.
-- **No portfolio/interview framing** anywhere in code, comments, commits, or docs.
+- **Keep artifacts on-topic** — code, comments, commits, and docs describe the engineering; broader project-positioning context is a human-layer decision, not for shipped artifacts.
 - **Branch:** all work stays on `phase-21-scale-benchmark` (already checked out in this worktree). Do not open/merge a PR unless asked.
 - **Spotless caveat:** `spotlessCheck` uses `ratchetFrom("origin/main")` and **cannot run inside a linked git worktree** (jgit can't resolve the `.git`-file). Do not treat a Spotless failure-to-run as a code defect; note it for a normal-checkout/CI run. `./gradlew test` and `compileJava` run fine in the worktree.
 
