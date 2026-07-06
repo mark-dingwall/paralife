@@ -53,15 +53,32 @@ review remediation). Still untested: the non-200 (404) omit, the junk-200 parse-
 next touch of `ServerMetricsScraper`, or a P22.1 harness-hardening slice. *Anchor:* `ServerMetricsScraperTest`.
 (Surfaced by the Phase 21 post-implementation review, 2026-07-04; budget leg closed 2026-07-05.)
 
-**`EncodeDeflatePerformanceGateTest` must be `@Tag("slow")` when re-enabled (firewall, latent).** *Why deferred:*
-the test is `@Disabled` (bisect-scoped to 22.1) so there is no active breach. But `build.gradle.kts:92` excludes
-only `@Tag("slow")` from the default gate — `@Tag("performance")` is **not** excluded. The Phase-21 meter rename
-made `paralife.tick.work.ms` always resolvable (TickEngine publishes it every tick), so if 22.1 removes the
-`@Disabled` as its annotation invites, the test flips from its survival-proxy fallback into the live
-`p99 < 2×interval-ms` branch — a live tick-work-aggregate assertion running in the **non-excluded** default suite,
-a firewall breach. *Fix when re-enabling:* add `@Tag("slow")` to the class (or exclude `performance` at
-`build.gradle.kts:92`). *Anchor:* `EncodeDeflatePerformanceGateTest`; `build.gradle.kts:86-92`. (Surfaced by the
-Phase-21 review-remediation final whole-branch review, 2026-07-05.)
+**`EncodeDeflatePerformanceGateTest` must be `@Tag("slow")` when re-enabled (firewall, latent). ~~open~~ RESOLVED 2026-07-06 (Phase 22.1).**
+*Why deferred:* the test was `@Disabled` so there was no active breach, but `build.gradle.kts:92` excludes only
+`@Tag("slow")` from the default gate — `@Tag("performance")` is **not** excluded, so re-enabling as-is would have
+flipped a live `p99 < 2×interval-ms` tick-work-aggregate assertion into the default suite (firewall breach).
+*Resolution:* re-enabled with `@Tag("performance")`→`@Tag("slow")`; the class Javadoc + an inline comment now pin
+the reason to the firewall. Verified: the default `./gradlew test` **excludes** it, `-PincludeLong=true` runs it
+green (p99 ~35ms of a 400ms budget). *Anchor:* `EncodeDeflatePerformanceGateTest`; `build.gradle.kts:86-92`.
+(Surfaced by the Phase-21 review-remediation final whole-branch review, 2026-07-05.)
+
+**Tick-work regression tripwire — cheap in-test versions don't work; needs the M5 capacity rig (deferred, gated).**
+*Why deferred:* Phase 22.1 wanted a cheap, portable approximation of a perf-regression tripwire riding on the
+re-enabled EncodeDeflate test. A **same-machine super-linearity ratio** (`meanTickWork(2P)/meanTickWork(P)`, windowed
+from the `paralife.tick.work.ms` summary by `totalAmount/count` delta) was built and **backed out** — it is
+noise-dominated at this scale and cannot gate honestly. *Evidence (8C16T, warm, bound 3.0):* healthy ratio swung
+**1.0–1.42** over 3 forced-fresh runs, with one run at **0.996** (doubling the population measured as *less* work —
+physically nonsensical ⇒ signal < noise floor). *Root cause:* the tick is ~3–5ms (11× under a 200ms budget), so the
+population-scaling signal is sub-ms and swamped by (a) GC pauses landing in one window, (b) VT-carrier scheduling +
+thermal jitter on a wall-clock proxy, (c) stochastic world drift between the two windows (reproduction grows entities
+so phase-2 isn't a clean 2× of phase-1), then (d) the ratio amplifies all of it. This empirically re-confirms the
+CLAUDE.md firewall: tick-work aggregates are genuinely noise-dominated, not merely tuning-sensitive. *What the real
+tripwire needs (M5):* either (i) a big, stable signal — run at 500–1000 bots near the admission cap where the tick is
+tens of ms and per-bot cost dominates fixed cost + GC noise (needs the capacity rig), or (ii) a **deterministic signal**
+— an op-count / allocation budget on a fixed fixture instead of wall-clock (machine-independent, zero timing noise; a
+small production instrumentation hook). Also inherits the absolute-p99 / baseline-diff (`docs/benchmarks/*.json`) gate
+and per-slot `@Order` timers from the Phase-21/22.1 discussion. *Anchor:* M5 observability; `TickEngine.tick.work.ms`;
+`docs/BENCHMARKS.md`. (Attempted + backed out in Phase 22.1, 2026-07-06.)
 
 ## HARNESS EARS rollout (deferred, gated)
 
