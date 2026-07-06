@@ -9,7 +9,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -30,17 +29,20 @@ import org.springframework.test.context.TestPropertySource;
  * combination runs at target scale. The gate asserts the encode+deflate path
  * does not starve the tick loop.
  *
- * <p><b>Drift metric path (preferred):</b> If the application publishes a
- * {@code paralife.tick.work.ms} {@link DistributionSummary}, the gate reads
- * its p99 and asserts {@code p99 < 2 × paralife.tick.interval-ms}. Higher drift
- * = encode+deflate is eating the tick budget; the gate catches that regression.
+ * <p><b>Drift metric path (live — the assertion this gate actually runs):</b>
+ * {@code TickEngine} publishes {@code paralife.tick.work.ms} (a percentile
+ * {@link DistributionSummary}, registered in the {@code TickEngine} constructor)
+ * every tick, so the gate reads its p99 and asserts
+ * {@code p99 < 2 × paralife.tick.interval-ms}. Higher drift = encode+deflate is
+ * eating the tick budget; the gate catches that. The bound is relative to the
+ * configured tick budget, not an absolute millisecond count, so it stays
+ * meaningful when transplanted to a weaker machine — it fails honestly there iff
+ * that box genuinely cannot host the sim within budget.
  *
- * <p><b>Fallback path (current state, plan 15-11 Task 5):</b> {@code TickEngine}
- * does not yet publish a drift metric. The gate falls back to a
- * connection-survival proxy — if the tick loop starves, bots disconnect. The
- * gate asserts at least 90 of the {@value #BOT_COUNT} bots launched are still
- * connected at the end of the run. Adding a TickEngine drift tap is deferred to
- * a follow-up plan (not this cleanup plan's scope).
+ * <p><b>Survival proxy (defensive fallback):</b> if the meter is ever absent
+ * (e.g. a stripped test context), the gate falls back to a connection-survival
+ * check — a starved tick loop manifests as bot disconnects — asserting at least
+ * 90 of the {@value #BOT_COUNT} bots remain connected.
  *
  * <p><b>Scale:</b> The plan envelope targets 100 bots × 500 ticks. At
  * {@code interval-ms=200}, 500 ticks = 100s wallclock, which is too slow for
@@ -64,7 +66,11 @@ import org.springframework.test.context.TestPropertySource;
         "paralife.simulation.overcrowding-energy-penalty=0",
         "management.endpoints.web.exposure.include=health,info,metrics"
 })
-@Tag("performance")
+// @Tag("slow"): excluded from the default `./gradlew test` gate (build.gradle.kts) and run
+// only under -PincludeLong=true. REQUIRED — the p99 tick-work assertion is a live statistical
+// aggregate; the firewall (CLAUDE.md) bars such asserts from the default suite. "performance"
+// is NOT excluded by build.gradle.kts, so it must be "slow" here.
+@Tag("slow")
 class EncodeDeflatePerformanceGateTest {
 
     private static final Logger log =
@@ -108,7 +114,6 @@ class EncodeDeflatePerformanceGateTest {
     }
 
     @Test
-    @Disabled("TD-22→P21: encode/deflate perf regression; bisect during P21 benchmark gate")
     void encodeDeflateUnder100BotsTickDrift() throws Exception {
         String uri = "ws://localhost:" + port + "/ws/world";
 
