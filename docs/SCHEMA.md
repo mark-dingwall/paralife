@@ -22,9 +22,9 @@ tunable defaults.
 | R1 | WHEN encoding or decoding any compact field THE SYSTEM SHALL use the single shared 64-char base64 alphabet. | §1 | `Base64CodecTest.decodeDigitMapsEachCharToIndex` — `assertEquals(i, Base64Codec.decodeDigit(c))` across all 64 indices vs a **test-owned** alphabet literal (decode-isolating); `encodeDigitMapsEachIndexToChar` (inverse); `decodeDigitRejectsInvalidChars`. Joint backstop: `PerceptionCodecRoundTripTest.roundTripsExactly`, all 13 vectors. |
 | R2 | WHEN parsing a coordinate token THE SYSTEM SHALL select the form by first-char class: `+`/`-` → 4-char relative, `1`–`9` → numpad, absolute only in fixed positional slots. | §2 | `CoordTest` (decode-isolating, via `decode()` of a hand-authored frame) — `numpadDispatch` (`Numpad('6')`), `relativeDispatch` (`Relative(4,-2)`/`(-4,2)`), `relativeMagnitudeIsPositional` (`Relative(63,5)` from `+-+5` — `-` is digit 63 in the magnitude slot, not a sign), `absoluteIsPositionalOnly` (curX/curY off the fixed header), `invalidFirstCharRejected` (negative + the numpad/relative cases as positive controls). Joint backstop: `roundTripsExactly` V2/V3. |
 | R3 | WHEN a relative coordinate's source offset would exceed ±63 THE SYSTEM SHALL bound it to ±63 before emission, never widening the 4-char relative form. | §2, §8.4 | type invariant `Coord.Relative` ctor (±63 guard, the backstop) + pre-construction producer clamps where offsets *can* be large (`TickBroadcaster.gatherLocoRelativeCells`, `buildRosterIfChanged`); V9 exercises the in-range max. *Reachability investigation (closed): no current producer emits >±63 — composites are size-2 adjacent, solo vision ≤±2; the redundant post-construction codec clamp was removed.* |
-| R4 | WHEN emitting a block THE SYSTEM SHALL separate list entries with `,` and intra-entry structure with `:`; `;` SHALL NOT appear. | §3 | `roundTripsExactly` — V6 (carries both separators) |
-| R5 | WHEN emitting a spatial block (`s`/`g`/`v`) THE SYSTEM SHALL place coord first; WHEN emitting a type block (`f`/`c`) THE SYSTEM SHALL place code first. | §4 | `roundTripsExactly` — V6 (`s`/`g`/`v` coord-first + `f`/`c` code-first in one frame) |
-| R6 | WHEN encoding a full `T` frame THE SYSTEM SHALL emit present optional blocks in the order `s, c, f, v, p, g`. | §6.3.1 | `roundTripsExactly` — V6 + V11 (`v` before `g`) |
+| R4 | WHEN emitting a block THE SYSTEM SHALL separate list entries with `,` and intra-entry structure with `:`; `;` SHALL NOT appear. | §3 | `PerceptionCodecEncodeContractTest.encodeUsesCommaBetweenEntriesColonIntraEntryNeverSemicolon` (encode-isolating: builds a two-`s`-entry + `f`-effect frame directly, asserts `,` between entries + the primary `code:` intra-entry separator + `;` absent everywhere). Joint backstop: `roundTripsExactly` V6/V13. |
+| R5 | WHEN emitting a spatial block (`s`/`g`/`v`) THE SYSTEM SHALL place coord first; WHEN emitting a type block (`f`/`c`) THE SYSTEM SHALL place code first. | §4 | `PerceptionCodecEncodeContractTest.encodePlacesCoordFirstInSpatialBlockCodeFirstInTypeBlock` (encode-isolating: `s` entry leads with coord, `f` entry leads with code + trailing ctx coord). Only the `f` leg is test-pinned: the `c` type block is code-first *by construction* (§4/§8.2 — it has no coord field, so nothing can misorder), making a `c`-leg assertion unfalsifiable. Joint backstop: `roundTripsExactly` V6. |
+| R6 | WHEN encoding a full `T` frame THE SYSTEM SHALL emit present optional blocks in the order `s, c, f, v, p, g`. | §6.3.1 | `PerceptionCodecEncodeContractTest.encodeEmitsBlocksInCanonicalOrder` (encode-isolating: all-six-blocks frame, asserts prefix sequence `containsExactly('s','c','f','v','p','g')`). Closes a round-trip blind spot — **no §10 vector carries both a `c` and an `f` block**, so a c/f reorder survives `roundTripsExactly`. Joint backstop: V6 + V11 (`v` before `g`). |
 | R7 | WHEN decoding a frame THE SYSTEM SHALL accept exactly the five types `r/S/T/a/E` and reject any other. | §5, §6 | `PerceptionCodecErrorTest.unknownFrameTypeRejected` — `assertTrue(ex.getMessage().contains("Unknown frame type"))` |
 | R8 | WHEN a client registers THE SYSTEM SHALL encode `r\|<entityType>` with type ∈ {C,M,S}. | §6.1 | `RegisterFrameResumeTokenTest.encodeRegisterWithoutToken` — `assertEquals("r\|C", encoded)` |
 | R9 | WHEN syncing THE SYSTEM SHALL encode `S\|<entityId>[\|effects]`, the effects segment present only on resync. | §6.2 | `SyncFrameResumeTokenTest.parseSyncEntityOnly` — `assertEquals("abc-123", sf.entityId())`; V10 |
@@ -38,11 +38,20 @@ tunable defaults.
 | R17 | WHEN any valid frame is decoded then re-encoded THE SYSTEM SHALL produce byte-identical output. | §10 | `PerceptionCodecRoundTripTest.roundTripsExactly` — `assertEquals(wireFrame, reEncoded, …)`, all 13 vectors |
 | R18 | WHEN an `s` block exceeds `MAX_S_ENTRIES` (256) or a `v` block exceeds `MAX_V_ENTRIES` (32) THE SYSTEM SHALL throw `CodecException` (server then emits `E\|400`). | §12 | `PerceptionCodecErrorTest.boundedEntriesRejected` — `contains("MAX_S_ENTRIES")`; `boundedEventsRejected` — `contains("MAX_V_ENTRIES")` |
 
-**Pinning & deferrals.** R4/R5/R6/R17 share the byte-exact round-trip oracle (`roundTripsExactly`)
-— a strong joint gate, not clause-isolating. R1/R2 previously leaned on that oracle alone (a
-symmetric mis-parse/mis-encode bug survives round-trip); they now carry decode-isolating anchors
-(`Base64CodecTest`, `CoordTest`) that assert the decode direction against independent literals, with
-`roundTripsExactly` retained as the joint backstop. (R3's >±63 reachability check is now closed: investigation found no producer can emit
+**Pinning & deferrals.** R4/R5/R6 now carry **encode-isolating** anchors
+(`PerceptionCodecEncodeContractTest`) that build a frame directly from independent literals, encode
+it, and assert the one structural property each clause names — with `roundTripsExactly` retained as
+the joint backstop. R1/R2 previously leaned on that oracle alone (a symmetric mis-parse/mis-encode
+bug survives round-trip); they now carry decode-isolating anchors (`Base64CodecTest`, `CoordTest`)
+that assert the decode direction against independent literals. **R17 stays round-trip-only by
+definition** — it *is* the byte-exact round-trip contract, so there is nothing to isolate from.
+
+*RED-test evidence (2026-07-07), honest split:* a pure-encode regression breaks byte-exact
+round-trip, so `roundTripsExactly` **co-catches** the R4 (`,`→`;`) and R5 (coord-first-broken)
+perturbations via the §10 vectors — the encode-isolating gain there is the `;`-never leg for frame
+shapes no vector covers, plus clause-named failures. **R6 is the genuine blind-spot closure:** an
+f-before-c reorder was caught by `encodeEmitsBlocksInCanonicalOrder` **alone** — `roundTripsExactly`
+stayed green because no §10 vector exercises a `c` and an `f` block in the same frame. (R3's >±63 reachability check is now closed: investigation found no producer can emit
 >±63 in the current feature set, so the redundant codec clamp was removed and no behavioural fix was
 needed — see the R3 anchor note above.)
 
