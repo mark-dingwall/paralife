@@ -35,23 +35,25 @@ determinism hooks + long-run fixtures.
   out-of-band precedent). **M4 closed** — see [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 - **Docs editorial pass** ✅ — restructured `docs/` + added a STYLE guide; `CLAUDE.md` / `README.md`
   updated for relocations (`6ae67f9`, `b266d79`).
+- **22.1** ✅ **P22 revalidation & test-debt closeout** (`b2983b0`, PR #18) — resource-leak
+  invariants confirmed still holding post-P20/P21 (full suite green under `forkEvery=0`); re-enabled
+  `EncodeDeflatePerformanceGateTest` as a portable `@Tag("slow")` starvation guard; widened the
+  `HundredBotIntegrationTest` latch (a timeout-under-carrier-starvation flake, **not** a data race);
+  fixed stale `forkEvery=1` doc-drift. A cheap in-test super-linearity regression check was attempted
+  and **backed out** — tick-work wall-clock is too noise-dominated at this (11× headroom) scale to
+  gate on (evidence in `BACKLOG.md`); the regression **tripwire** is deferred to M5 with the rest
+  (needs a stable capacity rig).
 
 ## Active / Next
 
-1. **⏭ Phase 22.1 — P22 revalidation & test-debt closeout** *(in progress)* — resource-leak
-   invariants confirmed still holding post-P20/P21 (full suite green under `forkEvery=0`); re-enable
-   `EncodeDeflatePerformanceGateTest` as a portable `@Tag("slow")` starvation guard; widen the
-   `HundredBotIntegrationTest` latch (a timeout-under-carrier-starvation flake, **not** a data race);
-   fix stale `forkEvery=1` doc-drift. A cheap in-test super-linearity regression check was attempted
-   and **backed out** — tick-work wall-clock is too noise-dominated at this (11× headroom) scale to
-   gate on (evidence in `BACKLOG.md`); the regression **tripwire** is deferred to M5 with the rest
-   (needs a stable capacity rig). See *Process lanes* below.
+1. **⏭ M5 Observability & Operations** — live world visualiser (the unblocker for the gated work
+   below). Inherits the deferred tick-drift regression **tripwire** (absolute p99 / baseline-diff,
+   per-slot timers) from 22.1 — an absolute perf gate needs M5's stable capacity rig to set a
+   meaningful bound. No phase shape drafted yet.
 
 ## Later
 
-- **⏳ M5 Observability & Operations** — live world visualiser (the unblocker for the gated work below).
-  Inherits the deferred tick-drift regression **tripwire** (absolute p99 / baseline-diff, per-slot
-  timers) from 22.1 — an absolute perf gate needs M5's stable capacity rig to set a meaningful bound.
+- (M5 promoted to *Active / Next* — see above.)
 
 ## Gated
 
