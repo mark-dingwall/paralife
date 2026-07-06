@@ -158,8 +158,9 @@ tasks.register<Test>("leakProbe") {
             ?: "HundredBotIntegrationTest,StallRecoveryIntegrationTest," +
                "WebSocketIntegrationTest,PerceptionActionIntegrationTest,BotFleetTest"
 
-    // Neutralise the two inherited `tasks.withType<Test>` settings that would corrupt the probe:
-    //   1. forkEvery=1  → set 0 so all contexts share ONE JVM (the whole point).
+    // Harden the probe against the inherited `tasks.withType<Test>` settings:
+    //   1. forkEvery is already 0 above (`876c8b1`) — re-declared here explicitly so the
+    //      shared-ONE-JVM invariant (the whole point) survives a future edit to the parent.
     //   2. jacoco finalizer → jacocoTestReport dependsOn(test), which would drag in the
     //      entire pinned suite. Clear it; this is a measurement run, not a coverage run.
     forkEvery = 0
