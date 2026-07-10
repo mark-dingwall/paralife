@@ -87,7 +87,7 @@ verified existing test assertion; normative-layer note + honest-gaps deferral li
 two-gate rule (firewall-survivor **and** test-anchored) as `SCHEMA.md` §0 / `ADMISSION.md` §0.
 
 **Scope-diff vs original estimate:** this item scoped "§2–§6 only, ≈6–12 clauses." Delivered spans
-§2/§3/§4/§5/§6 **and §11** (ServerMetricsScraper — Phase 21 mechanism added *after* this item was
+§2/§3/§4/§5/§6/§8 **and §11** (ServerMetricsScraper — Phase 21 mechanism added *after* this item was
 written, live + test-anchored, so folded in) at **17** clauses — above the estimate. §1 / §7 / §10
 stay non-normative as planned; RUNTIME left out (knobs still not load-bearing). Trigger ("prove the
 living-spec cadence once") was satisfied by the SCHEMA R4/R5/R6 merge-back and then user-directed.
