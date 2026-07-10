@@ -1,8 +1,16 @@
 package com.paralife.websocket;
 
-import com.paralife.codec.PerceptionCodec;
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.paralife.codec.Frame;
+import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.EligibleCellIndex;
+import java.net.URI;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -12,14 +20,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
-
-import java.net.URI;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Phase 19 SCALE-06: Placement density integration test.
@@ -81,6 +81,8 @@ class PlacementDensityIntegrationTest {
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger gridFullCount = new AtomicInteger(0);
         AtomicInteger errorCount = new AtomicInteger(0);
+        // A31 — capture the exhaustion-boundary 503 payload to pin condition→token, not just code.
+        AtomicReference<String> gridFullPayload = new AtomicReference<>();
 
         for (int i = 0; i < MAX_BOTS; i++) {
             BlockingWebSocketClient client = new BlockingWebSocketClient();
@@ -112,6 +114,7 @@ class PlacementDensityIntegrationTest {
                 successCount.incrementAndGet();
             } else if (response.startsWith("E|503")) {
                 gridFullCount.incrementAndGet();
+                gridFullPayload.set(response);
                 log.info("GRID_FULL at bot {} after {} successful placements", i, successCount.get());
                 break; // found the boundary — test assertion can proceed
             } else if (response.startsWith("E|")) {
@@ -125,7 +128,7 @@ class PlacementDensityIntegrationTest {
                 while (System.nanoTime() < deadline) {
                     for (String r : client.received()) {
                         if (r.startsWith("S|")) { successCount.incrementAndGet(); gotSync = true; break; }
-                        if (r.startsWith("E|503")) { gridFullCount.incrementAndGet(); gotSync = true; break; }
+                        if (r.startsWith("E|503")) { gridFullCount.incrementAndGet(); gridFullPayload.set(r); gotSync = true; break; }
                         if (r.startsWith("E|")) { errorCount.incrementAndGet(); gotSync = true; break; }
                     }
                     if (gotSync) break;
@@ -148,6 +151,11 @@ class PlacementDensityIntegrationTest {
         assertThat(gridFullCount.get())
                 .as("GRID_FULL (E|503) must be received when eligible set is exhausted")
                 .isGreaterThan(0);
+
+        // A31 — the exhaustion 503 carries the exact grid-full token (condition→token, not just code).
+        assertThat(gridFullPayload.get())
+                .as("GRID_FULL frame must be the exact wire literal E|503|grid-full")
+                .isEqualTo("E|503|grid-full");
 
         // No unexpected errors during the fill.
         assertThat(errorCount.get())

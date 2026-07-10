@@ -25,9 +25,12 @@ magnitude: the tick-health watermarks (80/60), the queue size (128), and the gra
 / capacity), not asserted here as literals. The deliberate wire-literal pins are two: the resume-token
 *format* `r:%016x` (A9) — the immutable wire format, regex-pinned — and the rejection-token
 *vocabulary* strings (A28, below). Rejection **tokens**
-are pinned two ways: the condition → `RejectionToken.X` *routing* is pinned constant-referentially
-(A1–A6, A25–A27, for the gate-emitted subset); the frozen *string value* of all 9 §1 tokens is pinned
-as an independent wire literal by A28 (`RejectionTokenWireTest`).
+are pinned two ways. Condition → `RejectionToken.X` *routing*: constant-referentially for the
+**gate-emitted** subset (A1–A6, A25–A27), and by **independent wire literal** for three of the four
+**handler-emitted** tokens — `no-active-entity`/`malformed`/`grid-full` (A29/A30/A31, emitted by
+`WorldWebSocketHandler`, not `AdmissionGate`; the fourth, `reconnect-required`/408, stays `@slow`
+best-effort per D-07). Token *string value*: the frozen strings of all 9 §1 tokens are pinned as
+independent wire literals by A28 (`RejectionTokenWireTest`).
 
 | # | Requirement | § | Pinned by — anchor (test method · quoted assertion · symbol) |
 |---|---|---|---|
@@ -59,6 +62,9 @@ as an independent wire literal by A28 (`RejectionTokenWireTest`).
 | A26 | WHEN the tick-health gate is overloaded AND the global cap is already reached THE SYSTEM SHALL reject `tick-overload` (guard 2 > guard 5). | §1, §5 | `AdmissionGateTest.tickOverloadRejectedEvenWhenCapReached` — overloaded + cap armed via `seedReservedSlots()`, then `token()…isEqualTo(TICK_OVERLOAD)`. (Supersedes A4's "cap arg inert" caveat: this genuinely arms the reservation counter.) |
 | A27 | WHEN a valid STALLED resume token is presented AND the global cap is already reached THE SYSTEM SHALL rebind (guard 4 > guard 5), never reject `world-full`. | §1, §4, §5 | `AdmissionGateTest.validRebindWinsOverReachedCap` — `tryRebind` returns present + cap armed via `seedReservedSlots()`, then result `isInstanceOf(AdmissionResult.Rebind.class)`. |
 | A28 | WHEN encoding a rejection `ErrorFrame` that carries a §1 token THE SYSTEM SHALL produce the exact wire literal `E\|<code>\|<token>` verbatim (the frozen string value of the corresponding `RejectionToken` constant, all 9 §1 rows). | §1 | `RejectionTokenWireTest.tokenEncodesToExactWireLiteral` — parameterized over all 9 §1 rows; `PerceptionCodec.encode(new Frame.ErrorFrame(code, Optional.of(RejectionToken.X)))…isEqualTo` an **independent** literal (e.g. `"E\|429\|world-full"`), so renaming any constant's string value goes red. Pins the wire-encoding boundary, **not** condition→token routing (4 of 9 tokens are emitted outside `AdmissionGate`). |
+| A29 | WHEN an `ActionFrame` (`a\|`) arrives on a session with no active entity (`ATTR_ENTITY_ID` absent) THE SYSTEM SHALL reject `E\|404\|no-active-entity` and SHALL NOT queue the action. | §1 | `WorldWebSocketHandlerTest.actionOnUnregisteredSessionRejectedNoActiveEntity` — captured send `…equals("E\|404\|no-active-entity")` (independent literal) + `verify(actionResolver, never()).queueAction(eq("s1"),…)` isolates the not-queued conjunct (`@SpyBean`). Positive control `actionOnRegisteredSessionIsQueued` — registered session's action → `verify(...).queueAction(eq("s2"),…)`, proving both conjuncts are condition-specific. RED-tested: token swap → reject row red; `return` removed → not-queued row red. |
+| A30 | WHEN inbound text fails codec decode OR decodes to a client-illegal frame direction (`Sync`/`Tick`, server→client only) THE SYSTEM SHALL reject `E\|400\|malformed`. | §1 | `WorldWebSocketHandlerTest.malformedFrameProducesError400` — CodecException path, captured send `…equals("E\|400\|malformed")` (independent literal); `clientIllegalFrameDirectionRejectedAsMalformed` — parameterized `{Sync,Tick}` wire (encode-derived; `assertInstanceOf` precondition proves the illegal-direction arm is reached, not the CodecException fallback), each captured send `…equals("E\|400\|malformed")`. RED-tested: Sync-arm token swap → only the Sync row red, Tick green (per-arm isolation). Covers all 3 `MALFORMED` emit sites. |
+| A31 | WHEN registration placement exhausts the eligible set THE SYSTEM SHALL reject `E\|503\|grid-full`. | §1 | `PlacementDensityIntegrationTest.fillsGridAndReceivesGridFullOnExhaustion` — captured exhaustion-boundary 503 payload `…isEqualTo("E\|503\|grid-full")`, upgrading the prior code-only `startsWith("E\|503")` to the exact token. ⚠ **integration-anchored / non-isolating** (survive-a-run fill; condition→token pinned but not unit-isolated, analogous to A14/A22). RED-tested: token swap → red (`was "E\|503\|maintenance"`). |
 
 **Guard order (prose — precedence edges beyond A6 now clause-pinned).** `AdmissionGate.evaluate`
 applies six guards in fixed order (source: `AdmissionGate.java` guards 1–6 + javadoc lines 22–34):
@@ -75,15 +81,13 @@ only runs for `isRespawn` requests, which the cap guard skips), not a reorderabl
 
 **Pinning & deferrals.** Honest gaps — *not* minted as clauses:
 
-- **Partial (clause-adjacent, gap annotated) — routing, not string.** A28 now pins every §1 token's
-  *string value*; the residual gap for these three is condition→token **routing** (which handler emits
-  which token on which condition), not the literal. `malformed`/400 — code pinned by
-  `WorldWebSocketHandlerTest.malformedFrameProducesError400` (`err.code() == 400`); routing un-isolated.
-  `reconnect-required`/408 — close pinned by
+- **Handler-emitted routing — ✅ now pinned (A29/A30/A31).** A28 pins every §1 token's *string
+  value*; condition→token **routing** for the handler-emitted subset is now clause-pinned:
+  `no-active-entity`/404 (A29, unit-isolated, `@SpyBean` on the not-queued conjunct), `malformed`/400
+  (A30, all three inbound-illegal emit sites), `grid-full`/503 (A31, integration-anchored/non-isolating).
+  The one residual routing gap is `reconnect-required`/408 — close pinned by
   `StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed` (`@slow`); routing
-  best-effort per D-07. `grid-full`/503 — the 503 code + placement-exhaustion pinned by
-  `PlacementDensityIntegrationTest.fillsGridAndReceivesGridFullOnExhaustion` (`response.startsWith("E\|503")`),
-  a non-isolating survive-a-run integration test — routing demoted here, not a clean clause.
+  best-effort per D-07. → BACKLOG.
 - **Token wire-strings — ✅ now literal-pinned (A28).** Previously constant-referential only (§1
   clauses pin condition → `RejectionToken.X` *constant*, so renaming a token's string value stayed
   green); `RejectionTokenWireTest` now pins all 9 literals in the **default** suite against independent
@@ -91,10 +95,9 @@ only runs for `isRespawn` requests, which the cap guard skips), not a reorderabl
   `AdmissionLogMarkersIntegrationTest` remain as-is.)
 - **Integration / `@slow`-only anchors (A14, A22):** real but excluded from `./gradlew test` (run via
   `-PincludeLong=true`). Engine-direct unit decomposition → BACKLOG.
-- **Orphans (excluded from §0):** `no-active-entity`/404 (string now pinned by A28, but condition→token
-  *routing* still untested — no test drives an action frame on an Unregistered/Dead session); inbound
-  collapse-to-one *behaviour* (only the counter A24 is pinned). → BACKLOG. (The §5 N-1 gauge-lag
-  caveat is a documented observability note, not a deferred item — see §5.)
+- **Orphans (excluded from §0):** inbound collapse-to-one *behaviour* (only the counter A24 is
+  pinned). → BACKLOG. (`no-active-entity`/404 routing is no longer an orphan — now pinned by A29. The
+  §5 N-1 gauge-lag caveat is a documented observability note, not a deferred item — see §5.)
 - **Cross-guard precedence edges** beyond A6 — ✅ **now pinned** (A25 maintenance > overload/cap, A26
   overload > cap, A27 rebind > cap): the unit tests arm the `reservedSlots` cap gate via
   `seedReservedSlots()` (the production seed path), with `seededCapAloneRejectsWorldFull` as the
