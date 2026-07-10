@@ -57,12 +57,13 @@ literal string value is not asserted in the default suite (see the deferrals not
 | A26 | WHEN the tick-health gate is overloaded AND the global cap is already reached THE SYSTEM SHALL reject `tick-overload` (guard 2 > guard 5). | §1, §5 | `AdmissionGateTest.tickOverloadRejectedEvenWhenCapReached` — overloaded + cap armed via `seedReservedSlots()`, then `token()…isEqualTo(TICK_OVERLOAD)`. (Supersedes A4's "cap arg inert" caveat: this genuinely arms the reservation counter.) |
 | A27 | WHEN a valid STALLED resume token is presented AND the global cap is already reached THE SYSTEM SHALL rebind (guard 4 > guard 5), never reject `world-full`. | §1, §4, §5 | `AdmissionGateTest.validRebindWinsOverReachedCap` — `tryRebind` returns present + cap armed via `seedReservedSlots()`, then result `isInstanceOf(AdmissionResult.Rebind.class)`. |
 
-**Guard order (prose — only the A6 edge is clause-pinned).** `AdmissionGate.evaluate` applies six
-guards in fixed order (source: `AdmissionGate.java` guards 1–6 + javadoc lines 22–34):
+**Guard order (prose — precedence edges beyond A6 now clause-pinned).** `AdmissionGate.evaluate`
+applies six guards in fixed order (source: `AdmissionGate.java` guards 1–6 + javadoc lines 22–34):
 *maintenance → tick-overload → already-registered → resume-token-rebind → global cap → respawn-cap*.
-Five of the six adjacent edges are now clause-pinned: already-registered → resume-token (A6, armed
-isolating control `verify(...never()).tryRebind`); maintenance > overload and maintenance > cap
-(A25); overload > cap (A26); rebind > cap (A27). The cap-involving edges are pinned by arming the
+Five precedence edges are now clause-pinned: already-registered → resume-token (A6, armed isolating
+control `verify(...never()).tryRebind`); maintenance > overload and maintenance > cap (A25);
+overload > cap (A26); rebind > cap (A27). (The one adjacent edge still unpinned is
+tick-overload → already-registered.) The cap-involving edges are pinned by arming the
 reservation counter via `seedReservedSlots()` in-test (the production `@PostConstruct` seed path,
 which does not fire in unit tests) — without arming, the cap guard is inert and the precedence
 assertions pass vacuously; the positive control `seededCapAloneRejectsWorldFull` proves the seed
