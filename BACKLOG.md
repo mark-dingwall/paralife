@@ -125,13 +125,18 @@ the deferrals note.
 note). Closing them turns partial/annotated clauses into clean ones and kills the `@slow`-only and
 constant-referential blind spots.
 
-- Unit asserts for the 404 `no-active-entity` token (zero tests today), and the `malformed` /
-  `grid-full` token *strings* (only their HTTP codes are pinned now).
+- Condition→token **routing** asserts for the 404 `no-active-entity`, `malformed`, and `grid-full`
+  tokens (`no-active-entity` has no test at all; `malformed`/`grid-full` have handler tests that pin
+  the HTTP code but do not *isolate* token routing). Their token *strings* are now pinned by
+  ADMISSION §0 **A28** (`RejectionTokenWireTest`); only the routing (which handler emits which token
+  on which condition) remains.
 - Engine-direct unit twins for the `@slow`-only **A14** (`stallRecoveryRebindsEntityIdWithinGraceWindow`,
   `respawnCountRestoredAcrossRebind`) and **A22** (`stallExpiryReapsEntityAndForcesFreshRegistration`)
   so they gate in `./gradlew test`.
-- A codec admission-path `E`-frame literal test that locks the rejection token *strings* (the §1
-  mapping is pinned constant-referentially; the literal value is not).
+- ~~A codec admission-path `E`-frame literal test that locks the rejection token *strings*~~
+  ✅ **DONE 2026-07-11** — ADMISSION §0 **A28** (`RejectionTokenWireTest`) pins all 9 §1 token literals
+  in the default suite against independent `E|<code>|<token>` literals (RED-tested by mutating
+  `RejectionToken.WORLD_FULL`).
 - ~~Precedence-isolation tests that **arm the `reservedSlots` cap gate**~~ ✅ **DONE 2026-07-10** —
   `AdmissionGateTest` arms the cap via `seedReservedSlots()` + `seededCapAloneRejectsWorldFull`
   control; maintenance > overload/cap, overload > cap, rebind > cap now pinned as ADMISSION §0

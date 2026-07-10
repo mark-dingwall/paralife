@@ -22,10 +22,12 @@ assertion it turns on (the line that would go red — not merely "a test exists"
 **transformation contract** — a config accessor or a behavioural invariant — never a tunable
 magnitude: the tick-health watermarks (80/60), the queue size (128), and the grace window (10) are
 **test-owned** in their anchors (each anchor builds its own `TickOverloadConfig` / `BackpressureConfig`
-/ capacity), not asserted here as literals. The single deliberate wire-literal exception is the
-resume-token format `r:%016x` (A9) — the immutable wire contract, regex-pinned. Rejection **tokens**
-are pinned *constant-referentially*: the condition → `RejectionToken.X` mapping is the contract; the
-literal string value is not asserted in the default suite (see the deferrals note).
+/ capacity), not asserted here as literals. The deliberate wire-literal pins are two: the resume-token
+*format* `r:%016x` (A9) — the immutable wire format, regex-pinned — and the rejection-token
+*vocabulary* strings (A28, below). Rejection **tokens**
+are pinned two ways: the condition → `RejectionToken.X` *routing* is pinned constant-referentially
+(A1–A6, A25–A27, for the gate-emitted subset); the frozen *string value* of all 9 §1 tokens is pinned
+as an independent wire literal by A28 (`RejectionTokenWireTest`).
 
 | # | Requirement | § | Pinned by — anchor (test method · quoted assertion · symbol) |
 |---|---|---|---|
@@ -37,7 +39,7 @@ literal string value is not asserted in the default suite (see the deferrals not
 | A6 | WHEN a session is already Alive and presents a resume token THE SYSTEM SHALL reject `already-registered` (409) and SHALL NOT attempt rebind. | §1 | `AdmissionGateTest.rejectsAlreadyRegisteredBeforeResumeToken` — `code()…isEqualTo(409)` + `verify(resumeRegistry, never()).tryRebind(...)` (armed isolating control) |
 | A7 | WHEN a session transitions to Dead (`markDead`) THE SYSTEM SHALL remove its `entityId` attribute and clear its active resume-token slot. | §3 | `WorldWebSocketHandlerMarkDeadTest.markDeadCallsClearActiveOnResumeTokenRegistry` — `verify(resumeTokenRegistry).clearActive("entity-1")`; `markDeadRemovesEntityIdAttribute` — `attrs…doesNotContainKey(ATTR_ENTITY_ID)` |
 | A8 | WHEN a session's outbound transport errors into stall THE SYSTEM SHALL hold its entity on the grid for the grace sweep (not remove it immediately). | §3 | `WorldWebSocketHandlerRemediationTest.stalledTransportError_holdsEntityForGraceSweep` |
-| A9 | WHEN issuing a resume token THE SYSTEM SHALL format it `r:%016x` (`r:` + 16 lowercase-hex chars). | §4 | `ResumeTokenRegistryTest.issueActiveMatchesFormatAndDoesNotIncrementStalledSize` — `token…matches(TOKEN_FORMAT)` where `TOKEN_FORMAT = ^r:[0-9a-f]{16}$`. **The one literal-pinned wire constant.** |
+| A9 | WHEN issuing a resume token THE SYSTEM SHALL format it `r:%016x` (`r:` + 16 lowercase-hex chars). | §4 | `ResumeTokenRegistryTest.issueActiveMatchesFormatAndDoesNotIncrementStalledSize` — `token…matches(TOKEN_FORMAT)` where `TOKEN_FORMAT = ^r:[0-9a-f]{16}$`. The one literal-pinned wire *format* (A28 pins the fixed rejection-token *vocabulary*). |
 | A10 | WHEN a rebind is attempted THE SYSTEM SHALL succeed only for a STALLED token and reject an ACTIVE token. | §4 | `tryRebindOnStalledReturnsFreshActiveToken` — result present, fresh ACTIVE token ≠ old; `tryRebindRejectsActiveTokens` — `r…isEmpty()` |
 | A11 | WHEN a token is rebound THE SYSTEM SHALL consume it so a second rebind of the same token fails (no replay). | §4 | `doubleRebindOfSameTokenFails` — first `isPresent()`, second `isEmpty()` |
 | A12 | WHEN the per-tick sweep runs THE SYSTEM SHALL reap only STALLED+expired entries and invoke the cleanup callback with the entityId, never reaping ACTIVE entries. | §4 | `sweepReapsOnlyStalledExpiredAndInvokesCallbackWithEntityId` — `reaped…containsExactlyInAnyOrder("entity-1","entity-2")` + ACTIVE token retained; `sweepDoesNotReapActiveEntries` — `reaped…isEmpty()` |
@@ -56,6 +58,7 @@ literal string value is not asserted in the default suite (see the deferrals not
 | A25 | WHEN the maintenance flag is set THE SYSTEM SHALL reject `maintenance` ahead of every lower guard — over tick-overload (guard 2) and over a reached global cap (guard 5). | §1, §5 | `AdmissionGateTest.maintenanceRejectedEvenWhenOverloaded` — overloaded + maintenance → `token()…isEqualTo(MAINTENANCE)` (maintenance > overload); `maintenanceRejectedEvenWhenCapReached` — cap armed via `seedReservedSlots()` (grid at cap) → `MAINTENANCE` (maintenance > cap). Positive control `seededCapAloneRejectsWorldFull` proves the seed genuinely arms the cap guard (→ `WORLD_FULL` with no higher guard). |
 | A26 | WHEN the tick-health gate is overloaded AND the global cap is already reached THE SYSTEM SHALL reject `tick-overload` (guard 2 > guard 5). | §1, §5 | `AdmissionGateTest.tickOverloadRejectedEvenWhenCapReached` — overloaded + cap armed via `seedReservedSlots()`, then `token()…isEqualTo(TICK_OVERLOAD)`. (Supersedes A4's "cap arg inert" caveat: this genuinely arms the reservation counter.) |
 | A27 | WHEN a valid STALLED resume token is presented AND the global cap is already reached THE SYSTEM SHALL rebind (guard 4 > guard 5), never reject `world-full`. | §1, §4, §5 | `AdmissionGateTest.validRebindWinsOverReachedCap` — `tryRebind` returns present + cap armed via `seedReservedSlots()`, then result `isInstanceOf(AdmissionResult.Rebind.class)`. |
+| A28 | WHEN encoding a rejection `ErrorFrame` that carries a §1 token THE SYSTEM SHALL produce the exact wire literal `E\|<code>\|<token>` verbatim (the frozen string value of the corresponding `RejectionToken` constant, all 9 §1 rows). | §1 | `RejectionTokenWireTest.tokenEncodesToExactWireLiteral` — parameterized over all 9 §1 rows; `PerceptionCodec.encode(new Frame.ErrorFrame(code, Optional.of(RejectionToken.X)))…isEqualTo` an **independent** literal (e.g. `"E\|429\|world-full"`), so renaming any constant's string value goes red. Pins the wire-encoding boundary, **not** condition→token routing (4 of 9 tokens are emitted outside `AdmissionGate`). |
 
 **Guard order (prose — precedence edges beyond A6 now clause-pinned).** `AdmissionGate.evaluate`
 applies six guards in fixed order (source: `AdmissionGate.java` guards 1–6 + javadoc lines 22–34):
@@ -72,22 +75,24 @@ only runs for `isRespawn` requests, which the cap guard skips), not a reorderabl
 
 **Pinning & deferrals.** Honest gaps — *not* minted as clauses:
 
-- **Partial (clause-adjacent, gap annotated):** `malformed`/400 — code pinned by
-  `WorldWebSocketHandlerTest.malformedFrameProducesError400` (`err.code() == 400`), token string
-  un-asserted. `reconnect-required`/408 — close pinned by
-  `StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed` (`@slow`), token
+- **Partial (clause-adjacent, gap annotated) — routing, not string.** A28 now pins every §1 token's
+  *string value*; the residual gap for these three is condition→token **routing** (which handler emits
+  which token on which condition), not the literal. `malformed`/400 — code pinned by
+  `WorldWebSocketHandlerTest.malformedFrameProducesError400` (`err.code() == 400`); routing un-isolated.
+  `reconnect-required`/408 — close pinned by
+  `StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed` (`@slow`); routing
   best-effort per D-07. `grid-full`/503 — the 503 code + placement-exhaustion pinned by
   `PlacementDensityIntegrationTest.fillsGridAndReceivesGridFullOnExhaustion` (`response.startsWith("E\|503")`),
-  but token string un-asserted **and** a non-isolating survive-a-run integration test — demoted here,
-  not a clean clause.
-- **Token wire-strings are constant-referential, not literal-pinned.** §1 clauses pin
-  condition → `RejectionToken.X` *constant*; renaming a token's string value stays green in the
-  default suite (the literal-string assertions live in `@slow` integration tests such as the
-  non-normative `AdmissionLogMarkersIntegrationTest`). A codec admission-path `E`-frame literal
-  test → BACKLOG.
+  a non-isolating survive-a-run integration test — routing demoted here, not a clean clause.
+- **Token wire-strings — ✅ now literal-pinned (A28).** Previously constant-referential only (§1
+  clauses pin condition → `RejectionToken.X` *constant*, so renaming a token's string value stayed
+  green); `RejectionTokenWireTest` now pins all 9 literals in the **default** suite against independent
+  `E\|<code>\|<token>` literals. (The `@slow` literal assertions in the non-normative
+  `AdmissionLogMarkersIntegrationTest` remain as-is.)
 - **Integration / `@slow`-only anchors (A14, A22):** real but excluded from `./gradlew test` (run via
   `-PincludeLong=true`). Engine-direct unit decomposition → BACKLOG.
-- **Orphans (excluded from §0):** `no-active-entity`/404 (zero tests — grep-confirmed); inbound
+- **Orphans (excluded from §0):** `no-active-entity`/404 (string now pinned by A28, but condition→token
+  *routing* still untested — no test drives an action frame on an Unregistered/Dead session); inbound
   collapse-to-one *behaviour* (only the counter A24 is pinned). → BACKLOG. (The §5 N-1 gauge-lag
   caveat is a documented observability note, not a deferred item — see §5.)
 - **Cross-guard precedence edges** beyond A6 — ✅ **now pinned** (A25 maintenance > overload/cap, A26
