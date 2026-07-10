@@ -125,11 +125,11 @@ the deferrals note.
 note). Closing them turns partial/annotated clauses into clean ones and kills the `@slow`-only and
 constant-referential blind spots.
 
-- Condition→token **routing** asserts for the 404 `no-active-entity`, `malformed`, and `grid-full`
-  tokens (`no-active-entity` has no test at all; `malformed`/`grid-full` have handler tests that pin
-  the HTTP code but do not *isolate* token routing). Their token *strings* are now pinned by
-  ADMISSION §0 **A28** (`RejectionTokenWireTest`); only the routing (which handler emits which token
-  on which condition) remains.
+- ~~Condition→token **routing** asserts for the 404 `no-active-entity`, `malformed`, and `grid-full`
+  tokens~~ ✅ DONE 2026-07-11 — ADMISSION §0 **A29/A30/A31** (`WorldWebSocketHandlerTest` unit anchors
+  for `no-active-entity`/`malformed` incl. `@SpyBean` not-queued isolation; `PlacementDensityIntegrationTest`
+  token-tighten for `grid-full`). Residual: `reconnect-required`/408 routing stays `@slow`-only
+  best-effort per D-07 (not yet a clean clause).
 - Engine-direct unit twins for the `@slow`-only **A14** (`stallRecoveryRebindsEntityIdWithinGraceWindow`,
   `respawnCountRestoredAcrossRebind`) and **A22** (`stallExpiryReapsEntityAndForcesFreshRegistration`)
   so they gate in `./gradlew test`.
