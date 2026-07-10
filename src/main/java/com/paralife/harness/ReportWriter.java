@@ -2,9 +2,6 @@ package com.paralife.harness;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
@@ -14,13 +11,16 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Crash-safe report writer for the load harness (D-17).
  *
  * <p>Two modes:
  * <ul>
- *   <li><b>Overwrite</b> — {@link #writeOverwrite}: writes to {@code <target>.tmp} then
+ *   <li><b>Overwrite</b> — {@link #writeOverwrite}: writes to a unique per-call temp file
+ *       ({@link java.nio.file.Files#createTempFile}, {@code <target>.<rand>.tmp}) then
  *       atomic-rename to {@code <target>}. External readers never see a half-written file.
  *       Always merges header fields + live counters so header is never lost after the first
  *       write (OpenCode amendment).</li>
@@ -61,8 +61,8 @@ public final class ReportWriter {
      * <p>Algorithm:
      * <ol>
      *   <li>Ensure parent directory exists.</li>
-     *   <li>Write JSON to {@code <target>.tmp}.</li>
-     *   <li>Atomic-rename {@code .tmp} → {@code target}.</li>
+     *   <li>Write JSON to a unique temp file {@code <target>.<rand>.tmp}.</li>
+     *   <li>Atomic-rename that temp file → {@code target}.</li>
      * </ol>
      *
      * <p>The snapshot should be a {@link ReportSnapshot#merge(ReportSnapshot, ReportSnapshot)}

@@ -7,6 +7,56 @@ WS:entity 1:1 connection model with its design ceilings. Any change updates this
 
 See also: `ADMISSION.md` §1 (token taxonomy), §3 (FSM including STALLED), §4 (resume-token lifecycle); `SCHEMA.md` §6.1 (`r|` grammar — milestone-locked, not extended here).
 
+> **Normative layer:** the EARS clauses in **§0** are the contract. The prose sections (§1–§12) are
+> rationale, tables, and worked examples — where prose reads as a requirement, the §0 clause governs.
+> Reference-only sections are tagged *(non-normative)*.
+
+---
+
+## §0 Requirements (EARS)
+
+Each clause is `WHEN <event> THE SYSTEM SHALL <response>`, pinned to an existing test by the exact
+assertion it turns on (the line that would go red — not merely "a test exists"). Clauses pin the
+**transformation contract** — a regex, a fold rule, a parse grammar, a schema invariant — never a
+tunable magnitude: the cardinality cap (64) is **test-owned** in its fold anchors (each builds its
+own `AttributionTagger(cap, …)` with a small literal cap) and the production default is read back
+through the config accessor (H6); the `32`-char id bound is pinned constant-referentially via
+`AttributionSanitizer.MAX_HARNESS_ID_LENGTH` (H1). Emergence — throughput, tick drift, session
+stability, and the 5 000-conn/JVM **design ceiling** (§1) — is **not** pinned here; it is observed
+by the Phase 21 benchmark, never asserted in the default suite.
+
+| # | Requirement | § | Pinned by — anchor (test method · quoted assertion · symbol) |
+|---|---|---|---|
+| H1 | WHEN sanitizing a harness id THE SYSTEM SHALL accept exactly `^[A-Za-z0-9-]{1,32}$` and REJECT (`Optional.empty`) any non-conformant input — never truncating. | §2 | `AttributionSanitizerTest.longHarnessId_returnsEmpty` — `assertThat(sanitizeHarnessId(<44-char, all-valid-chars>)).isEmpty()` (rejected, not truncated to a 32-char prefix); `exactlyMaxLength_notTruncated` — `isEqualTo(Optional.of("a".repeat(MAX_HARNESS_ID_LENGTH)))` (32 survives verbatim); `disallowedChars_returnEmpty` (space/`=`/`/`/`_`/non-ASCII); `carriageReturn_/lineFeed_/tab_/nulChar_/delChar_returnsEmpty` (control bytes). Client mirror: `BotIdentityTest.harness_longIdRejected`. |
+| H2 | WHEN a client presents `source=harness` with a missing or sanitizer-rejected harness id THE SYSTEM SHALL fold `source` to `unknown` (the `source=harness ⇔ harness-id present` biconditional). | §2 | `WorldWebSocketHandlerHandshakeHeaderTest.harnessSourceWithoutHarnessHeader_foldsSourceToUnknown` — `ATTR_SOURCE…isEqualTo("unknown")` + `doesNotContainKey(ATTR_HARNESS)`; positive control `harnessSource_stashesAttrSourceAndAttrHarness` — valid → `ATTR_SOURCE=harness` **and** `ATTR_HARNESS=harness-A`. Client-ctor enforcement: `BotIdentityTest.directCtor_harnessWithEmptyIdThrows`, `directCtor_operatorWithHarnessIdThrows`. |
+| H3 | WHEN a client presents a `source` outside the allowed subset `{operator, harness, unknown}` (including the reserved `overflow`/`offspring`) THE SYSTEM SHALL fold it to `unknown`. | §4 | `WorldWebSocketHandlerHandshakeHeaderTest.reservedSourceOverflow_foldedToUnknown` — `ATTR_SOURCE…isEqualTo("unknown")`; `reservedSourceOffspring_foldedToUnknown`; `unknownSourceValue_foldsToUnknown` (out-of-taxonomy `"admin"`). Taxonomy backstop: `BotIdentityTest.sourceTaxonomyContainsExactly5Values`. |
+| H4 | WHEN no `X-Paralife-Source` header is present THE SYSTEM SHALL classify the session `source=unknown` with no harness tag. | §2 | `WorldWebSocketHandlerHandshakeHeaderTest.noHeaders_attrSourceIsUnknown` — `ATTR_SOURCE…isEqualTo("unknown")` + no `ATTR_HARNESS`; tagger unit: `AttributionTaggerTest.tagsForNullSessionReturnsSourceUnknown` — `isEqualTo(Tags.of("source","unknown"))`. |
+| H5 | WHEN `BotRunner` launches bots THE SYSTEM SHALL set `source=operator` with no harness id (keeping `operator` distinct from `unknown`). | §2 | `BotRunnerOperatorTagTest.botRunnerLaunchesWithOperatorIdentity` — `capturedIdentity…isEqualTo(BotIdentity.operator())`; wire form `BotClientHandshakeHeaderTest.operatorIdentity_sendsSourceHeaderOnly` — `containsEntry("x-paralife-source","operator")` + `doesNotContainKey("x-paralife-harness")`. |
+| H6 | WHEN the count of distinct harness ids exceeds the configured cap THE SYSTEM SHALL fold further ids to `harness=overflow`. | §2 | `AttributionTaggerTest.overflowFoldingAt65thUniqueId` — first 64 keep own id, 65th → `"overflow"` (test-owned cap 64); MeterFilter defense-in-depth `CardinalityCapTest.sixtyFifthAndSixtysSixthHarnessFoldToOverflow` — overflow gauge `isEqualTo(2.0)`. Default: `AttributionTaggerTest.maxHarnessCardinalityDefaultIs64` — `cfg.attribution().maxHarnessCardinality()…isEqualTo(64)` (config accessor). |
+| H7 | WHEN the cap first overflows THE SYSTEM SHALL emit exactly one WARN carrying the **raw** id (not `overflow`) and a `tick=` field. | §2, §5 | `AttributionTaggerTest.warnOnceLogEmittedAtFoldSiteWithRawId` — `warnings…hasSize(1)` + `contains("h-5")` + `doesNotContain("=overflow")`; `warnOnceLogContainsTickField` — `contains("tick=")`. |
+| H8 ⚠ | WHEN a stalled session rebinds within the grace window THE SYSTEM SHALL preserve its `source`/`harness` attribution across the pivot (session attributes and gauges). | §2, §8 | `AttributionRebindTest.stalledPivotPreservesSourceAndHarnessAttribution` — post-rebind session carries `ATTR_HARNESS`/`ATTR_SOURCE`; gauge `active.entities{source=harness}…isGreaterThanOrEqualTo(1.0)`; real rebind proven via `backpressure.rebound` delta `≥ 1.0`. ⚠ `@SpringBootTest` (default-gated, heavier). |
+| H9 | WHEN parsing `--duration` THE SYSTEM SHALL accept an INTEGER seconds value (0 = indefinite) and reject a duration string. | §3 | `LoadHarnessOptionsTest.duration_300seconds_parsesCorrectly` — `durationSeconds…isEqualTo(300)`; `duration_zero_parsesAsForever`; negative control `duration_isoString_exitsNonZero` — `rc…isNotEqualTo(0)` (rejects `PT5S`). |
+| H10 | WHEN parsing `--ramp-up` THE SYSTEM SHALL accept `instant \| rate:<n> \| wave:<c>:<s>` and reject any other syntax. | §3 | `LoadHarnessOptionsTest.rampUp_rate50_parsesCorrectly` — `((RampUpSpec.Rate) h.rampUp).perSecond()…isEqualTo(50)`; `rampUp_instant_/wave_parsesCorrectly`; negative control `rampUp_garbage_exitsNonZero`. |
+| H11 | WHEN parsing `--species-mix` THE SYSTEM SHALL accept `balanced \| <C>:<M>:<S>` (three fractions) and reject a two-fraction ratio. | §3 | `LoadHarnessOptionsTest.speciesMix_threePartRatio_parsesCorrectly`; `speciesMix_balanced_parsesCorrectly`; negative control `speciesMix_twoFractions_exitsNonZero`. |
+| H12 | WHEN writing a report THE SYSTEM SHALL serialize snake_case and publish via atomic temp-rename so a reader never observes a torn file and no residual temp file is left behind. | §6 | `ReportWriterTest.writeOverwrite_fieldNamesAreSnakeCase` (camelCase absent); `writeOverwrite_tmpFileDoesNotExistAfterWrite` — after write, `Files.list(dir)` filtered to `*.tmp` `…isEmpty()` (no residual temp; the impl stages via `Files.createTempFile` random names, so this scans the dir rather than a fixed path — RED-tested against a leave-temp mutant); concurrency `concurrentWriteOverwrite_neverProducesTornFile` (50 VTs, final always parses valid). |
+| H13 | WHEN emitting `server_metrics` THE SYSTEM SHALL include the full `ReportSnapshot.BENCHMARK_METER_NAMES` key set, with `null` for any meter not scraped (fail-soft; a run never fails on a missing meter). | §6 | `ReportSnapshotTest.absentMeterNormalizesToNullValuedCategoryKey` — `serverMetrics().keySet()…containsExactlyInAnyOrderElementsOf(BENCHMARK_METER_NAMES.keySet())` + `get("paralife.tick.work.ms")…isNull()`; `serverMetricsKeyOrderIsDeterministic`; `bareFactoriesDefaultServerMetricsToEmptyNeverNull`. |
+| H14 | WHEN `--report-mode overwrite` THE SYSTEM SHALL merge header+counters into one object retaining header fields; WHEN `append` THE SYSTEM SHALL emit JSONL (header first line, counter lines after). | §6 | `ReportWriterTest.writeOverwrite_secondWriteRetainsHeaderFields` — `harness_id…isEqualTo("test-harness-01")` after 2nd write; `appendJsonl_firstCallWritesHeaderAsJson`; `appendJsonl_subsequentCallsAppendCounterLines` (3 lines); `appendJsonl_eachLineIsIndependentlyParseable`. |
+| H15 | WHEN the run terminates THE SYSTEM SHALL write `exit_reason` ∈ `{duration-reached, signal, fatal-error}` on the final report write. | §6 | `LoadHarnessIntegrationTest.basicRun_exitCode0_reportWritten_snakeCaseFields` — `exit_reason…isEqualTo("duration-reached")`; `signalPathFinalReport_carriesExitReasonAndCounters` — `…isEqualTo("signal")`; enum `shutdownHook_producesGenericSignalReason` — `isIn("duration-reached","signal","fatal-error")`. |
+| H16 | WHEN scraping server meters THE SYSTEM SHALL omit any missing/erroring/stalled meter (never throw) and bound the whole scrape within `TOTAL_BUDGET`. | §11 | `ServerMetricsScraperTest.scrapeOmitsStalledMeterAndStaysWithinBudget` — `out…containsExactly(entry("fast",7.0))` (stalled omitted, not thrown) + `elapsedMs…isLessThan(1000)` (bounded, not `meters × timeout`); `returnsNullForAbsentStatisticOrMalformedJson`. Live control `ScrapeLiveIntegrationTest` — ⚠ `@Tag("slow")`, excluded from `./gradlew test`. |
+| H17 | WHEN scraping THE SYSTEM SHALL select the per-meter statistic and derive the actuator base from `--server-uri` (`ws→http`, `wss→https`, `/ws/world→/actuator/`). | §11 | `ServerMetricsScraperTest.parsesRequestedStatisticFromCannedActuatorJson` — `parseMetricValue(json,"MAX")…isEqualTo(11.0)`; `derivesActuatorBaseFromWsServerUri` — `actuatorBaseFrom("ws://h:8080/ws/world")…isEqualTo(URI.create("http://h:8080/actuator/"))`; `derivesHttpsForWssRegardlessOfCase`. |
+
+**Pinning & deferrals.** Gating: all §0 anchors run in the default `./gradlew test` **except** the
+scraper live control `ScrapeLiveIntegrationTest` (H16), which is `@Tag("slow")` (opt-in via
+`-PincludeLong=true`). `@SpringBootTest` anchors (H2/H3/H4 handshake, H8 rebind, H14/H15 integration)
+are default-gated but heavier. Honest gaps — behaviour that is documented prose but **not** minted as
+a clause because no isolating test pins it:
+
+- **`BotIdentity.CLIENT_ALLOWED_SOURCES` set membership** — H3 pins the *behavioural fold* (out-of-subset → `unknown`) server-side, but no unit test asserts the constant's contents directly (contrast `sourceTaxonomyContainsExactly5Values` for the full taxonomy). → BACKLOG.
+- **CLI required-flag enforcement** — `--server-uri` / `--count` requiredness is implicit (every passing test supplies both); no test omits one and asserts non-zero exit. H9–H11 pin the *value grammars*, not requiredness. → BACKLOG.
+- **`PARALIFE_HARNESS_*` env-var resolution** — `LoadHarnessOptionsTest` pins the `${env:…}` annotation string and the int type contract, but never sets a real environment variable end-to-end. → BACKLOG.
+- **`exit_reason` absence on non-final writes** and the **`fatal-error` trigger** — H15 pins presence + enum on the final write; no test pins that a periodic counter object omits `exit_reason`, and `fatal-error` is enumerated but never exercised. → BACKLOG.
+- **Scraper non-200 / thrown-response omission** — H16's fail-soft is pinned via a never-completing future (budget) and parse-layer nulls; the explicit `statusCode()==404`/throwing-response branch is untested. → BACKLOG.
+
 ---
 
 ## §1 Architectural Principles

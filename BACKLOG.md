@@ -80,21 +80,44 @@ small production instrumentation hook). Also inherits the absolute-p99 / baselin
 and per-slot `@Order` timers from the Phase-21/22.1 discussion. *Anchor:* M5 observability; `TickEngine.tick.work.ms`;
 `docs/BENCHMARKS.md`. (Attempted + backed out in Phase 22.1, 2026-07-06.)
 
-## HARNESS EARS rollout (deferred, gated)
+## HARNESS EARS rollout — ✅ LANDED 2026-07-07
 
-**Why:** ADMISSION §0 landed (EARS Rollout #2); HARNESS is the deliberate next gate, not this slice.
-Scope is mechanism **§2–§6 only** — handshake attribution, the sanitizer regex-reject
-(`^[A-Za-z0-9-]{1,32}$`), the `source=harness ⇔ id` invariant, the cardinality cap, the source
-taxonomy, the JSON-report atomic-rename, and T-18-04 rebind — ≈6–12 anchored clauses. §1 / §7 / §10
-stay tagged non-normative. RUNTIME is **no-go** in the Phase 20 state (the knobs aren't live); revisit
-only if Phase 21 makes them load-bearing.
+**Status:** `docs/HARNESS.md` §0 authored with **17** anchored clauses (H1–H17), each pinned to a
+verified existing test assertion; normative-layer note + honest-gaps deferral list added. Same
+two-gate rule (firewall-survivor **and** test-anchored) as `SCHEMA.md` §0 / `ADMISSION.md` §0.
 
-**Trigger:** after one real admission-touching change exercises the ADMISSION §0 merge-back — i.e.
-prove the living-spec cadence pays for itself once before extending it (resolves GSD-graduation
-open-Q3 with evidence, not assertion).
+**Scope-diff vs original estimate:** this item scoped "§2–§6 only, ≈6–12 clauses." Delivered spans
+§2/§3/§4/§5/§6/§8 **and §11** (ServerMetricsScraper — Phase 21 mechanism added *after* this item was
+written, live + test-anchored, so folded in) at **17** clauses — above the estimate. §1 / §7 / §10
+stay non-normative as planned; RUNTIME left out (knobs still not load-bearing). Trigger ("prove the
+living-spec cadence once") was satisfied by the SCHEMA R4/R5/R6 merge-back and then user-directed.
 
-**Anchor:** new `## §0` on `docs/HARNESS.md`; same two-gate rule (firewall-survivor **and**
-test-anchored) as `SCHEMA.md` §0 / `ADMISSION.md` §0.
+**Historical why:** ADMISSION §0 landed (EARS Rollout #2); HARNESS was the deliberate next gate.
+
+## HARNESS §0 anchor-hardening follow-ups
+
+**Why:** HARNESS §0 carries known gaps its "Pinning & deferrals" note records — documented prose not
+minted as clauses because no isolating test pins them. Closing them promotes prose to clauses.
+
+- **`BotIdentity.CLIENT_ALLOWED_SOURCES` set membership** — H3 pins the behavioural fold
+  (out-of-subset → `unknown`) server-side, but no unit test asserts the constant's contents (contrast
+  `BotIdentityTest.sourceTaxonomyContainsExactly5Values` for the full taxonomy).
+- **CLI required-flag enforcement** — no test omits `--server-uri` / `--count` and asserts non-zero
+  exit; requiredness is implicit. H9–H11 pin value grammars only.
+- **`PARALIFE_HARNESS_*` env-var resolution** — `LoadHarnessOptionsTest` pins the `${env:…}`
+  annotation string + int type contract, but never sets a real env var end-to-end.
+- **`exit_reason` absence on non-final writes** + the **`fatal-error` trigger** — H15 pins presence +
+  enum on the final write; no test pins a periodic counter object omits `exit_reason`, and
+  `fatal-error` is enumerated but never exercised.
+- **ServerMetricsScraper non-200 / thrown-response omission** — H16's fail-soft is pinned via a
+  never-completing future (budget) + parse-layer nulls; the explicit `statusCode()==404`/throwing
+  branch is untested.
+
+**Trigger:** opportunistic / next harness-touching change.
+
+**Anchor:** `AttributionSanitizerTest`, `BotIdentityTest`, `LoadHarnessOptionsTest`,
+`LoadHarnessIntegrationTest`, `ServerMetricsScraperTest`; strengthens `HARNESS.md` §0 H3/H9/H15/H16 +
+the deferrals note.
 
 ## ADMISSION §0 anchor-hardening follow-ups
 

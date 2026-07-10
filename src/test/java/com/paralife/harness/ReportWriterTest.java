@@ -1,10 +1,9 @@
 package com.paralife.harness;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
-
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -12,8 +11,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-
-import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Tests for ReportWriter: atomic-rename JSON overwrite mode and JSONL append mode.
@@ -53,12 +52,18 @@ class ReportWriterTest {
     @Test
     void writeOverwrite_tmpFileDoesNotExistAfterWrite(@TempDir Path tmp) throws Exception {
         Path target = tmp.resolve("report.json");
-        Path tmpFile = tmp.resolve("report.json.tmp");
         ReportWriter writer = new ReportWriter();
 
         writer.writeOverwrite(target, ReportSnapshot.merge(buildHeader(), buildCounters(null)));
 
-        assertThat(tmpFile).doesNotExist();
+        // writeOverwrite stages via Files.createTempFile (a random <name>.<n>.tmp), so a fixed
+        // "report.json.tmp" path is never produced and would pass vacuously even if the temp file
+        // were orphaned. Assert the directory holds NO residual *.tmp after the atomic replace.
+        try (var stream = Files.list(tmp)) {
+            assertThat(stream.filter(p -> p.getFileName().toString().endsWith(".tmp")))
+                    .as("no residual temp file after atomic write")
+                    .isEmpty();
+        }
         assertThat(target).exists();
     }
 
