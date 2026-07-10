@@ -132,9 +132,10 @@ constant-referential blind spots.
   so they gate in `./gradlew test`.
 - A codec admission-path `E`-frame literal test that locks the rejection token *strings* (the §1
   mapping is pinned constant-referentially; the literal value is not).
-- Precedence-isolation tests that **arm the `reservedSlots` cap gate** (`@PostConstruct` doesn't fire
-  in the current unit tests) so the maintenance > overload, overload > cap, and rebind > cap edges go
-  red on regression — promoting them from prose to clauses.
+- ~~Precedence-isolation tests that **arm the `reservedSlots` cap gate**~~ ✅ **DONE 2026-07-10** —
+  `AdmissionGateTest` arms the cap via `seedReservedSlots()` + `seededCapAloneRejectsWorldFull`
+  control; maintenance > overload/cap, overload > cap, rebind > cap now pinned as ADMISSION §0
+  A25–A27 (RED-tested by cap-first guard reorder).
 - Shape-pin the three `BACKPRESSURE` marker shapes emitted but asserted by no test —
   `held-on-close`, `rebind-stale`, `transport-error-held` (STALLED-lifecycle edge transitions;
   the other 7 of 10 marker shapes are pinned by `AdmissionLogMarkersIntegrationTest` /

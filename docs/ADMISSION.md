@@ -53,15 +53,22 @@ literal string value is not asserted in the default suite (see the deferrals not
 | A22 ⚠ | WHEN the grace window expires THE SYSTEM SHALL reap the held entity and force fresh registration. | §6 | `StallRecoveryIntegrationTest.stallExpiryReapsEntityAndForcesFreshRegistration` — ⚠ `@Tag("slow")`, excluded from `./gradlew test` |
 | A23 | WHEN a registration is rejected THE SYSTEM SHALL increment `paralife.admission.rejected` tagged `reason=<token>`. | §7 | `AdmissionMetricsTest.rejectedCounterTaggedByReason` — `counter(M_REJECTED,"reason",WORLD_FULL,…).count()…isEqualTo(2.0)` (+ TICK_OVERLOAD=1.0, MAINTENANCE=0.0 negative control) |
 | A24 | WHEN an inbound action overwrites a pending action THE SYSTEM SHALL increment `paralife.admission.ingress.overwrites`. | §7 | `AdmissionMetricsTest.ingressOverwriteCounterIsAggregate` — `counter(M_INGRESS_OVERWRITES,…).count()…isEqualTo(2.0)` |
+| A25 | WHEN the maintenance flag is set THE SYSTEM SHALL reject `maintenance` ahead of every lower guard — over tick-overload (guard 2) and over a reached global cap (guard 5). | §1, §5 | `AdmissionGateTest.maintenanceRejectedEvenWhenOverloaded` — overloaded + maintenance → `token()…isEqualTo(MAINTENANCE)` (maintenance > overload); `maintenanceRejectedEvenWhenCapReached` — cap armed via `seedReservedSlots()` (grid at cap) → `MAINTENANCE` (maintenance > cap). Positive control `seededCapAloneRejectsWorldFull` proves the seed genuinely arms the cap guard (→ `WORLD_FULL` with no higher guard). |
+| A26 | WHEN the tick-health gate is overloaded AND the global cap is already reached THE SYSTEM SHALL reject `tick-overload` (guard 2 > guard 5). | §1, §5 | `AdmissionGateTest.tickOverloadRejectedEvenWhenCapReached` — overloaded + cap armed via `seedReservedSlots()`, then `token()…isEqualTo(TICK_OVERLOAD)`. (Supersedes A4's "cap arg inert" caveat: this genuinely arms the reservation counter.) |
+| A27 | WHEN a valid STALLED resume token is presented AND the global cap is already reached THE SYSTEM SHALL rebind (guard 4 > guard 5), never reject `world-full`. | §1, §4, §5 | `AdmissionGateTest.validRebindWinsOverReachedCap` — `tryRebind` returns present + cap armed via `seedReservedSlots()`, then result `isInstanceOf(AdmissionResult.Rebind.class)`. |
 
-**Guard order (prose — only the A6 edge is clause-pinned).** `AdmissionGate.evaluate` applies six
-guards in fixed order (source: `AdmissionGate.java` guards 1–6 + javadoc lines 22–34):
+**Guard order (prose — precedence edges beyond A6 now clause-pinned).** `AdmissionGate.evaluate`
+applies six guards in fixed order (source: `AdmissionGate.java` guards 1–6 + javadoc lines 22–34):
 *maintenance → tick-overload → already-registered → resume-token-rebind → global cap → respawn-cap*.
-Of these, **only** the already-registered → resume-token edge is minted as a clause (A6) — it is the
-sole edge with an armed isolating control (`verify(...never()).tryRebind`). The other edges
-(maintenance > overload, overload > cap, rebind > cap) are documented here but **not clause-pinned**:
-the unit tests don't arm the cap gate (`@PostConstruct seedReservedSlots` doesn't fire), so a
-precedence regression on those edges would not go red. → BACKLOG.
+Five precedence edges are now clause-pinned: already-registered → resume-token (A6, armed isolating
+control `verify(...never()).tryRebind`); maintenance > overload and maintenance > cap (A25);
+overload > cap (A26); rebind > cap (A27). (The one adjacent edge still unpinned is
+tick-overload → already-registered.) The cap-involving edges are pinned by arming the
+reservation counter via `seedReservedSlots()` in-test (the production `@PostConstruct` seed path,
+which does not fire in unit tests) — without arming, the cap guard is inert and the precedence
+assertions pass vacuously; the positive control `seededCapAloneRejectsWorldFull` proves the seed
+genuinely trips the cap guard. The remaining edge — respawn-cap being lowest — is structural (guard 6
+only runs for `isRespawn` requests, which the cap guard skips), not a reorderable precedence.
 
 **Pinning & deferrals.** Honest gaps — *not* minted as clauses:
 
@@ -83,9 +90,11 @@ precedence regression on those edges would not go red. → BACKLOG.
 - **Orphans (excluded from §0):** `no-active-entity`/404 (zero tests — grep-confirmed); inbound
   collapse-to-one *behaviour* (only the counter A24 is pinned). → BACKLOG. (The §5 N-1 gauge-lag
   caveat is a documented observability note, not a deferred item — see §5.)
-- **Cross-guard precedence edges** beyond A6 (maintenance > overload, overload > cap, rebind > cap):
-  documented in the guard-order prose above from source, **not pinned** (the unit tests don't arm the
-  `reservedSlots` cap gate). → BACKLOG.
+- **Cross-guard precedence edges** beyond A6 — ✅ **now pinned** (A25 maintenance > overload/cap, A26
+  overload > cap, A27 rebind > cap): the unit tests arm the `reservedSlots` cap gate via
+  `seedReservedSlots()` (the production seed path), with `seededCapAloneRejectsWorldFull` as the
+  positive control. RED-tested by moving the cap check ahead of guards 1/2/4 (all three go red;
+  control stays green).
 
 ---
 
