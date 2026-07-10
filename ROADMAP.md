@@ -80,9 +80,9 @@ determinism hooks + long-run fixtures.
 - **Docs editorial** — see *Active / Next #1*.
 - **EARS anchor sweep** — opportunistic. Convert remaining oracle-shared / constant-referential clauses
   into clause-isolating anchors, as piloted on SCHEMA §0 R1/R2. Done: SCHEMA R4/R5/R6 encode-isolating
-  anchors (PR #19); HARNESS §0 authored (17 clauses, 2026-07-07). Remaining live target: ADMISSION §0
-  anchor-hardening (arm the cap gate for precedence edges; `@slow`-only A14/A22 twins; token-string
-  literals). Tracked in [`BACKLOG.md`](BACKLOG.md).
+  anchors (PR #19); HARNESS §0 authored (17 clauses); ADMISSION §0 precedence edges pinned (A25–A27,
+  cap-gate arming). Remaining ADMISSION §0 hardening: `@slow`-only A14/A22 engine-direct twins,
+  rejection token-string literal test, `no-active-entity`/404 orphan. Tracked in [`BACKLOG.md`](BACKLOG.md).
 - **Deferred / tech-debt** — `999.x` items (offspring agency, verb-role coupling, VT-pinning conversion,
   namespace consolidation, JFR re-baseline) live in [`.planning/ROADMAP.md`](.planning/ROADMAP.md)
   §Backlog and [`BACKLOG.md`](BACKLOG.md). Promote when their trigger fires.

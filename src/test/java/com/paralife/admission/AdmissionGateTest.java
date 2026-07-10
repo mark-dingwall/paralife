@@ -1,18 +1,17 @@
 package com.paralife.admission;
 
-import com.paralife.websocket.RespawnConfig;
-import com.paralife.world.WorldGrid;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
-
-import java.util.Optional;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+
+import com.paralife.websocket.RespawnConfig;
+import com.paralife.world.WorldGrid;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 class AdmissionGateTest {
 
@@ -103,6 +102,73 @@ class AdmissionGateTest {
         assertThat(gate.evaluate(req(false, false, 0, Optional.empty()))).isInstanceOf(AdmissionResult.Allow.class);
         AdmissionResult r = gate.evaluate(req(false, false, 0, Optional.empty()));
         assertThat(((AdmissionResult.Reject) r).token()).isEqualTo(RejectionToken.WORLD_FULL);
+    }
+
+    // --- Precedence: cap-armed edges. Global cap (guard 5) is the LOWEST-precedence reject;
+    //     maintenance (1), tick-overload (2), and a valid rebind (4) must all win over a reached
+    //     cap. These arm the reservation counter via seedReservedSlots() — the production
+    //     @PostConstruct seed path, which does NOT fire in unit tests — because without arming, the
+    //     cap guard is inert and the precedence assertions pass vacuously (ADMISSION.md §0 A25–A27
+    //     + guard-order note). ---
+
+    /**
+     * Positive control: with the reservation counter seeded to the cap, a plain registration is
+     * rejected WORLD_FULL. Proves the seed-arming genuinely trips the cap guard, so the three
+     * precedence tests below cannot be vacuously green.
+     */
+    @Test
+    void seededCapAloneRejectsWorldFull() {
+        when(worldGrid.livingEntityCount()).thenReturn(cfg.cap());
+        gate.seedReservedSlots();
+        assertThat(gate.reservedSlots()).isEqualTo(cfg.cap());
+        AdmissionResult r = gate.evaluate(req(false, false, 0, Optional.empty()));
+        assertThat(((AdmissionResult.Reject) r).token()).isEqualTo(RejectionToken.WORLD_FULL);
+    }
+
+    @Test
+    void maintenanceRejectedEvenWhenOverloaded() {
+        cfg = new AdmissionConfig(2, true, cfg.tickOverload(), cfg.backpressure(), cfg.attribution());
+        gate = new AdmissionGate(cfg, respawnCfg, worldGrid, tickHealth, resumeRegistry, metrics);
+        when(tickHealth.isOverloaded()).thenReturn(true);
+        AdmissionResult r = gate.evaluate(req(false, false, 0, Optional.empty()));
+        assertThat(((AdmissionResult.Reject) r).token())
+                .as("maintenance (guard 1) must win over tick-overload (guard 2)")
+                .isEqualTo(RejectionToken.MAINTENANCE);
+    }
+
+    @Test
+    void maintenanceRejectedEvenWhenCapReached() {
+        cfg = new AdmissionConfig(2, true, cfg.tickOverload(), cfg.backpressure(), cfg.attribution());
+        gate = new AdmissionGate(cfg, respawnCfg, worldGrid, tickHealth, resumeRegistry, metrics);
+        when(worldGrid.livingEntityCount()).thenReturn(cfg.cap());
+        gate.seedReservedSlots();
+        AdmissionResult r = gate.evaluate(req(false, false, 0, Optional.empty()));
+        assertThat(((AdmissionResult.Reject) r).token())
+                .as("maintenance (guard 1) must win over a reached cap (guard 5)")
+                .isEqualTo(RejectionToken.MAINTENANCE);
+    }
+
+    @Test
+    void tickOverloadRejectedEvenWhenCapReached() {
+        when(tickHealth.isOverloaded()).thenReturn(true);
+        when(worldGrid.livingEntityCount()).thenReturn(cfg.cap());
+        gate.seedReservedSlots();
+        AdmissionResult r = gate.evaluate(req(false, false, 0, Optional.empty()));
+        assertThat(((AdmissionResult.Reject) r).token())
+                .as("tick-overload (guard 2) must win over a reached cap (guard 5)")
+                .isEqualTo(RejectionToken.TICK_OVERLOAD);
+    }
+
+    @Test
+    void validRebindWinsOverReachedCap() {
+        when(resumeRegistry.tryRebind(Mockito.anyString(), Mockito.anyString(), Mockito.anyLong()))
+                .thenReturn(Optional.of(new ResumeTokenRegistry.RebindOutcome("entity-X", "r:0000feedface0001")));
+        when(worldGrid.livingEntityCount()).thenReturn(cfg.cap());
+        gate.seedReservedSlots();
+        AdmissionResult r = gate.evaluate(req(false, false, 0, Optional.of("r:0000deadbeef0001")));
+        assertThat(r)
+                .as("a valid STALLED rebind (guard 4) must win over a reached cap (guard 5)")
+                .isInstanceOf(AdmissionResult.Rebind.class);
     }
 
     @Test
