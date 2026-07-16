@@ -130,9 +130,13 @@ constant-referential blind spots.
   for `no-active-entity`/`malformed` incl. `@SpyBean` not-queued isolation; `PlacementDensityIntegrationTest`
   token-tighten for `grid-full`). Residual: `reconnect-required`/408 routing stays `@slow`-only
   best-effort per D-07 (not yet a clean clause).
-- Engine-direct unit twins for the `@slow`-only **A14** (`stallRecoveryRebindsEntityIdWithinGraceWindow`,
-  `respawnCountRestoredAcrossRebind`) and **A22** (`stallExpiryReapsEntityAndForcesFreshRegistration`)
-  so they gate in `./gradlew test`.
+- ~~Engine-direct unit twins for the `@slow`-only **A14** and **A22** so they gate in `./gradlew test`~~
+  ✅ DONE 2026-07-11 — most of the mechanism was already default-gated (A14 entityId/grace → A10/A13;
+  A22 reap-detection → A12; fresh-registration routing → `AdmissionGateTest.unknownResumeTokenFallsThroughToFreshRegistration`);
+  the sole gap, A14's **respawn-count restore**, is now pinned by
+  `WorldWebSocketHandlerTest.rebindRestoresRespawnCountFromStallSnapshot` (engine-direct, no overflow).
+  The `StallRecoveryIntegrationTest` `@slow` anchors stay as the E2E overflow-driven wiring (A22's
+  callback-body grid/registry removal remains integration-shaped).
 - ~~A codec admission-path `E`-frame literal test that locks the rejection token *strings*~~
   ✅ **DONE 2026-07-11** — ADMISSION §0 **A28** (`RejectionTokenWireTest`) pins all 9 §1 token literals
   in the default suite against independent `E|<code>|<token>` literals (RED-tested by mutating
