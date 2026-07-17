@@ -6,9 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 import com.paralife.admission.OutboundSender;
+import com.paralife.admission.ResumeTokenRegistry;
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.ActionResolver;
+import com.paralife.engine.TickEvent;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +59,9 @@ class WorldWebSocketHandlerTest {
 
     @Autowired
     OutboundSender outboundSender;
+
+    @Autowired
+    ResumeTokenRegistry resumeTokenRegistry;
 
     // A29 — spy the real bean so the "SHALL NOT queue" conjunct is isolable via verify(never()).
     @SpyBean
@@ -290,14 +295,18 @@ class WorldWebSocketHandlerTest {
      * branch returns before {@code queueAction} guard-or-no-guard). {@code clearInvocations} discards
      * {@code markStalled}'s own best-effort OOB 408 so the verified 408 is the inbound guard's.
      *
-     * <p>Universality — the clause quantifies over <i>any</i> inbound frame; sufficiency of a single
-     * kind rests on the guard preceding decode/dispatch. Exercised on two kinds (action {@code a|M|1}
-     * and register {@code r|C}) so a hypothetical per-frame-kind relocation of the guard is caught.
+     * <p>Universality — the clause quantifies over <i>any</i> inbound frame. The guard sits at the top
+     * of {@code handleTextMessage}, before {@code PerceptionCodec.decode}, so one frame per distinct
+     * path suffices: a decoded action ({@code a|M|1}), a decoded register ({@code r|C}), and
+     * undecodable text (the pre-decode path — garbage that would otherwise 400 must 408 instead). A
+     * per-frame-kind or post-decode relocation of the guard fails at least one of the three.
      *
-     * <p>Distinct session id ("sc408") for the same shared-context reason as the A14 twin; the stalled
-     * session is reaped via {@code cleanupByEntityId} (not {@code cleanupBot}) — {@code markStalled}
-     * cleared {@code ATTR_ENTITY_ID}, so {@code cleanupBot} alone would skip the
-     * {@code LiveEntityRegistry} unregister and leak the entity into the {@code forkEvery=0} JVM.
+     * <p>Distinct session id ("sc408") for the same shared-context reason as the A14 twin. Teardown
+     * reaps via the production grace-expiry sweep ({@code ResumeTokenRegistry.onTick} past the grace
+     * window) — the single correct reaper: {@code markStalled} left a STALLED token + incremented the
+     * stalled-sessions gauge, and only the sweep (not {@code cleanupByEntityId}, whose
+     * {@code clearActive} preserves STALLED by contract) removes both, so nothing leaks into the
+     * {@code forkEvery=0} JVM.
      */
     @Test
     void stalledSessionInboundRejectedWithReconnectRequired() throws Exception {
@@ -327,17 +336,29 @@ class WorldWebSocketHandlerTest {
                             && tm.getPayload().equals("E|408|reconnect-required")));
             verify(sc).close(CloseStatus.SERVICE_RESTARTED);
 
-            // Frame 2 — a register frame (different kind, hits the guard before dispatch) must 408 too,
-            // proving the guard is frame-kind-agnostic and precedes decode/dispatch.
+            // Frame 2 — a register frame (different decoded kind) must 408 too.
             clearInvocations(sc);
             handler.handleMessage(sc, new TextMessage("r|C"));
             verify(sc).sendMessage(argThat(
                     msg -> msg instanceof TextMessage tm
                             && tm.getPayload().equals("E|408|reconnect-required")));
+
+            // Frame 3 — undecodable text. This is the distinct path: the guard sits BEFORE
+            // PerceptionCodec.decode, so garbage that would otherwise 400 (malformed) must 408
+            // instead — pinning "the guard precedes decode", which is what makes a single frame
+            // per decoded kind sufficient for the "any inbound frame" clause.
+            clearInvocations(sc);
+            handler.handleMessage(sc, new TextMessage("!!!not-a-frame!!!"));
+            verify(sc).sendMessage(argThat(
+                    msg -> msg instanceof TextMessage tm
+                            && tm.getPayload().equals("E|408|reconnect-required")));
         } finally {
-            // Reap via cleanupByEntityId — cleanupBot alone leaks (ATTR_ENTITY_ID was cleared).
-            if (entityId != null) handler.cleanupByEntityId(entityId);
-            handler.cleanupBot(sc);
+            // Reap via the production path: the grace-expiry sweep removes the STALLED token,
+            // decrements the stalled-sessions gauge, AND invokes cleanupByEntityId as its callback
+            // (entity/grid/slot reap). markStalled set expiresAtTick = 0 + graceWindowTicks(10), and
+            // the sweep boundary is inclusive, so a tick past 10 reaps. A direct cleanupByEntityId
+            // would leak the STALLED entry + gauge (clearActive preserves STALLED by contract).
+            resumeTokenRegistry.onTick(new TickEvent(11L));
             outboundSender.detachSession("sc408");
         }
     }
