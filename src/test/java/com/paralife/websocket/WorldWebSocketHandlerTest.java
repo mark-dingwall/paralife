@@ -25,6 +25,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
@@ -265,6 +266,55 @@ class WorldWebSocketHandlerTest {
         } finally {
             handler.cleanupBot(sc1);
             outboundSender.detachSession("sc1");
+        }
+    }
+
+    /**
+     * A32 (routing) — the last handler-emitted §1 token's condition→token routing pin, closing the
+     * EARS §0 sweep. WHEN any inbound frame arrives on a STALLED session THE SYSTEM SHALL reject it
+     * {@code E|408|reconnect-required} and close the transport ({@code SERVICE_RESTARTED}), before the
+     * frame reaches the decode/dispatch switch. Default-suite twin of the {@code @Tag("slow")}
+     * {@code StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed}.
+     *
+     * <p>Non-vacuity has two guards. (1) {@code markStalled} may itself emit a best-effort OOB 408
+     * (the mock's {@code isOpen()} stays stubbed true, so its short-circuit does not fire here), so
+     * {@code clearInvocations} discards that confound — any 408 verified afterward is the
+     * inbound-guard's, not the stall transition's. (2) The inbound frame is a well-formed action
+     * ({@code a|M|1}) that, absent the STALLED condition, routes to the resolver — see
+     * {@code actionOnRegisteredSessionIsQueued} (the A29 positive control). So the 408 is attributable
+     * to the STALLED condition, not to the frame being invalid, and the not-queued conjunct is
+     * condition-specific rather than "every action is dropped".
+     *
+     * <p>Distinct session id ("sc408") for the same shared-context reason as the A14 twin.
+     */
+    @Test
+    void stalledSessionInboundRejectedWithReconnectRequired() throws Exception {
+        WebSocketSession sc = newAttachedSession("sc408");
+        try {
+            handler.handleMessage(sc, new TextMessage("r|C"));
+            verify(sc, timeout(2000).atLeastOnce()).sendMessage(argThat(
+                    msg -> msg instanceof TextMessage tm && tm.getPayload().startsWith("S|")));
+
+            // Transition to STALLED via the public backpressure entry (no overflow needed).
+            handler.markStalled(sc, 0L);
+
+            // Isolate the inbound guard: discard the markStalled OOB 408 + close and any prior queue,
+            // so the assertions below pin ONLY the stalled-inbound routing.
+            clearInvocations(sc, actionResolver);
+
+            // Any inbound frame on a STALLED session — a well-formed action here — must 408 + close.
+            String action = PerceptionCodec.encode(new Frame.ActionFrame('M', Optional.of("1")));
+            handler.handleMessage(sc, new TextMessage(action));
+
+            verify(sc, timeout(2000).atLeastOnce()).sendMessage(argThat(
+                    msg -> msg instanceof TextMessage tm
+                            && tm.getPayload().equals("E|408|reconnect-required")));
+            verify(sc).close(CloseStatus.SERVICE_RESTARTED);
+            // The stalled guard short-circuits before the dispatch switch: the action never queues.
+            verify(actionResolver, never()).queueAction(eq("sc408"), any());
+        } finally {
+            handler.cleanupBot(sc);
+            outboundSender.detachSession("sc408");
         }
     }
 
