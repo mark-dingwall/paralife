@@ -128,8 +128,10 @@ constant-referential blind spots.
 - ~~Condition→token **routing** asserts for the 404 `no-active-entity`, `malformed`, and `grid-full`
   tokens~~ ✅ DONE 2026-07-11 — ADMISSION §0 **A29/A30/A31** (`WorldWebSocketHandlerTest` unit anchors
   for `no-active-entity`/`malformed` incl. `@SpyBean` not-queued isolation; `PlacementDensityIntegrationTest`
-  token-tighten for `grid-full`). Residual: `reconnect-required`/408 routing stays `@slow`-only
-  best-effort per D-07 (not yet a clean clause).
+  token-tighten for `grid-full`). Residual `reconnect-required`/408 routing ✅ DONE 2026-07-18 —
+  ADMISSION §0 **A32** (`WorldWebSocketHandlerTest.stalledSessionInboundRejectedWithReconnectRequired`,
+  408-vs-404 payload discrimination on two frame kinds; the 408 send remains best-effort per D-07 —
+  the *routing* is now clause-pinned, not the wire delivery). §0 handler-emitted routing sweep complete.
 - ~~Engine-direct unit twins for the `@slow`-only **A14** and **A22** so they gate in `./gradlew test`~~
   ✅ DONE 2026-07-11 — most of the mechanism was already default-gated (A14 entityId/grace → A10/A13;
   A22 reap-detection → A12; fresh-registration routing → `AdmissionGateTest.unknownResumeTokenFallsThroughToFreshRegistration`);

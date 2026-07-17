@@ -26,7 +26,7 @@ magnitude: the tick-health watermarks (80/60), the queue size (128), and the gra
 *format* `r:%016x` (A9) — the immutable wire format, regex-pinned — and the rejection-token
 *vocabulary* strings (A28, below). Rejection **tokens**
 are pinned two ways. Condition → `RejectionToken.X` *routing*: constant-referentially for the
-**gate-emitted** subset (A1–A6, A25–A27), and by **independent wire literal** for three of the four
+**gate-emitted** subset (A1–A6, A25–A27), and by **independent wire literal** for all four
 **handler-emitted** tokens — `no-active-entity`/`malformed`/`grid-full`/`reconnect-required`
 (A29/A30/A31/A32, emitted by `WorldWebSocketHandler`, not `AdmissionGate`). Token *string value*: the
 frozen strings of all 9 §1 tokens are pinned as independent wire literals by A28
@@ -65,7 +65,7 @@ frozen strings of all 9 §1 tokens are pinned as independent wire literals by A2
 | A29 | WHEN an `ActionFrame` (`a\|`) arrives on a session with no active entity (`ATTR_ENTITY_ID` absent) THE SYSTEM SHALL reject `E\|404\|no-active-entity` and SHALL NOT queue the action. | §1 | `WorldWebSocketHandlerTest.actionOnUnregisteredSessionRejectedNoActiveEntity` — captured send `…equals("E\|404\|no-active-entity")` (independent literal) + `verify(actionResolver, never()).queueAction(eq("s1"),…)` isolates the not-queued conjunct (`@SpyBean`). Positive control `actionOnRegisteredSessionIsQueued` — registered session's action → `verify(...).queueAction(eq("s2"),…)`, proving both conjuncts are condition-specific. RED-tested: token swap → reject row red; `return` removed → not-queued row red. |
 | A30 | WHEN inbound text fails codec decode OR decodes to a client-illegal frame direction (`Sync`/`Tick`, server→client only) THE SYSTEM SHALL reject `E\|400\|malformed`. | §1 | `WorldWebSocketHandlerTest.malformedFrameProducesError400` — CodecException path, captured send `…equals("E\|400\|malformed")` (independent literal); `clientIllegalFrameDirectionRejectedAsMalformed` — parameterized `{Sync,Tick}` wire (encode-derived; `assertInstanceOf` precondition proves the illegal-direction arm is reached, not the CodecException fallback), each captured send `…equals("E\|400\|malformed")`. RED-tested: Sync-arm token swap → only the Sync row red, Tick green (per-arm isolation). Covers all 3 `MALFORMED` emit sites. |
 | A31 | WHEN registration placement exhausts the eligible set THE SYSTEM SHALL reject `E\|503\|grid-full`. | §1 | `PlacementDensityIntegrationTest.fillsGridAndReceivesGridFullOnExhaustion` — captured exhaustion-boundary 503 payload `…isEqualTo("E\|503\|grid-full")`, upgrading the prior code-only `startsWith("E\|503")` to the exact token. ⚠ **integration-anchored / non-isolating** (survive-a-run fill; condition→token pinned but not unit-isolated). RED-tested: token swap → red (`was "E\|503\|maintenance"`). |
-| A32 | WHEN any inbound frame arrives on a STALLED session THE SYSTEM SHALL reject `E\|408\|reconnect-required`, close the transport (`SERVICE_RESTARTED`), and SHALL NOT dispatch the frame. | §1/§4 | `WorldWebSocketHandlerTest.stalledSessionInboundRejectedWithReconnectRequired` — engine-direct twin: register→`markStalled`→inbound `a\|M\|1` (mock session, no overflow); captured send `…equals("E\|408\|reconnect-required")` (independent literal) + `verify(sc).close(SERVICE_RESTARTED)` + `verify(actionResolver, never()).queueAction(eq("sc408"),…)` isolates the short-circuit-before-dispatch conjunct (`@SpyBean`). Non-vacuity: `clearInvocations` discards `markStalled`'s own best-effort OOB 408; positive control `actionOnRegisteredSessionIsQueued` (A29) proves the same action routes to the resolver absent the STALLED condition. RED-tested: L474 stall guard disabled → 408 assert `WantedButNotInvoked` (frame falls through to 404). Default-suite twin of the `@slow` `StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed`. |
+| A32 | WHEN any inbound frame arrives on a STALLED session THE SYSTEM SHALL reject `E\|408\|reconnect-required` (best-effort per D-07 — the OOB send is `isOpen()`-gated; in production `markStalled` closes the transport first, so it typically does not reach the wire) and close the transport (`SERVICE_RESTARTED`), short-circuiting before the decode/dispatch switch. | §1/§4 | `WorldWebSocketHandlerTest.stalledSessionInboundRejectedWithReconnectRequired` — engine-direct: register→`markStalled`→inbound (mock session, no overflow). The **408-vs-404 payload** is the discriminator: `markStalled` clears `ATTR_ENTITY_ID`, so with the guard removed an action falls through to the null-entity branch and emits `E\|404\|no-active-entity`; the test asserts the exact literal `…equals("E\|408\|reconnect-required")` + `verify(sc).close(SERVICE_RESTARTED)` on **two** frame kinds (`a\|M\|1` and `r\|C`) so a per-frame-kind guard relocation is caught. (A `never().queueAction` check would be vacuous — the null-entity branch returns before `queueAction` guard-or-no-guard.) `clearInvocations` discards `markStalled`'s own best-effort OOB 408. RED-tested: L474 stall guard disabled → 408 assert `WantedButNotInvoked` (frame falls through to 404). **Sole** coverage of the L474 guard — the `@slow` `StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed` pins overflow→stall→close only (no post-stall inbound, does not assert the 408). |
 
 **Guard order (prose — precedence edges beyond A6 now clause-pinned).** `AdmissionGate.evaluate`
 applies six guards in fixed order (source: `AdmissionGate.java` guards 1–6 + javadoc lines 22–34):
@@ -86,16 +86,11 @@ only runs for `isRespawn` requests, which the cap guard skips), not a reorderabl
   value*; condition→token **routing** for the handler-emitted subset is now clause-pinned:
   `no-active-entity`/404 (A29, unit-isolated, `@SpyBean` on the not-queued conjunct), `malformed`/400
   (A30, all three inbound-illegal emit sites), `grid-full`/503 (A31, integration-anchored/non-isolating),
-  `reconnect-required`/408 (A32, unit-isolated engine-direct twin). The last is the routing-sweep
-  close-out: `WorldWebSocketHandlerTest.stalledSessionInboundRejectedWithReconnectRequired` drives
-  register→`markStalled`→inbound `a|M|1` with a mock session (no overflow), asserting the STALLED
-  guard emits `E|408|reconnect-required`, closes `SERVICE_RESTARTED`, and short-circuits before the
-  dispatch switch (action never queues). Non-vacuity: `clearInvocations` discards `markStalled`'s own
-  best-effort OOB 408, and the frame is a well-formed action that routes to the resolver absent the
-  STALLED condition (control: `actionOnRegisteredSessionIsQueued`, A29). RED-tested by disabling the
-  L474 stall guard → the 408 assert goes `WantedButNotInvoked` (the frame falls through to a 404).
-  The `@slow` `StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed` is
-  retained as the end-to-end overflow-driven anchor, no longer the sole gate. **§0 routing sweep now
+  `reconnect-required`/408 (A32, unit-isolated engine-direct — 408-vs-404 payload discrimination on two
+  frame kinds; the 408 send is best-effort per D-07, observable here only because the mock stays open).
+  The `@slow` `StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed` pins
+  overflow→stall→**close** only (it sends no post-stall inbound frame and does not assert the 408), so
+  A32's unit test is the **sole** coverage of the L474 inbound guard. **§0 routing sweep now
   complete** — all four handler-emitted tokens have default-gated condition→token pins.
 - **Token wire-strings — ✅ now literal-pinned (A28).** Previously constant-referential only (§1
   clauses pin condition → `RejectionToken.X` *constant*, so renaming a token's string value stayed
