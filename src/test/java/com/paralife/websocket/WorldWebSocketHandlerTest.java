@@ -5,10 +5,13 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
+import com.paralife.admission.AdmissionConfig;
 import com.paralife.admission.OutboundSender;
+import com.paralife.admission.ResumeTokenRegistry;
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
 import com.paralife.engine.ActionResolver;
+import com.paralife.engine.TickEvent;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +28,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
@@ -56,6 +60,12 @@ class WorldWebSocketHandlerTest {
 
     @Autowired
     OutboundSender outboundSender;
+
+    @Autowired
+    ResumeTokenRegistry resumeTokenRegistry;
+
+    @Autowired
+    AdmissionConfig admissionConfig;
 
     // A29 — spy the real bean so the "SHALL NOT queue" conjunct is isolable via verify(never()).
     @SpyBean
@@ -265,6 +275,95 @@ class WorldWebSocketHandlerTest {
         } finally {
             handler.cleanupBot(sc1);
             outboundSender.detachSession("sc1");
+        }
+    }
+
+    /**
+     * A32 (routing) — the last handler-emitted §1 token's condition→token routing pin, closing the
+     * EARS §0 sweep. WHEN any inbound frame arrives on a STALLED session THE SYSTEM SHALL reject it
+     * {@code E|408|reconnect-required} (best-effort per D-07 — the send is {@code isOpen()}-gated; the
+     * mock stays open, so it is observable here) and close the transport ({@code SERVICE_RESTARTED}),
+     * short-circuiting the {@link WorldWebSocketHandler#handleTextMessage} guard (~:474) before the
+     * frame reaches the decode/dispatch switch.
+     *
+     * <p>This is the <b>sole</b> coverage of the L474 inbound guard: the {@code @Tag("slow")}
+     * {@code StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed} sends no
+     * post-stall inbound frame and explicitly does not assert the 408 (D-07 best-effort) — it pins
+     * overflow→stall→close only, not any A32 conjunct.
+     *
+     * <p>Discrimination — the 408-vs-404 payload is what pins the guard. {@code markStalled} clears
+     * {@code ATTR_ENTITY_ID}, so with the guard removed an action frame falls through to
+     * {@code handleAction}'s null-entity branch and emits {@code E|404|no-active-entity} — NOT 404
+     * silence. So the assertion pins the exact byte string {@code E|408|reconnect-required} (a
+     * {@code never().queueAction} check would be vacuous: post-{@code markStalled} the null-entity
+     * branch returns before {@code queueAction} guard-or-no-guard). {@code clearInvocations} discards
+     * {@code markStalled}'s own best-effort OOB 408 so the verified 408 is the inbound guard's.
+     *
+     * <p>Universality — the clause quantifies over <i>any</i> inbound frame. The guard sits at the top
+     * of {@code handleTextMessage}, before {@code PerceptionCodec.decode}, so one frame per distinct
+     * path suffices: a decoded action ({@code a|M|1}), a decoded register ({@code r|C}), and
+     * undecodable text (the pre-decode path — garbage that would otherwise 400 must 408 instead). A
+     * per-frame-kind or post-decode relocation of the guard fails at least one of the three.
+     *
+     * <p>Distinct session id ("sc408") for the same shared-context reason as the A14 twin. Teardown
+     * reaps via the production grace-expiry sweep ({@code ResumeTokenRegistry.onTick} past the grace
+     * window) — the single correct reaper: {@code markStalled} left a STALLED token + incremented the
+     * stalled-sessions gauge, and only the sweep (not {@code cleanupByEntityId}, whose
+     * {@code clearActive} preserves STALLED by contract) removes both, so nothing leaks into the
+     * {@code forkEvery=0} JVM.
+     */
+    @Test
+    void stalledSessionInboundRejectedWithReconnectRequired() throws Exception {
+        WebSocketSession sc = newAttachedSession("sc408");
+        try {
+            handler.handleMessage(sc, new TextMessage("r|C"));
+            verify(sc, timeout(2000).atLeastOnce()).sendMessage(argThat(
+                    msg -> msg instanceof TextMessage tm && tm.getPayload().startsWith("S|")));
+
+            // Transition to STALLED via the public backpressure entry (no overflow needed).
+            handler.markStalled(sc, 0L);
+
+            // Isolate the inbound guard: discard the markStalled OOB 408 + close, so the assertions
+            // below pin ONLY the stalled-inbound routing. sendOutOfBand is a direct synchronized send
+            // (not the async OutboundSender path), so no timeout() poll is needed on the verifies.
+            clearInvocations(sc);
+
+            // Frame 1 — a well-formed action on a STALLED session must 408 + close (not fall through
+            // to the 404 the null-entity branch would emit with the guard removed).
+            String action = PerceptionCodec.encode(new Frame.ActionFrame('M', Optional.of("1")));
+            handler.handleMessage(sc, new TextMessage(action));
+            verify(sc).sendMessage(argThat(
+                    msg -> msg instanceof TextMessage tm
+                            && tm.getPayload().equals("E|408|reconnect-required")));
+            verify(sc).close(CloseStatus.SERVICE_RESTARTED);
+
+            // Frame 2 — a register frame (different decoded kind) must 408 too.
+            clearInvocations(sc);
+            handler.handleMessage(sc, new TextMessage("r|C"));
+            verify(sc).sendMessage(argThat(
+                    msg -> msg instanceof TextMessage tm
+                            && tm.getPayload().equals("E|408|reconnect-required")));
+
+            // Frame 3 — undecodable text. This is the distinct path: the guard sits BEFORE
+            // PerceptionCodec.decode, so garbage that would otherwise 400 (malformed) must 408
+            // instead — pinning "the guard precedes decode", which is what makes a single frame
+            // per decoded kind sufficient for the "any inbound frame" clause.
+            clearInvocations(sc);
+            handler.handleMessage(sc, new TextMessage("!!!not-a-frame!!!"));
+            verify(sc).sendMessage(argThat(
+                    msg -> msg instanceof TextMessage tm
+                            && tm.getPayload().equals("E|408|reconnect-required")));
+        } finally {
+            // Reap via the production path: the grace-expiry sweep removes the STALLED token,
+            // decrements the stalled-sessions gauge, AND invokes cleanupByEntityId as its callback
+            // (entity/grid/slot reap). markStalled set expiresAtTick = 0 + graceWindowTicks; the sweep
+            // boundary is inclusive (expiresAtTick <= currentTick), so sweeping exactly at
+            // graceWindowTicks reaps. Derive it from the config accessor rather than hardcoding the
+            // default, so the reaper still fires if the grace window is retuned. A direct
+            // cleanupByEntityId would leak the STALLED entry + gauge (clearActive preserves STALLED).
+            long graceWindow = admissionConfig.backpressure().graceWindowTicks();
+            resumeTokenRegistry.onTick(new TickEvent(graceWindow));
+            outboundSender.detachSession("sc408");
         }
     }
 
