@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
+import com.paralife.admission.AdmissionConfig;
 import com.paralife.admission.OutboundSender;
 import com.paralife.admission.ResumeTokenRegistry;
 import com.paralife.codec.Frame;
@@ -62,6 +63,9 @@ class WorldWebSocketHandlerTest {
 
     @Autowired
     ResumeTokenRegistry resumeTokenRegistry;
+
+    @Autowired
+    AdmissionConfig admissionConfig;
 
     // A29 — spy the real bean so the "SHALL NOT queue" conjunct is isolable via verify(never()).
     @SpyBean
@@ -311,13 +315,10 @@ class WorldWebSocketHandlerTest {
     @Test
     void stalledSessionInboundRejectedWithReconnectRequired() throws Exception {
         WebSocketSession sc = newAttachedSession("sc408");
-        // Capture the entityId before markStalled clears it — needed to reap the stalled entity.
-        String entityId = null;
         try {
             handler.handleMessage(sc, new TextMessage("r|C"));
             verify(sc, timeout(2000).atLeastOnce()).sendMessage(argThat(
                     msg -> msg instanceof TextMessage tm && tm.getPayload().startsWith("S|")));
-            entityId = (String) sc.getAttributes().get("entityId");
 
             // Transition to STALLED via the public backpressure entry (no overflow needed).
             handler.markStalled(sc, 0L);
@@ -355,10 +356,13 @@ class WorldWebSocketHandlerTest {
         } finally {
             // Reap via the production path: the grace-expiry sweep removes the STALLED token,
             // decrements the stalled-sessions gauge, AND invokes cleanupByEntityId as its callback
-            // (entity/grid/slot reap). markStalled set expiresAtTick = 0 + graceWindowTicks(10), and
-            // the sweep boundary is inclusive, so a tick past 10 reaps. A direct cleanupByEntityId
-            // would leak the STALLED entry + gauge (clearActive preserves STALLED by contract).
-            resumeTokenRegistry.onTick(new TickEvent(11L));
+            // (entity/grid/slot reap). markStalled set expiresAtTick = 0 + graceWindowTicks; the sweep
+            // boundary is inclusive (expiresAtTick <= currentTick), so sweeping exactly at
+            // graceWindowTicks reaps. Derive it from the config accessor rather than hardcoding the
+            // default, so the reaper still fires if the grace window is retuned. A direct
+            // cleanupByEntityId would leak the STALLED entry + gauge (clearActive preserves STALLED).
+            long graceWindow = admissionConfig.backpressure().graceWindowTicks();
+            resumeTokenRegistry.onTick(new TickEvent(graceWindow));
             outboundSender.detachSession("sc408");
         }
     }
