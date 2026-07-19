@@ -1,10 +1,6 @@
 package com.paralife.engine;
 
 import com.paralife.world.Position;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
-
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -13,6 +9,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
 /**
  * Maps WebSocket sessions to their controlled entities and grid positions.
@@ -266,6 +265,16 @@ public class BotRegistry {
      */
     public int size() {
         return bySession.size();
+    }
+
+    /**
+     * Immutable copy of every currently-owned entity id. Called on the tick thread by
+     * the observer broadcaster to classify {@code brained} without a live per-entity
+     * query during serialization. {@code ConcurrentHashMap.keySet()} is weakly
+     * consistent; {@code Set.copyOf} takes a stable snapshot.
+     */
+    public java.util.Set<String> ownedEntityIds() {
+        return java.util.Set.copyOf(entityToSession.keySet());
     }
 
     /**
