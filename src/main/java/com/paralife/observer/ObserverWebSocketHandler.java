@@ -41,14 +41,22 @@ public class ObserverWebSocketHandler extends AbstractWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        sender.attach(session);
-        // Bootstrap-barrier: send static terrain BEFORE the broadcaster can offer a world frame.
-        ObserverFrame.BootstrapFrame boot = builder.buildBootstrap(worldGrid.snapshot());
-        String payload = mapper.writeValueAsString(boot);
-        synchronized (session) {
-            session.sendMessage(new TextMessage(payload));
+        try {
+            sender.attach(session);
+            // Bootstrap-barrier: send static terrain BEFORE the broadcaster can offer a world frame.
+            ObserverFrame.BootstrapFrame boot = builder.buildBootstrap(worldGrid.snapshot());
+            String payload = mapper.writeValueAsString(boot);
+            synchronized (session) {
+                session.sendMessage(new TextMessage(payload));
+            }
+            broadcaster.register(session); // now eligible for world frames
+        } catch (Exception e) {
+            // Establish failed before registration — container close callbacks are not
+            // guaranteed to fire for a throw out of this method, so self-heal here:
+            // release the permit and detach the drain VT the same way cleanup() would.
+            cleanup(session);
+            throw e;
         }
-        broadcaster.register(session); // now eligible for world frames
     }
 
     @Override
