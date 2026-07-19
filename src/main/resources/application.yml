@@ -235,3 +235,6 @@ paralife:
     sensor-passive-drain: 1
     can-form-composites: true
     seed:                     # Phase 16 Plan 01: Long; null = unseeded (CompositeEnergyDistributor RNG)
+  observer:
+    enabled: false
+    max-sessions: 4
