@@ -578,3 +578,77 @@ pinned by §0 R18**.
 > Known follow-ups are tracked in BACKLOG.md.
 
 ---
+
+## 14. Observer Frame (`/ws/observer`)
+
+A separate, JSON-based read-only protocol for the M5-A observer visualiser — distinct from the
+compact-text codec in §0–§13 above (no relation to `PerceptionCodec`; Jackson-serialized, full-word
+camelCase keys, `com.paralife.observer.ObserverFrame`). Every frame carries `schemaVersion=1`.
+Pinned by `ObserverEndpointIntegrationTest` (real handshake + Jackson parse) and
+`ObserverFrameBuilderTest`.
+
+Two frame types, distinguished by `type`.
+
+### `bootstrap` — sent once per connection, before any `world` frame
+
+```json
+{
+  "type": "bootstrap",
+  "schemaVersion": 1,
+  "grid": { "width": 64, "height": 64 },
+  "rocks": [ { "x": 3, "y": 7 } ]
+}
+```
+
+Static terrain only (grid dims + rock coordinates). Never retransmitted.
+
+### `world` — sent every tick, latest-wins (a slow observer skips ticks, never sees a queue backlog)
+
+```json
+{
+  "type": "world",
+  "schemaVersion": 1,
+  "tick": 1042,
+  "entities": [ ],
+  "env": { "toxin": [], "mutagen": [], "lightning": [] },
+  "scoreboard": { "CATALYST": 12, "MEMBRANE": 9, "SPORE": 15 },
+  "populations": { "CATALYST": 40, "MEMBRANE": 38, "SPORE": 21 }
+}
+```
+
+- `scoreboard` — cumulative committed spawns per species since process start (`SpeciesSpawnCounter`,
+  process-lifetime, never reset).
+- `populations` — current live census per species, this tick (see census rule below).
+
+#### Census rule
+
+Same rule as `PopulationHistory`: `particle` → +1 its species; `bondedPair` → +1 **both**
+`primarySpecies` AND `secondarySpecies`; `compositeMember` → +1 its species — **no liveness
+filter** (a zero-energy member awaiting next-tick cleanup still counts). Rock and nutrient are
+excluded from the census (rocks are bootstrap-only and never appear in `entities`; nutrients appear
+in `entities` but carry no species).
+
+#### `entities[]` — one entry per dynamic occupant, shape varies by `kind`
+
+Nullable fields are omitted from JSON (Jackson `NON_NULL`) — each `kind` uses a different field
+subset beyond the always-present `x`, `y`, `kind`:
+
+| `kind` | Fields present |
+|---|---|
+| `particle` | `species`, `energy`, `brained` |
+| `nutrient` | `energy` (nutrient level) |
+| `bondedPair` | `primarySpecies`, `secondarySpecies`, `energy`, `brained` |
+| `compositeMember` | `species`, `compositeId`, `role`, `energy`, `brained` |
+
+`species` / `primarySpecies` / `secondarySpecies` ∈ `{CATALYST, MEMBRANE, SPORE}`. `role` ∈
+`{LOCOMOTOR, FEEDER, ATTACKER, DEFENDER, REPRODUCER, SENSOR}`. `brained` marks an entity currently
+owned by a connected bot (vs. server-idle/unowned).
+
+#### `env` — per-cell env layers, non-zero cells only
+
+- `toxin: [{x, y, intensity}]` — `intensity` is a **magnitude** (1–255).
+- `mutagen: [{x, y, strain}]` — `strain` is a **categorical id** (1–255), NOT a magnitude — render
+  it as a distinct category, not an intensity gradient.
+- `lightning: [{x, y}]` — strike coordinates applied on this tick only.
+
+---

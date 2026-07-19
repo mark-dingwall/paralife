@@ -417,3 +417,24 @@ real trigger.
 destroying spatial emergence*. Its unlock is therefore a **spatial-emergence discriminator** — M5's eyes,
 or a headless tuning-invariant spatial-structure test (the E1 family) — **never any 1-D death read.** Stays
 open, non-blocking, M5-gated; matches `balance_tuning_deferred`.
+
+---
+
+## Observer visualiser (M5-A) follow-ups
+
+### Observer exposure hardening (prerequisite for public deployment)
+
+The M5-A observer visualiser (`/ws/observer`) ships `enabled=false` + a session cap
+only. Before ANY authenticated/public exposure: real auth/authz, non-wildcard origin
+policy, and handshake rate-limiting. Until then the endpoint exposes full-world state
+(which the bot path deliberately vision-scopes) and must stay operator-only.
+
+### Observer UI headless-browser JS smoke
+
+`observer.html` render fidelity is judged by eye (the stack has no browser-test harness).
+The frame contract is covered automatically by `ObserverEndpointIntegrationTest` (real
+handshake + Jackson parse), but the page's own JS (`JSON.parse` → canvas render → `#status`
+tick signal) is not executed by any test. When a headless-browser harness is justified
+(htmlunit for JVM-only, or Playwright for real canvas), add a smoke that loads the page,
+completes the observer handshake, and asserts `#status` shows a tick — RED-tested with a
+deliberate JS error. Deferred per the M5-A review (2026-07-19); not blocking MVP.

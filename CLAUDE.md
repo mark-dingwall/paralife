@@ -58,7 +58,7 @@ The loop, graduated off GSD (drop the machinery, keep the habits). These are **a
 
 ## Conventions
 
-**Package structure:** `com.paralife.{world,engine,websocket,codec,admission,bot,harness,metrics,runtime,diagnostics}` — flat single-level per layer. `diagnostics` holds `DeathDiagnostics` (flag-gated death-cause + lifespan census), **OFF by default** (`@ConditionalOnProperty paralife.diagnostics.death-trace.enabled=true`, no yaml key); a no-op unless enabled, wired into the tick pipeline (SimulationEngine / EnvironmentEngine / DeathFinalizer / LiveEntityRegistry).
+**Package structure:** `com.paralife.{world,engine,websocket,codec,admission,bot,harness,metrics,runtime,diagnostics,observer}` — flat single-level per layer. `diagnostics` holds `DeathDiagnostics` (flag-gated death-cause + lifespan census), **OFF by default** (`@ConditionalOnProperty paralife.diagnostics.death-trace.enabled=true`, no yaml key); a no-op unless enabled, wired into the tick pipeline (SimulationEngine / EnvironmentEngine / DeathFinalizer / LiveEntityRegistry). `observer` holds the read-only visualiser endpoint, broadcaster, off-thread sender, frame DTOs; **OFF by default** via `paralife.observer.enabled`.
 
 **Data modeling:** Immutable records throughout. Sealed interface for polymorphism (`Entity` permits `Particle`, `Rock`, `Nutrient`, `BondedPair`, `CompositeMember`; `Particle` carries the `ParticleType` species enum CATALYST/MEMBRANE/SPORE, `CompositeMember` a `Role` enum). Mutations produce new instances (`Cell.withOccupant()`, `Entity.Particle.withEnergy()`). Wire frames are modelled by the `com.paralife.codec` record family (`Frame`, `CellEntry`, `Event`, `StateChange`).
 
@@ -112,8 +112,9 @@ High-level map. Deeper subsystem rationale (outbound concurrency / backpressure 
 5. `ActionResolver` `@Order(20)` — Drain pending bot actions, resolve verbs `M/E/A/R/V/L` (move / eat / attack / reproduce / composite-vote / alarm)
 6. `EnvPostActionReconciler` `@Order(TICK_ORDER)` — Apply post-action buff grants, clear cure-immunity (TICK_ORDER=25)
 7. `TickBroadcaster` `@Order(50)` — Per-bot tick frame (5x5 vision, wire bitmask, perception)
-8. `WebSocketKeepaliveService` `@Order(200)` — Keepalive PINGs
-9. `TickHealthMonitor` `@Order(Integer.MAX_VALUE)` — Sample tick wall-time into ring buffer
+8. `ObserverBroadcaster` `@Order(60)` — Bounded snapshot + serialize-once + non-blocking offer to observer mailboxes (off-thread delivery via `ObserverOutboundSender` drain VTs)
+9. `WebSocketKeepaliveService` `@Order(200)` — Keepalive PINGs
+10. `TickHealthMonitor` `@Order(Integer.MAX_VALUE)` — Sample tick wall-time into ring buffer
 
 **Env state projection — three layers** (Phase 14, decisions D-38/D-39/D-40/D-41):
 
