@@ -181,6 +181,13 @@ public class JettyDeflateCustomizer {
                 return;
             }
 
+            // C1: observers are browser-facing; browsers cannot advertise server_no_context_takeover.
+            String uri = httpReq.getRequestURI();
+            if (uri != null && uri.startsWith("/ws/observer")) {
+                chain.doFilter(request, response);
+                return;
+            }
+
             String extensions = httpReq.getHeader(EXTENSIONS_HEADER);
             if (extensions == null || !offersDeflateWithNoContextTakeover(extensions)) {
                 log.warn("Rejecting WebSocket upgrade from {} at {} — missing {} or {}",
