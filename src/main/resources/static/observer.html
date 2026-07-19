@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Paralife — Observer</title>
+  <style>
+    body { margin: 0; background: #0b0b0f; color: #ddd; font: 13px monospace; }
+    #wrap { display: flex; gap: 12px; padding: 12px; }
+    #left { display: flex; flex-direction: column; gap: 8px; }
+    canvas { background: #000; image-rendering: pixelated; }
+    #side { display: flex; flex-direction: column; gap: 12px; min-width: 220px; }
+    .panel { border: 1px solid #333; padding: 8px; }
+    .panel h3 { margin: 0 0 6px; font-size: 12px; color: #9ad; }
+    #knobs { flex: 1; color: #555; } /* reserved for future tuning dials */
+    #status { color: #7c7; }
+    table { border-collapse: collapse; } td { padding: 1px 6px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="left">
+      <div id="status">connecting…</div>
+      <canvas id="grid" width="512" height="512"></canvas>
+      <canvas id="series" width="512" height="120"></canvas>
+    </div>
+    <div id="side">
+      <div class="panel"><h3>Scoreboard (cumulative spawns)</h3><div id="scoreboard"></div></div>
+      <div class="panel"><h3>Populations</h3><div id="populations"></div></div>
+      <div class="panel" id="knobs"><h3>Controls</h3><div>(reserved)</div></div>
+    </div>
+  </div>
+  <script>
+    // ── config ──────────────────────────────────────────────────────────
+    const SPECIES_COLOR = { CATALYST: "#e34", MEMBRANE: "#3d8", SPORE: "#59f" };
+    const SERIES_COLOR  = SPECIES_COLOR;
+    const grid = document.getElementById("grid");
+    const gx = grid.getContext("2d");
+    const series = document.getElementById("series");
+    const sx = series.getContext("2d");
+    const statusEl = document.getElementById("status");
+
+    let dims = { width: 256, height: 256 };
+    let rocks = [];
+    let cell = 2;                 // px per cell, recomputed on bootstrap
+    const history = { CATALYST: [], MEMBRANE: [], SPORE: [] };
+    const HISTORY_MAX = 512;
+
+    // ── connection ──────────────────────────────────────────────────────
+    // Derive scheme from the page origin: wss:// under HTTPS (a hardcoded ws://
+    // is blocked as mixed content on an HTTPS-served page).
+    const wsScheme = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${wsScheme}//${location.host}/ws/observer`);
+    ws.onopen  = () => { statusEl.textContent = "connected"; };
+    ws.onclose = () => { statusEl.textContent = "disconnected"; };
+    ws.onerror = () => { statusEl.textContent = "error"; };
+    ws.onmessage = (ev) => {
+      const frame = JSON.parse(ev.data);
+      if (frame.type === "bootstrap") onBootstrap(frame);
+      else if (frame.type === "world") onWorld(frame);
+    };
+
+    function onBootstrap(f) {
+      dims = f.grid;
+      rocks = f.rocks || [];
+      cell = Math.max(1, Math.floor(grid.width / dims.width));
+      grid.width = dims.width * cell;
+      grid.height = dims.height * cell;
+    }
+
+    // ── render ──────────────────────────────────────────────────────────
+    function px(v) { return v * cell; }
+
+    function onWorld(f) {
+      statusEl.textContent = "tick " + f.tick;
+      gx.fillStyle = "#000";
+      gx.fillRect(0, 0, grid.width, grid.height);
+
+      // env layers first (under entities)
+      drawToxin(f.env.toxin || []);
+      drawMutagen(f.env.mutagen || []);
+
+      // rocks (static, from bootstrap)
+      gx.fillStyle = "#555";
+      for (const r of rocks) gx.fillRect(px(r.x), px(r.y), cell, cell);
+
+      // entities
+      for (const e of f.entities) drawEntity(e);
+
+      // lightning flashes (this tick only)
+      gx.fillStyle = "rgba(255,255,180,0.9)";
+      for (const s of (f.env.lightning || [])) gx.fillRect(px(s.x), px(s.y), cell, cell);
+
+      updatePanels(f);
+      pushHistory(f.populations);
+      drawSeries();
+    }
+
+    function drawToxin(cells) {
+      for (const c of cells) {
+        const a = Math.min(1, c.intensity / 255); // heat gradient — intensity IS a magnitude
+        gx.fillStyle = `rgba(200,60,60,${0.15 + 0.6 * a})`;
+        gx.fillRect(px(c.x), px(c.y), cell, cell);
+      }
+    }
+    function drawMutagen(cells) {
+      // categorical zones keyed by strain id — NEVER a heat ramp (strain is an id)
+      for (const c of cells) {
+        const hue = (c.strain * 47) % 360;
+        gx.fillStyle = `hsla(${hue},70%,45%,0.4)`;
+        gx.fillRect(px(c.x), px(c.y), cell, cell);
+      }
+    }
+
+    function drawEntity(e) {
+      if (e.kind === "nutrient") { gx.fillStyle = "#7a5"; dot(e); return; }
+      if (e.kind === "bondedPair") {
+        gx.fillStyle = SPECIES_COLOR[e.primarySpecies] || "#aaa"; block(e);
+        gx.strokeStyle = SPECIES_COLOR[e.secondarySpecies] || "#aaa";
+        gx.strokeRect(px(e.x) + 0.5, px(e.y) + 0.5, cell - 1, cell - 1);
+        return;
+      }
+      if (e.kind === "compositeMember") {
+        // Distinct from a solid particle: species-colour fill + a compositeId-keyed
+        // outline (stable hue per composite so members of one organism read as a group)
+        // + a small role initial. Never a plain block (that would alias a brained particle).
+        gx.fillStyle = SPECIES_COLOR[e.species] || "#aaa"; block(e);
+        gx.strokeStyle = `hsl(${compositeHue(e.compositeId)},90%,70%)`;
+        gx.lineWidth = 1;
+        gx.strokeRect(px(e.x) + 0.5, px(e.y) + 0.5, cell - 1, cell - 1);
+        if (cell >= 8 && e.role) {
+          gx.fillStyle = "#000";
+          gx.fillText(e.role[0], px(e.x) + 1, px(e.y) + cell - 1);
+        }
+        return;
+      }
+      // particle: brained = solid block, flower (unbrained) = hollow marker
+      gx.fillStyle = SPECIES_COLOR[e.species] || "#aaa";
+      if (e.brained) block(e);
+      else { gx.strokeStyle = gx.fillStyle; gx.strokeRect(px(e.x) + 0.5, px(e.y) + 0.5, cell - 1, cell - 1); }
+    }
+    function block(e) { gx.fillRect(px(e.x), px(e.y), cell, cell); }
+    function dot(e) { gx.fillRect(px(e.x) + cell / 4, px(e.y) + cell / 4, Math.max(1, cell / 2), Math.max(1, cell / 2)); }
+    // Stable hue per compositeId so all members of one organism share an outline colour.
+    function compositeHue(id) {
+      let h = 0; for (let i = 0; i < (id || "").length; i++) h = (h * 31 + id.charCodeAt(i)) % 360;
+      return h;
+    }
+
+    function updatePanels(f) {
+      document.getElementById("scoreboard").innerHTML = table(f.scoreboard);
+      document.getElementById("populations").innerHTML = table(f.populations);
+    }
+    function table(obj) {
+      return "<table>" + Object.keys(obj).map(k =>
+        `<tr><td style="color:${SPECIES_COLOR[k] || "#ddd"}">${k}</td><td>${obj[k]}</td></tr>`
+      ).join("") + "</table>";
+    }
+
+    function pushHistory(pops) {
+      for (const k of Object.keys(history)) {
+        history[k].push(pops[k] || 0);
+        if (history[k].length > HISTORY_MAX) history[k].shift();
+      }
+    }
+    function drawSeries() {
+      sx.fillStyle = "#000"; sx.fillRect(0, 0, series.width, series.height);
+      let max = 1;
+      for (const k of Object.keys(history)) for (const v of history[k]) max = Math.max(max, v);
+      for (const k of Object.keys(history)) {
+        const data = history[k];
+        sx.strokeStyle = SERIES_COLOR[k]; sx.beginPath();
+        for (let i = 0; i < data.length; i++) {
+          const xx = (i / HISTORY_MAX) * series.width;
+          const yy = series.height - (data[i] / max) * (series.height - 4);
+          if (i === 0) sx.moveTo(xx, yy); else sx.lineTo(xx, yy);
+        }
+        sx.stroke();
+      }
+    }
+  </script>
+</body>
+</html>
