@@ -23,6 +23,7 @@ import com.paralife.engine.EnvironmentEngine;
 import com.paralife.engine.LiveEntityRegistry;
 import com.paralife.engine.MetabolicProfile;
 import com.paralife.engine.SpawnConfig;
+import com.paralife.engine.SpeciesSpawnCounter;
 import com.paralife.engine.TickEngine;
 import com.paralife.world.Entity;
 import com.paralife.world.Entity.Particle;
@@ -164,6 +165,18 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
     /** Phase 19.1 D-09 — FLEEING state cleanup on disconnect. */
     @Autowired(required = false)
     private EnvironmentEngine environmentEngine;
+
+    /**
+     * O4: setter-injected, optional — mirrors {@code TickBroadcaster.setOutboundSender}
+     * so existing hand-constructed unit tests keep compiling with {@code spawnCounter == null}
+     * (increments no-op).
+     */
+    private SpeciesSpawnCounter spawnCounter;
+
+    @Autowired(required = false)
+    public void setSpawnCounter(SpeciesSpawnCounter spawnCounter) {
+        this.spawnCounter = spawnCounter;
+    }
 
     @Autowired
     public WorldWebSocketHandler(SessionRegistry sessionRegistry,
@@ -668,6 +681,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
 
         botRegistry.register(session.getId(), entityId, pos);
+        if (spawnCounter != null) spawnCounter.increment(particleType);
         // Phase 19.5 H3: LiveEntityRegistry.register has already been called above
         // (register-first ordering); no additional call needed here.
 

@@ -10,6 +10,10 @@ import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.Rock;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,11 +21,6 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
-
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Collects bot actions between ticks and resolves them atomically during tick
@@ -278,6 +277,18 @@ public class ActionResolver {
     @Autowired(required = false)
     public void setLiveEntityRegistry(@Lazy LiveEntityRegistry liveEntityRegistry) {
         this.liveEntityRegistry = liveEntityRegistry;
+    }
+
+    /**
+     * O4: {@link SpeciesSpawnCounter} setter-injected — optional dependency, mirrors
+     * {@code TickBroadcaster.setOutboundSender} — so existing hand-constructed unit tests
+     * keep compiling with {@code spawnCounter == null} (increments no-op).
+     */
+    private SpeciesSpawnCounter spawnCounter;
+
+    @Autowired(required = false)
+    public void setSpawnCounter(SpeciesSpawnCounter spawnCounter) {
+        this.spawnCounter = spawnCounter;
     }
 
     /**
@@ -678,6 +689,7 @@ public class ActionResolver {
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
         // Phase 19 SCALE-07 (REVIEWS H3): register reproduce child (CONSENSUS-H1 OPTION B: Optional.empty()).
         if (liveEntityRegistry != null) liveEntityRegistry.register(child.id(), target);
+        if (spawnCounter != null) spawnCounter.increment(ra.particle.type());
 
         Particle updatedParent = ra.particle.withEnergy(ra.particle.energy() - reproduceCost);
         // Energy-only update — EXCLUDED from notifyChanged (REVIEWS MEDIUM-1).
@@ -697,6 +709,7 @@ public class ActionResolver {
                 // Phase 19 SCALE-07 (REVIEWS H3): register bonus child.
                 if (liveEntityRegistry != null) liveEntityRegistry.register(bonusChild.id(), bonusTarget);
                 claimedCells.add(bonusTarget);
+                if (spawnCounter != null) spawnCounter.increment(ra.particle.type());
             }
         }
 
@@ -940,6 +953,7 @@ public class ActionResolver {
         if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(target.x(), target.y());
         // Phase 19 SCALE-07 (REVIEWS H3): register composite-reproducer bud child.
         if (liveEntityRegistry != null) liveEntityRegistry.register(child.id(), target);
+        if (spawnCounter != null) spawnCounter.increment(rca.member.type());
 
         int reproduceCostDrained = composite.drainEnergy(reproduceCost);
         if (reproduceCostDrained < reproduceCost) {
