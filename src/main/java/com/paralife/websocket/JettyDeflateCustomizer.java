@@ -182,8 +182,7 @@ public class JettyDeflateCustomizer {
             }
 
             // C1: observers are browser-facing; browsers cannot advertise server_no_context_takeover.
-            String uri = httpReq.getRequestURI();
-            if (uri != null && uri.startsWith("/ws/observer")) {
+            if (isObserverRoute(httpReq.getContextPath(), httpReq.getRequestURI())) {
                 chain.doFilter(request, response);
                 return;
             }
@@ -204,6 +203,23 @@ public class JettyDeflateCustomizer {
         private static boolean isWebSocketUpgrade(HttpServletRequest req) {
             String upgrade = req.getHeader(UPGRADE_HEADER);
             return upgrade != null && WEBSOCKET.equalsIgnoreCase(upgrade.trim());
+        }
+
+        /**
+         * Exact, context-path-relative match for the deflate exemption. A prefix match
+         * ({@code startsWith("/ws/observer")}) would both miss under a servlet context-path
+         * ({@code /paralife/ws/observer}) and wrongly exempt a future sibling route
+         * ({@code /ws/observer-admin}). The bot route {@code /ws/world} never matches, so it
+         * always stays under {@code server_no_context_takeover} enforcement.
+         */
+        static boolean isObserverRoute(String contextPath, String requestUri) {
+            if (requestUri == null) {
+                return false;
+            }
+            String path = (contextPath != null && requestUri.startsWith(contextPath))
+                    ? requestUri.substring(contextPath.length())
+                    : requestUri;
+            return "/ws/observer".equals(path);
         }
 
         /**

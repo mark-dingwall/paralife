@@ -12,6 +12,9 @@ import com.paralife.engine.SpeciesSpawnCounter;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.WorldGrid;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -58,6 +61,7 @@ class ObserverEndpointIntegrationTest {
     @Autowired BotRegistry botRegistry;
     @Autowired WorldGrid worldGrid;
     @Autowired SpeciesSpawnCounter spawnCounter;
+    @Autowired ObserverSessionGate observerGate;
 
     private final ObjectMapper mapper = new ObjectMapper();
     private WebSocketClient client;
@@ -129,6 +133,30 @@ class ObserverEndpointIntegrationTest {
                 .as("O6c: observer added no BotRegistry entry").isEqualTo(botsBefore);
 
         session.close(1000, "done", Callback.NOOP);
+    }
+
+    @Test
+    void malformedUpgradesDoNotLeakObserverPermits() throws Exception {
+        // C-1 end-to-end: beforeHandshake acquires a permit BEFORE the upgrade is validated. A plain
+        // GET (no Upgrade header) is rejected by Spring's doHandshake returning false WITHOUT
+        // throwing, so afterHandshake sees exception==null and no session is established. Each such
+        // request must still return its permit — otherwise maxSessions bad requests wedge the cap at
+        // 503 forever. Baseline is captured live (sibling tests may momentarily hold permits) and
+        // must be restored exactly. Without the fix, availablePermits collapses to 0.
+        int baseline = observerGate.availablePermits();
+        assertThat(baseline).as("precondition: some permits are free").isPositive();
+
+        HttpClient http = HttpClient.newHttpClient();
+        for (int i = 0; i < baseline + 3; i++) { // more malformed hits than the cap
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create("http://localhost:" + port + "/ws/observer"))
+                    .GET().build();
+            http.send(req, HttpResponse.BodyHandlers.discarding()); // rejected, no upgrade
+        }
+
+        assertThat(observerGate.availablePermits())
+                .as("every malformed upgrade released the permit it took — cap not wedged")
+                .isEqualTo(baseline);
     }
 
     @Test

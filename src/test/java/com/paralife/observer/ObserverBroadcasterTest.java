@@ -2,7 +2,9 @@ package com.paralife.observer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -107,5 +109,35 @@ class ObserverBroadcasterTest {
         assertThatCode(() -> broadcaster.onTick(new TickEvent(1)))
                 .as("observer capture failure must not escape the tick listener")
                 .doesNotThrowAnyException();
+    }
+
+    @Test
+    void onTickNeverCallsSendMessageOnTheTickThread() throws Exception {
+        // C2: @Order(60) does bounded work + a non-blocking offer only; a blocked socket must never
+        // add latency to tick work, so onTick must NOT call session.sendMessage on the tick thread.
+        // (RED-test by adding a direct s.sendMessage(...) in onTick's fan-out loop.)
+        WebSocketSession a = session("a");
+        broadcaster.register(a);
+
+        broadcaster.onTick(new TickEvent(1));
+
+        verify(a, never()).sendMessage(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void everyObserverIsOfferedEvenWhenOffersThrow() {
+        // O1: one bad session's offer must not abort the fan-out. With ALL three offers throwing,
+        // containment → all three are still attempted (order-independent); delete the per-session
+        // try/catch in onTick's loop → the first throw aborts the loop and only ONE offer is made.
+        broadcaster.register(session("a"));
+        broadcaster.register(session("b"));
+        broadcaster.register(session("c"));
+        doThrow(new RuntimeException("offer boom")).when(sender)
+                .offer(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+
+        broadcaster.onTick(new TickEvent(1));
+
+        verify(sender, times(3)).offer(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
     }
 }

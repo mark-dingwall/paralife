@@ -5,6 +5,7 @@ import java.util.concurrent.Semaphore;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.http.server.ServletServerHttpResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.WebSocketSession;
@@ -53,11 +54,28 @@ public class ObserverSessionGate implements HandshakeInterceptor {
     @Override
     public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                WebSocketHandler wsHandler, Exception exception) {
-        // If the upgrade failed after we acquired, no session is established (so no
-        // close callback will fire) — release the permit here, exactly once.
-        if (exception != null) {
+        // afterHandshake runs only when OUR beforeHandshake returned true (permit held). A session
+        // — and therefore releaseIfHeld — exists ONLY if the upgrade actually switched protocols.
+        // Spring rejects a malformed upgrade by returning false from doHandshake WITHOUT throwing,
+        // so exception==null does NOT imply success. Release for every non-established handshake, or
+        // maxSessions bad requests wedge the cap permanently. (Success defers to releaseIfHeld — no
+        // double-release, since a non-101 status has no session to call it.)
+        if (!isUpgraded(response, exception)) {
             permits.release();
         }
+    }
+
+    private static boolean isUpgraded(ServerHttpResponse response, Exception exception) {
+        if (exception != null) {
+            return false;
+        }
+        // Spring always passes a ServletServerHttpResponse here; doHandshake sets the status to
+        // 101 on a real upgrade and 4xx on rejection (both via servletResponse.setStatus).
+        if (response instanceof ServletServerHttpResponse servlet) {
+            return servlet.getServletResponse().getStatus() == HttpStatus.SWITCHING_PROTOCOLS.value();
+        }
+        return true; // unknown response type (not reachable under the servlet container): assume a
+                     // session was established so releaseIfHeld owns the release, never double-free.
     }
 
     /** Release the session's permit exactly once (idempotent across error+close). */

@@ -42,7 +42,10 @@ public class ObserverWebSocketHandler extends AbstractWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         try {
-            sender.attach(session);
+            // The drain owns its terminal-failure teardown: if a send breaks (and a Jetty close
+            // callback may not follow), it runs cleanup directly. cleanup is idempotent, so this
+            // composes safely with the container's afterConnectionClosed/handleTransportError.
+            sender.attach(session, () -> cleanup(session));
             // Bootstrap-barrier: send static terrain BEFORE the broadcaster can offer a world frame.
             ObserverFrame.BootstrapFrame boot = builder.buildBootstrap(worldGrid.snapshot());
             String payload = mapper.writeValueAsString(boot);

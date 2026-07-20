@@ -618,7 +618,8 @@ Static terrain only (grid dims + rock coordinates). Never retransmitted.
 
 - `scoreboard` — cumulative committed spawns per species since process start (`SpeciesSpawnCounter`,
   process-lifetime, never reset).
-- `populations` — current live census per species, this tick (see census rule below).
+- `populations` — current occupancy census per species, this tick — **no liveness filter** (see
+  census rule below).
 
 #### Census rule
 

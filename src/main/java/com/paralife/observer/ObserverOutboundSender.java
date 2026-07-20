@@ -30,15 +30,26 @@ public class ObserverOutboundSender {
     private final Map<String, Thread> threads = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
-    public void attach(WebSocketSession session) {
+    /**
+     * @param onTerminalFailure drain-owned cleanup (unregister + detach + release-once) run when a
+     *     send fails terminally — invoked DIRECTLY rather than trusting a Jetty close callback that
+     *     may never fire (e.g. if {@code close()} itself throws). Not run on a normal external detach.
+     */
+    public void attach(WebSocketSession session, Runnable onTerminalFailure) {
         String id = session.getId();
         detach(id); // idempotent re-attach
         LinkedBlockingQueue<String> slot = new LinkedBlockingQueue<>(1);
+        // Publish the thread handle BEFORE starting it (create it unstarted). The only detach that
+        // can race an in-flight attach is @PreDestroy shutdown scanning `sessions`; putting the
+        // thread + slot in FIRST and `sessions` LAST guarantees that once shutdown can see the
+        // session, it can also find and interrupt the drain. An interrupted unstarted VT exits
+        // immediately on start (the while-guard sees the interrupt), so no drain is orphaned.
+        Thread t = Thread.ofVirtual().name("ws-observer-" + id).unstarted(() -> drain(session, slot, onTerminalFailure));
         slots.put(id, slot);
+        threads.put(id, t);
         sessions.put(id, session); // retained so @PreDestroy can close-first (interrupt alone
                                    // cannot unblock a drain stalled inside a Jetty write)
-        Thread t = Thread.ofVirtual().name("ws-observer-" + id).start(() -> drain(session, slot));
-        threads.put(id, t);
+        t.start();
     }
 
     /** Non-blocking, latest-wins. Single-producer (tick thread) per observer. */
@@ -49,7 +60,7 @@ public class ObserverOutboundSender {
         slot.offer(payload); // install newest
     }
 
-    private void drain(WebSocketSession session, LinkedBlockingQueue<String> slot) {
+    private void drain(WebSocketSession session, LinkedBlockingQueue<String> slot, Runnable onTerminalFailure) {
         try {
             while (!Thread.currentThread().isInterrupted()) {
                 String payload = slot.take();
@@ -58,17 +69,19 @@ public class ObserverOutboundSender {
                     synchronized (session) {
                         session.sendMessage(new TextMessage(payload));
                     }
-                } catch (IOException e) {
-                    // Transport is broken. Close so Jetty fires afterConnectionClosed →
-                    // ObserverWebSocketHandler.cleanup (broadcaster.unregister + detach + release-once),
-                    // then EXIT this drain — do not spin re-sending into a dead socket. (This is
-                    // stricter than the bot OutboundSender's log-and-continue, justified because an
-                    // observer has no admission FSM to reap it; the send failure IS its liveness signal.)
-                    log.warn("Observer send failed for session={}, closing: {}", session.getId(), e.getMessage());
+                } catch (IOException | RuntimeException e) {
+                    // Any send failure is terminal for an observer: there is no admission FSM to reap
+                    // it, so the failure IS its liveness signal (stricter than the bot OutboundSender's
+                    // log-and-continue, and covering a persistent RuntimeException that would otherwise
+                    // spin every tick). Close best-effort to unblock Jetty, then run the drain-OWNED
+                    // cleanup DIRECTLY and exit — do not rely on a container close callback, which may
+                    // never fire if close() itself throws (that path would otherwise leak the permit,
+                    // broadcaster registration, and sender state).
+                    log.warn("Observer send failed for session={}, tearing down: {}",
+                            session.getId(), e.getMessage());
                     closeQuietly(session);
+                    onTerminalFailure.run();
                     return;
-                } catch (RuntimeException e) {
-                    log.warn("Observer send error for session={}: {}", session.getId(), e.getMessage());
                 }
             }
         } catch (InterruptedException e) {

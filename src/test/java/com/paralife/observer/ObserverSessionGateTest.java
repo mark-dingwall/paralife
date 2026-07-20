@@ -14,8 +14,11 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.http.server.ServletServerHttpResponse;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.WebSocketSession;
 
@@ -97,6 +100,46 @@ class ObserverSessionGateTest {
                 .isEqualTo(2);
         assertThat(g.availablePermits())
                 .as("cap never inflated above maxSessions").isLessThanOrEqualTo(2);
+    }
+
+    @Test
+    void rejectedHandshakeWithoutExceptionReleasesPermit() throws Exception {
+        // beforeHandshake acquires the permit BEFORE the upgrade is validated. Spring rejects a
+        // malformed upgrade (bad headers / missing key / unsupported version) by returning false
+        // from doHandshake WITHOUT throwing, so afterHandshake sees exception==null and a non-101
+        // status, and NO session is established (releaseIfHeld never runs). The permit must be
+        // returned here or maxSessions bad requests wedge the cap at 503 permanently.
+        ObserverSessionGate g = gate(true, 1);
+        assertThat(before(g, new HashMap<>())).isTrue();
+        assertThat(g.availablePermits()).as("permit acquired at handshake").isZero();
+
+        // Spring passes a ServletServerHttpResponse; a rejected upgrade carries a 4xx status.
+        MockHttpServletResponse rejected = new MockHttpServletResponse();
+        rejected.setStatus(HttpStatus.BAD_REQUEST.value());
+        g.afterHandshake(mock(ServerHttpRequest.class), new ServletServerHttpResponse(rejected),
+                mock(WebSocketHandler.class), null);
+
+        assertThat(g.availablePermits())
+                .as("a non-switching handshake (no session) releases its permit").isEqualTo(1);
+    }
+
+    @Test
+    void successfulUpgradeDefersReleaseToTheSession() throws Exception {
+        // positive control: a real upgrade returns 101 SWITCHING_PROTOCOLS and establishes a
+        // session that owns the permit (freed by releaseIfHeld on close). afterHandshake must NOT
+        // release here too — that would double-release and inflate the cap above maxSessions.
+        ObserverSessionGate g = gate(true, 1);
+        Map<String, Object> attrs = new HashMap<>();
+        assertThat(before(g, attrs)).isTrue();
+
+        MockHttpServletResponse upgraded = new MockHttpServletResponse();
+        upgraded.setStatus(HttpStatus.SWITCHING_PROTOCOLS.value()); // 101 → real upgrade
+        g.afterHandshake(mock(ServerHttpRequest.class), new ServletServerHttpResponse(upgraded),
+                mock(WebSocketHandler.class), null);
+
+        assertThat(g.availablePermits()).as("established session still holds its permit").isZero();
+        g.releaseIfHeld(sessionWith(attrs)); // the session's own close releases exactly once
+        assertThat(g.availablePermits()).as("no double-release on the success path").isEqualTo(1);
     }
 
     @Test

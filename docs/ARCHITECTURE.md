@@ -57,8 +57,11 @@ Full token taxonomy, STALLED FSM, and resume-token lifecycle: `docs/ADMISSION.md
 
 ## Connection model (Phase 18, D-05 / D-21)
 
-**WS:entity 1:1** — one WebSocket connection per entity, always. Every entity on the grid has
-exactly one WebSocket session; every WebSocket session owns exactly one entity during the Alive phase.
+**WS:entity 1:1** — one WebSocket connection per entity, always, **on the bot path (`/ws/world`)**.
+Every entity on the grid has exactly one bot WebSocket session; every bot WebSocket session owns
+exactly one entity during the Alive phase. The read-only observer route (`/ws/observer`) is the
+deliberate exception: it owns **no** entity and bypasses admission entirely (see the observer
+subsection below).
 
 See `docs/HARNESS.md` §1 for full rationale, exception policy, and the 5 000-connections-per-JVM
 design ceiling (D-02).
