@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.server.ServerHttpRequest;
@@ -38,7 +39,7 @@ class ObserverWebSocketHandlerTest {
     void bootstrapSendFailure_releasesPermitAndDetachesDrainVt() throws Exception {
         WorldGrid grid = new WorldGrid(new GridConfig(16, 16));
         EnvironmentEngine env = mock(EnvironmentEngine.class);
-        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of()));
+        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of(), Set.of()));
         ObserverFrameBuilder builder = new ObserverFrameBuilder();
         ObserverOutboundSender sender = new ObserverOutboundSender();
         ObserverBroadcaster broadcaster = new ObserverBroadcaster(builder, grid, env,
@@ -142,7 +143,7 @@ class ObserverWebSocketHandlerTest {
     private static Fixture fixture() {
         WorldGrid grid = new WorldGrid(new GridConfig(16, 16));
         EnvironmentEngine env = mock(EnvironmentEngine.class);
-        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of()));
+        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of(), Set.of()));
         ObserverFrameBuilder builder = new ObserverFrameBuilder();
         ObserverOutboundSender sender = new ObserverOutboundSender();
         ObserverBroadcaster broadcaster = new ObserverBroadcaster(builder, grid, env,

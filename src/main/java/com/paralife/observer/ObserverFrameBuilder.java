@@ -51,6 +51,7 @@ public class ObserverFrameBuilder {
         for (ParticleType t : ParticleType.values()) {
             populations.put(t.name(), 0);
         }
+        Set<String> infectedIds = env.infectedIds();
         Cell[][] cells = grid.cells();
         for (int x = 0; x < grid.width(); x++) {
             for (int y = 0; y < grid.height(); y++) {
@@ -59,21 +60,24 @@ public class ObserverFrameBuilder {
                 switch (e) {
                     case Entity.Particle p -> {
                         entities.add(ObserverFrame.EntityDto.particle(
-                                x, y, p.type().name(), p.energy(), ownedIds.contains(p.id())));
+                                x, y, p.type().name(), p.energy(), ownedIds.contains(p.id()),
+                                infectedIds.contains(p.id())));
                         populations.merge(p.type().name(), 1, Integer::sum);
                     }
                     case Entity.Nutrient n -> entities.add(ObserverFrame.EntityDto.nutrient(x, y, n.level()));
                     case Entity.BondedPair bp -> {
                         entities.add(ObserverFrame.EntityDto.bondedPair(
                                 x, y, bp.primaryType().name(), bp.secondaryType().name(),
-                                bp.energy(), ownedIds.contains(bp.id())));
+                                bp.energy(), ownedIds.contains(bp.id()),
+                                infectedIds.contains(bp.id())));
                         populations.merge(bp.primaryType().name(), 1, Integer::sum);
                         populations.merge(bp.secondaryType().name(), 1, Integer::sum);
                     }
                     case Entity.CompositeMember cm -> {
                         entities.add(ObserverFrame.EntityDto.compositeMember(
                                 x, y, cm.type().name(), cm.compositeId(), cm.role().name(),
-                                cm.energy(), ownedIds.contains(cm.id())));
+                                cm.energy(), ownedIds.contains(cm.id()),
+                                infectedIds.contains(cm.id())));
                         populations.merge(cm.type().name(), 1, Integer::sum);
                     }
                     case Entity.Rock ignored -> {

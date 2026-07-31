@@ -14,6 +14,7 @@ import com.paralife.engine.TickEvent;
 import com.paralife.world.GridConfig;
 import com.paralife.world.WorldGrid;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.TextMessage;
@@ -42,7 +43,7 @@ class ObserverBootstrapOrderingTest {
     void bootstrapIsSentBeforeTheObserverIsRegistered_andWorldNeverPrecedesIt() throws Exception {
         WorldGrid grid = new WorldGrid(new GridConfig(16, 16));
         EnvironmentEngine env = mock(EnvironmentEngine.class);
-        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of()));
+        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of(), Set.of()));
         ObserverFrameBuilder builder = new ObserverFrameBuilder();
         ObserverOutboundSender sender = new ObserverOutboundSender();
         ObserverBroadcaster broadcaster = spy(new ObserverBroadcaster(builder, grid, env,

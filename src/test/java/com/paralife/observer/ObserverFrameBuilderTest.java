@@ -2,6 +2,7 @@ package com.paralife.observer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.paralife.engine.EnvironmentSnapshot;
 import com.paralife.world.Entity;
 import com.paralife.world.Entity.BondedPair;
@@ -31,7 +32,11 @@ class ObserverFrameBuilderTest {
     }
 
     private static EnvironmentSnapshot emptyEnv() {
-        return new EnvironmentSnapshot(List.of(), List.of(), List.of());
+        return new EnvironmentSnapshot(List.of(), List.of(), List.of(), Set.of());
+    }
+
+    private static EnvironmentSnapshot envInfecting(String... ids) {
+        return new EnvironmentSnapshot(List.of(), List.of(), List.of(), Set.of(ids));
     }
 
     private static long[] noSpawns() {
@@ -97,7 +102,8 @@ class ObserverFrameBuilderTest {
         EnvironmentSnapshot env = new EnvironmentSnapshot(
                 List.of(new EnvironmentSnapshot.EnvCell(1, 2, 180)), // toxin intensity magnitude
                 List.of(new EnvironmentSnapshot.EnvCell(3, 4, 42)),  // mutagen strain id
-                List.of(new Position(5, 6), new Position(7, 8)));    // this-tick lightning
+                List.of(new Position(5, 6), new Position(7, 8)),     // this-tick lightning
+                Set.of());
 
         ObserverFrame.WorldFrame f = builder.buildWorld(9L, grid.snapshot(), env, Set.of(), noSpawns());
 
@@ -170,5 +176,57 @@ class ObserverFrameBuilderTest {
         assertThat(b.grid().width()).isEqualTo(16);
         assertThat(b.grid().height()).isEqualTo(16);
         assertThat(b.rocks()).containsExactly(new ObserverFrame.RockDto(3, 3));
+    }
+
+    /**
+     * R2 — one mixed frame. Every infectable kind (particle / bondedPair / compositeMember) is
+     * present twice: once with an active infection, once clean. Each clean entity is the positive
+     * control for its own switch branch, so suppressing the membership check in any single branch
+     * fails here.
+     */
+    @Test
+    void mutatedProjectedForEveryInfectableKindWithCleanControls() {
+        WorldGrid grid = grid16();
+        grid.setEntity(1, 1, new Particle("sickP", ParticleType.CATALYST, 50, 100));
+        grid.setEntity(2, 2, new Particle("wellP", ParticleType.CATALYST, 50, 100));
+        grid.setEntity(3, 3, new BondedPair("sickBp", ParticleType.CATALYST, ParticleType.SPORE,
+                60, 200, "pe", "se", 1, 1, 1));
+        grid.setEntity(4, 4, new BondedPair("wellBp", ParticleType.CATALYST, ParticleType.SPORE,
+                60, 200, "pe2", "se2", 1, 1, 1));
+        grid.setEntity(5, 5, new CompositeMember("sickCm", "c-1", ParticleType.MEMBRANE, Role.FEEDER, 33, 100));
+        grid.setEntity(6, 6, new CompositeMember("wellCm", "c-1", ParticleType.MEMBRANE, Role.FEEDER, 33, 100));
+        grid.setEntity(7, 7, new Nutrient("n", 10)); // never infectable
+
+        ObserverFrame.WorldFrame f = builder.buildWorld(
+                1L, grid.snapshot(), envInfecting("sickP", "sickBp", "sickCm"), Set.of(), noSpawns());
+
+        assertThat(dtoAt(f, 1, 1).mutated()).as("infected particle").isTrue();
+        assertThat(dtoAt(f, 2, 2).mutated()).as("clean particle control").isNull();
+        assertThat(dtoAt(f, 3, 3).mutated()).as("infected bondedPair").isTrue();
+        assertThat(dtoAt(f, 4, 4).mutated()).as("clean bondedPair control").isNull();
+        assertThat(dtoAt(f, 5, 5).mutated()).as("infected compositeMember").isTrue();
+        assertThat(dtoAt(f, 6, 6).mutated()).as("clean compositeMember control").isNull();
+        assertThat(dtoAt(f, 7, 7).mutated()).as("nutrient is never mutated").isNull();
+    }
+
+    /**
+     * R3 — clean is represented by KEY OMISSION, not by a serialized {@code false}. Paired: the
+     * infected entity's JSON must carry the literal {@code "mutated":true}.
+     */
+    @Test
+    void mutatedSerializesAsTrueOrIsOmittedEntirely() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        WorldGrid grid = grid16();
+        grid.setEntity(1, 1, new Particle("sickP", ParticleType.CATALYST, 50, 100));
+        grid.setEntity(2, 2, new Particle("wellP", ParticleType.CATALYST, 50, 100));
+
+        ObserverFrame.WorldFrame f = builder.buildWorld(
+                1L, grid.snapshot(), envInfecting("sickP"), Set.of(), noSpawns());
+
+        String sick = mapper.writeValueAsString(dtoAt(f, 1, 1));
+        String well = mapper.writeValueAsString(dtoAt(f, 2, 2));
+
+        assertThat(sick).as("present → literal boolean true").contains("\"mutated\":true");
+        assertThat(well).as("absent → key omitted, never \"mutated\":false").doesNotContain("mutated");
     }
 }

@@ -636,14 +636,20 @@ subset beyond the always-present `x`, `y`, `kind`:
 
 | `kind` | Fields present |
 |---|---|
-| `particle` | `species`, `energy`, `brained` |
+| `particle` | `species`, `energy`, `brained`, `mutated`? |
 | `nutrient` | `energy` (nutrient level) |
-| `bondedPair` | `primarySpecies`, `secondarySpecies`, `energy`, `brained` |
-| `compositeMember` | `species`, `compositeId`, `role`, `energy`, `brained` |
+| `bondedPair` | `primarySpecies`, `secondarySpecies`, `energy`, `brained`, `mutated`? |
+| `compositeMember` | `species`, `compositeId`, `role`, `energy`, `brained`, `mutated`? |
 
 `species` / `primarySpecies` / `secondarySpecies` ∈ `{CATALYST, MEMBRANE, SPORE}`. `role` ∈
 `{LOCOMOTOR, FEEDER, ATTACKER, DEFENDER, REPRODUCER, SENSOR}`. `brained` marks an entity currently
 owned by a connected bot (vs. server-idle/unowned).
+
+`mutated` is **true-only and optional**: present as the literal `true` exactly when the entity had
+an active infection at capture time (the same `EnvCleanupHooksBean` infection map that drives the
+bot-facing `entityStatus` MUTATING bit, §8.1.3), and **omitted entirely** when clean — never sent as
+`false`. Nutrients never carry it. The field is additive and ignored by existing consumers, so
+`schemaVersion` remains `1`.
 
 #### `env` — per-cell env layers, non-zero cells only
 

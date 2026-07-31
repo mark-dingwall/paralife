@@ -18,6 +18,7 @@ import com.paralife.engine.TickEvent;
 import com.paralife.world.GridConfig;
 import com.paralife.world.WorldGrid;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -36,7 +37,7 @@ class ObserverBroadcasterTest {
     void setUp() {
         worldGrid = new WorldGrid(new GridConfig(16, 16));
         env = mock(EnvironmentEngine.class);
-        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of()));
+        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of(), Set.of()));
         botRegistry = new BotRegistry();
         spawnCounter = new SpeciesSpawnCounter();
         sender = mock(ObserverOutboundSender.class);

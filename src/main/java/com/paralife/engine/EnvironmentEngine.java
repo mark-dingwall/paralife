@@ -1074,10 +1074,10 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 if (ms > 0) mutagen.add(new EnvCell(x, y, ms));
             }
         }
+        // Defensive copying lives at the record's single authoritative boundary.
         return new EnvironmentSnapshot(
-                List.copyOf(toxin),
-                List.copyOf(mutagen),
-                List.copyOf(lightningStrikesThisTick));
+                toxin, mutagen, lightningStrikesThisTick,
+                envCleanupHooksBean.getInfections().keySet());
     }
 
     public int computeSplashDamage(Position defenderPos) {
