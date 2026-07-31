@@ -30,4 +30,12 @@ class ObserverPageServesTest {
         assertThat(body).as("connects to the observer endpoint").contains("/ws/observer");
         assertThat(body).as("handles both frame types").contains("bootstrap").contains("world");
     }
+
+    @Test
+    void markerModuleIsServedAsStaticContent() {
+        ResponseEntity<String> resp = rest.getForEntity("/observer-markers.js", String.class);
+        assertThat(resp.getStatusCode().is2xxSuccessful())
+                .as("the page imports this module by URL — a 404 breaks the page silently").isTrue();
+        assertThat(resp.getBody()).as("exports the marker geometry entry point").contains("markerOps");
+    }
 }

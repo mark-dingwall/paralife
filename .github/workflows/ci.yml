@@ -31,10 +31,19 @@ jobs:
           java-version: '21'
           cache: gradle
 
-      - name: Lint (Spotless) + test suite (forkEvery=0)
+      - name: Set up Node 22
+        # The observer renderer's pure modules are tested by Node's built-in
+        # runner (no npm dependencies) — see the jsTest task in build.gradle.kts.
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Lint (Spotless) + Java and JavaScript test suites
         # One Gradle invocation: pays JVM startup once and runs spotlessCheck
         # first, so a formatting failure fails fast before the long test suite.
-        run: ./gradlew spotlessCheck test --no-daemon --console=plain
+        # jsTest is named explicitly: this job never invokes `check`, so binding
+        # jsTest to check alone would leave it out of the merge gate entirely.
+        run: ./gradlew spotlessCheck test jsTest --no-daemon --console=plain
 
       - name: Upload test reports
         if: always()
