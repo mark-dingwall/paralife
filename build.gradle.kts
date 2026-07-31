@@ -199,7 +199,7 @@ tasks.register<Test>("leakProbe") {
 //   2. A glob matching NOTHING is a successful zero-test run (exit 0). So the gate
 //      would silently pass if a test file were renamed or deleted. The preflight
 //      below names the files that must exist; deleting one fails the build.
-val requiredJsTests = listOf("observer-markers.test.js")
+val requiredJsTests = listOf("observer-markers.test.js", "observer-render.test.js")
 
 tasks.register<Exec>("jsTest") {
     group = "verification"

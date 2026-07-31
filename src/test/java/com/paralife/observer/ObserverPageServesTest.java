@@ -38,4 +38,11 @@ class ObserverPageServesTest {
                 .as("the page imports this module by URL — a 404 breaks the page silently").isTrue();
         assertThat(resp.getBody()).as("exports the marker geometry entry point").contains("markerOps");
     }
+
+    @Test
+    void renderModuleIsServedAsStaticContent() {
+        ResponseEntity<String> resp = rest.getForEntity("/observer-render.js", String.class);
+        assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(resp.getBody()).as("exports the world painter").contains("drawWorld");
+    }
 }
