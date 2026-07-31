@@ -429,6 +429,37 @@ only. Before ANY authenticated/public exposure: real auth/authz, non-wildcard or
 policy, and handshake rate-limiting. Until then the endpoint exposes full-world state
 (which the bot path deliberately vision-scopes) and must stay operator-only.
 
+### Observer bounded viewport, zoom/pan, and an explicit render budget
+
+Slice A renders the whole world directly at a 6px pitch, sized for the default 256×256
+grid. Two independent triggers activate this item — either one is sufficient:
+
+1. **Interactive navigation or a larger world.** Any work that begins zoom/pan gestures, or
+   that claims observer support beyond the default 256×256 target.
+2. **A measured render cost.** The page shows an observe-only render duration next to the
+   tick (R11). If that figure consumes a material fraction of the configured tick interval
+   at the *default* grid size, this item is live regardless of trigger 1. This second
+   trigger exists because the default world can saturate on its own: a measured late-run
+   default configuration held 32,016 rocks, 45,559 mutagen cells, 21,049 toxin cells and
+   25,311 nutrients — roughly 124,000 fill operations per frame. A grid-size-only trigger
+   would never fire on the case actually measured.
+
+**Trigger 2 has already fired.** Slice A replayed that saturated load through the shipped
+renderer in Chrome (~128k fill operations, 1537×1537 backing store): **93–268 ms per frame**
+across five runs, against the default 500 ms tick — 19–54% of a tick spent painting, on a
+desktop machine. A live early-run frame (3,813 entities, empty env field) cost 8–19 ms, so
+the cost is dominated by the environment and nutrient layers, not by entity markers. This
+item is therefore live on measurement alone, independent of any zoom/pan work.
+
+Work: a bounded or tiled viewport with zoom/pan, plus a stated render budget. Reintroducing
+an **offscreen full-world buffer is the first move** once panning is in scope — panning under
+direct rendering repaints the entire world every pan frame, whereas panning over a buffer is a
+blit. The seam already exists: `drawWorld(ctx, state)` takes its context as an argument, so
+this means creating a buffer and passing its context, touching no marker or layer-order code.
+It was deliberately NOT shipped dormant in Slice A (an unused transform had already produced an
+odd-dimension centering defect in review). Also deferred here: composite role glyphs, which
+need more than a 5px content square.
+
 ### Observer UI headless-browser JS smoke
 
 `observer.html` render fidelity is judged by eye (the stack has no browser-test harness).

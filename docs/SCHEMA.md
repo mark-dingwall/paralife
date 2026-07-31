@@ -658,4 +658,36 @@ bot-facing `entityStatus` MUTATING bit, §8.1.3), and **omitted entirely** when 
   it as a distinct category, not an intensity gradient.
 - `lightning: [{x, y}]` — strike coordinates applied on this tick only.
 
+#### Rendering contract (`observer.html` + `observer-markers.js` + `observer-render.js`)
+
+The wire frame above is the data; this is the durable contract for how it is drawn. Marker geometry
+and world painting are pure ES modules gated by `./gradlew jsTest` (`observer-markers.test.js`,
+`observer-render.test.js`); the page itself is static-wiring-gated by `ObserverPageServesTest`.
+
+**Pitch.** 6px per cell — a 5×5 content square inside 1px `#ddd` grid lines on `#000`. The default
+256×256 world therefore backs a **1537×1537** canvas (`256 × 6 + 1`). Width and height are sized
+independently from the bootstrap dimensions; neither is derived from the other.
+
+**Markers** (all coordinates cell-local, within the 5px content square):
+
+| Occupant | Marker |
+|---|---|
+| `nutrient` | centred 3×3 `#7a5` fill |
+| `particle`, brained | full 5×5 species-colour fill |
+| `particle`, unbrained | 5×5 hollow species-colour shell — "the shell is there, nothing is running it" |
+| `bondedPair` | two triangles split on the main diagonal; the **primary owns the diagonal** and is one pixel larger |
+| `compositeMember` | full species fill plus a strictly smaller 2×2 cue whose hue derives from `compositeId` (stable per organism) |
+| any, `mutated` | inset 3×3 hollow `#ff0` cue, drawn over the marker so it coexists with the hollow shell |
+
+Species colours are exact: Catalyst `#e34`, Membrane `#3d8`, Spore `#59f`. An unknown species falls
+back to `#888`.
+
+**Layer order** is exactly: background → grid → rocks → toxin → mutagen → entities → lightning.
+Rocks sit **below** the environment field, so toxin or mutagen on a rock cell stays visible (rocks
+cover roughly half the default grid, and painting them last hid the field there).
+
+**Environment semantics** follow the wire: toxin is a magnitude — one hue, opacity rising with
+`intensity`; mutagen is categorical — hue from `strain`, opacity fixed. A mutagen heat ramp would
+misrepresent a strain id as a level.
+
 ---

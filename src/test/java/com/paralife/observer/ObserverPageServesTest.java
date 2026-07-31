@@ -31,6 +31,27 @@ class ObserverPageServesTest {
         assertThat(body).as("handles both frame types").contains("bootstrap").contains("world");
     }
 
+    /**
+     * Static wiring gate — it proves the page references the extracted modules and the timed
+     * render path, NOT that any JavaScript executed. A browser smoke remains deferred by
+     * explicit project decision (BACKLOG.md).
+     */
+    @Test
+    void pageDelegatesRenderingToTheExtractedModules() {
+        String body = rest.getForEntity("/observer.html", String.class).getBody();
+        assertThat(body).isNotNull();
+
+        assertThat(body).as("imports are only honoured inside a module script")
+                .contains("type=\"module\"");
+        assertThat(body).as("imports the render module").contains("./observer-render.js");
+        assertThat(body).as("imports the marker module").contains("./observer-markers.js");
+        assertThat(body).as("world frames go through the extracted painter").contains("drawWorld(");
+        assertThat(body).as("R11: the render call is timed with a monotonic clock")
+                .contains("performance.now()");
+        assertThat(body).as("R11: the measured cost reaches the status text")
+                .containsPattern("(?s)statusEl\\.textContent[^;]*renderMs");
+    }
+
     @Test
     void markerModuleIsServedAsStaticContent() {
         ResponseEntity<String> resp = rest.getForEntity("/observer-markers.js", String.class);
