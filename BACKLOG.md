@@ -451,6 +451,23 @@ desktop machine. A live early-run frame (3,813 entities, empty env field) cost 8
 the cost is dominated by the environment and nutrient layers, not by entity markers. This
 item is therefore live on measurement alone, independent of any zoom/pan work.
 
+**Caching the static layers is not the fix.** Background, grid lines and rocks never change
+after bootstrap, so they can be painted once into an offscreen buffer and blitted each frame.
+Counting real frames through the shipped `drawWorld` shows why that does not solve this item:
+on a live world (tick 78–207, 3.4k entities, ~3.2k toxin cells, no mutagen) the static prefix
+is **83% of the frame's fill operations** — but that frame already renders in 11–20 ms
+(median 15 ms, 50 samples in Chrome), so there is nothing to win. On the saturated load that
+actually fired trigger 2, the same prefix is only ~25% of ~128k operations; the remaining 75%
+is environment and nutrient cells, which change every tick and cannot be cached. A static-layer
+cache would take the 268 ms worst case to roughly 200 ms — still a fifth of the tick. The
+layer that must shrink is the one that changes, which is what a bounded viewport does.
+
+Those two shares were both measured at the old `density-threshold: 128`, which placed 32,224
+rocks. The default is now 185 (5,952 rocks), so the cacheable prefix has fallen to roughly 6,500
+operations — about 6% of a saturated frame. The conclusion holds a fortiori: there is even less
+to win from caching than the figures above suggest. The saturated wall-clock numbers themselves
+have not been re-measured since the density change and will have improved somewhat.
+
 Work: a bounded or tiled viewport with zoom/pan, plus a stated render budget. Reintroducing
 an **offscreen full-world buffer is the first move** once panning is in scope — panning under
 direct rendering repaints the entire world every pan frame, whereas panning over a buffer is a
