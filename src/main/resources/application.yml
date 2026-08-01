@@ -23,7 +23,7 @@ paralife:
     height: 256
     rock:
       seed: 0
-      density-threshold: 128
+      density-threshold: 185
       textures:
         - /rocks/perlin-01.png
         - /rocks/perlin-02.png

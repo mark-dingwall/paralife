@@ -1,11 +1,10 @@
 package com.paralife.world;
 
-import org.junit.jupiter.api.Test;
-
-import java.util.List;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import java.util.List;
+import org.junit.jupiter.api.Test;
 
 class RockConfigTest {
 
@@ -14,7 +13,7 @@ class RockConfigTest {
         RockConfig cfg = RockConfig.defaults();
         assertEquals(5, cfg.textures().size());
         assertEquals(0L, cfg.seed());
-        assertEquals(128, cfg.densityThreshold());
+        assertEquals(185, cfg.densityThreshold());
     }
 
     @Test
