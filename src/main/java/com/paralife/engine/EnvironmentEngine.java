@@ -1060,6 +1060,11 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
      * Immutable, tick-owned snapshot of env field state for the observer visualiser.
      * Sparse: only non-zero cells are listed. Values copied by value. Call on the tick
      * thread (after this engine's {@code @Order(14)} stage, before frame serialization).
+     *
+     * <p>Caller-confinement is NOT source-confinement: the infection map read below has an
+     * off-tick writer (see {@link EnvCleanupHooksBean#infections}). {@code Set.copyOf} is safe
+     * against it only because that map is concurrent, so the resulting {@code infectedIds} is a
+     * weakly-consistent sample rather than a tick-atomic one.
      */
     public EnvironmentSnapshot snapshot() {
         int w = toxinGrid.length;

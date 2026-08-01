@@ -94,16 +94,27 @@ test("mutagen is categorical: strain changes hue and never opacity", () => {
 
 // ── R5: complete layer order ───────────────────────────────────────────────
 
+// Every coordinate has x !== y, and the grid is rectangular. A fixture on the
+// diagonal of a square grid is invariant under transposition, so it cannot tell
+// drawCellFill(cellOrigin(x), cellOrigin(y)) from the argument-swapped version.
+const PLACED = {
+  rock: { x: 1, y: 0 },
+  entity: { x: 6, y: 1 },
+  toxin: { x: 2, y: 3 },
+  mutagen: { x: 7, y: 4 },
+  lightning: { x: 0, y: 2 },
+};
+
 function paintedWorld() {
   const ctx = recordingContext();
   drawWorld(ctx, {
-    grid: { width: 4, height: 4 },
-    rocks: [{ x: 0, y: 0 }],
-    entities: [{ x: 1, y: 1, kind: "particle", species: "CATALYST", brained: true }],
+    grid: { width: 8, height: 5 },
+    rocks: [PLACED.rock],
+    entities: [{ ...PLACED.entity, kind: "particle", species: "CATALYST", brained: true }],
     env: {
-      toxin: [{ x: 2, y: 2, intensity: 200 }],
-      mutagen: [{ x: 3, y: 3, strain: 9 }],
-      lightning: [{ x: 1, y: 3 }],
+      toxin: [{ ...PLACED.toxin, intensity: 200 }],
+      mutagen: [{ ...PLACED.mutagen, strain: 9 }],
+      lightning: [PLACED.lightning],
     },
   });
   return ctx.calls;
@@ -143,16 +154,46 @@ test("the whole grid is drawn before the first rock, not merely one border line"
   );
 });
 
+// Layer ORDER says nothing about layer PLACEMENT. Without this, swapping the two
+// arguments to cellOrigin in drawCellFill, or swapping ox/oy in the entity loop,
+// leaves every other test in this file green. Origins are hand-computed from the
+// 6px pitch and 1px leading border (x * 6 + 1), never read back from cellOrigin().
+test("every layer paints its cell at the pixel origin for its own coordinates", () => {
+  const calls = paintedWorld();
+  const at = (pred) => calls.find(pred);
+
+  const expected = {
+    rock: { color: ROCK_COLOR, x: 7, y: 1 },
+    toxin: { color: toxinColor(200), x: 13, y: 19 },
+    mutagen: { color: mutagenColor(9), x: 43, y: 25 },
+    entity: { color: SPECIES_COLOR.CATALYST, x: 37, y: 7 },
+    lightning: { color: LIGHTNING_COLOR, x: 1, y: 13 },
+  };
+
+  for (const [layer, want] of Object.entries(expected)) {
+    const call = at((c) => c.color === want.color && c.fn === "fillRect");
+    assert.ok(call, `${layer} painted no fill — the placement assertion would be vacuous`);
+    assert.deepEqual(
+      { x: call.x, y: call.y, w: call.w, h: call.h },
+      { x: want.x, y: want.y, w: 5, h: 5 },
+      `${layer} at cell (${PLACED[layer].x},${PLACED[layer].y}) must fill 5x5 at (${want.x},${want.y})`,
+    );
+  }
+});
+
 // The sizing functions being rectangular is not enough: drawWorld has to USE both.
 // A width-for-height swap inside the painter is invisible to the sizing contracts.
 test("the painter sizes its own background and grid from both dimensions", () => {
   const ctx = recordingContext();
   drawWorld(ctx, { grid: { width: 10, height: 4 }, rocks: [], entities: [], env: {} });
 
+  // Hand-computed from the pitch (n * 6 + 1), NOT read back from canvasWidth/
+  // canvasHeight — deriving the expectation from the code under test lets a bug
+  // in the sizing helpers move the expectation along with it.
   const background = ctx.calls[0];
   assert.equal(background.color, BACKGROUND_COLOR, "background paints first");
-  assert.equal(background.w, canvasWidth(10));
-  assert.equal(background.h, canvasHeight(4));
+  assert.equal(background.w, 61);
+  assert.equal(background.h, 25);
 
   const gridCalls = ctx.calls.filter((c) => c.color === GRID_COLOR);
   const verticals = gridCalls.filter((c) => c.w === 1);

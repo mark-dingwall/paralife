@@ -2,18 +2,17 @@ package com.paralife.engine;
 
 import com.paralife.world.Entity;
 import com.paralife.world.Position;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.context.ApplicationListener;
-import org.springframework.context.event.ContextRefreshedEvent;
-import org.springframework.stereotype.Component;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationListener;
+import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.stereotype.Component;
 
 /**
  * Third-bean Spring component that implements {@link DeathCleanupHooks}
@@ -97,7 +96,19 @@ public class EnvCleanupHooksBean implements DeathCleanupHooks,
         log.debug("EnvCleanupHooksBean: CompostSink registered successfully at context refresh");
     }
 
-    /** Canonical infection map — keyed by Particle id, BondedPair id, or CompositeMember id. */
+    /**
+     * Canonical infection map — keyed by Particle id, BondedPair id, or CompositeMember id.
+     *
+     * <p>MUST stay a {@link ConcurrentHashMap}: this map is NOT tick-confined. Most writers run
+     * on the tick thread, but {@code clearInfectionOnDeath} is also called from
+     * {@code WorldWebSocketHandler.cleanupBot()} — the {@code afterConnectionClosed} path, on a
+     * WebSocket thread. Readers therefore race writers by design. The two that matter:
+     * {@code EnvironmentEngine.buildStatusCaches()} (bot-facing MUTATING bit) and
+     * {@code EnvironmentEngine.snapshot()}, whose {@code Set.copyOf(keySet())} relies on
+     * weakly-consistent iteration. Downgrading this to a HashMap gives the latter a
+     * ConcurrentModificationException that ObserverBroadcaster swallows at WARN — the observer
+     * would silently stop updating with no test failure.
+     */
     final Map<String, Infection> infections = new ConcurrentHashMap<>();
 
     /** Canonical cure-immunity map — entity id → tick-until-expiry. */
@@ -178,7 +189,11 @@ public class EnvCleanupHooksBean implements DeathCleanupHooks,
 
     // ── Public accessors (Plan 14-03 Task 2) ──────────────────────
 
-    /** Canonical infection map — package-scoped mutable view. */
+    /**
+     * Canonical infection map — live mutable view, not a copy. Not tick-confined: see the
+     * {@link #infections} field comment for the off-tick writer and what depends on the
+     * concurrent map type. Callers that need a stable set must copy it themselves.
+     */
     public Map<String, Infection> getInfections() {
         return infections;
     }
