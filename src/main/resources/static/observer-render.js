@@ -18,6 +18,8 @@ export { ROCK_COLOR };
 
 export const LIGHTNING_COLOR = "#ffb";
 
+export const LAYER_KEYS = ["entities", "nutrients", "toxin", "mutagen", "lightning", "grid"];
+
 /** Backing-store size: one border line per cell, plus the trailing one. */
 export const canvasWidth = (cellsAcross) => cellsAcross * CELL_PITCH + 1;
 export const canvasHeight = (cellsDown) => cellsDown * CELL_PITCH + 1;
@@ -59,6 +61,8 @@ export function paintOps(ctx) {
   };
 }
 
+const visible = (layers, key) => layers?.[key] !== false;
+
 function drawCellFill(ops, x, y, color) {
   ops.fillRect(cellOrigin(x), cellOrigin(y), CONTENT_SIZE, CONTENT_SIZE, color);
 }
@@ -81,22 +85,32 @@ export function drawWorld(ctx, state) {
   const ops = paintOps(ctx);
   const { width, height } = state.grid;
   const env = state.env ?? {};
+  const layers = state.layers;
 
   const w = canvasWidth(width);
   const h = canvasHeight(height);
 
   ops.fillRect(0, 0, w, h, BACKGROUND_COLOR);
 
-  for (let x = 0; x <= width; x++) ops.fillRect(x * CELL_PITCH, 0, 1, h, GRID_COLOR);
-  for (let y = 0; y <= height; y++) ops.fillRect(0, y * CELL_PITCH, w, 1, GRID_COLOR);
-
-  for (const r of state.rocks ?? []) drawCellFill(ops, r.x, r.y, ROCK_COLOR);
-  for (const t of env.toxin ?? []) drawCellFill(ops, t.x, t.y, toxinColor(t.intensity));
-  for (const m of env.mutagen ?? []) drawCellFill(ops, m.x, m.y, mutagenColor(m.strain));
-
-  for (const e of state.entities ?? []) {
-    paintMarker(ops, e, cellOrigin(e.x), cellOrigin(e.y));
+  if (visible(layers, "grid")) {
+    for (let x = 0; x <= width; x++) ops.fillRect(x * CELL_PITCH, 0, 1, h, GRID_COLOR);
+    for (let y = 0; y <= height; y++) ops.fillRect(0, y * CELL_PITCH, w, 1, GRID_COLOR);
   }
 
-  for (const s of env.lightning ?? []) drawCellFill(ops, s.x, s.y, LIGHTNING_COLOR);
+  for (const r of state.rocks ?? []) drawCellFill(ops, r.x, r.y, ROCK_COLOR);
+  if (visible(layers, "toxin")) {
+    for (const t of env.toxin ?? []) drawCellFill(ops, t.x, t.y, toxinColor(t.intensity));
+  }
+  if (visible(layers, "mutagen")) {
+    for (const m of env.mutagen ?? []) drawCellFill(ops, m.x, m.y, mutagenColor(m.strain));
+  }
+
+  for (const e of state.entities ?? []) {
+    const key = e.kind === "nutrient" ? "nutrients" : "entities";
+    if (visible(layers, key)) paintMarker(ops, e, cellOrigin(e.x), cellOrigin(e.y));
+  }
+
+  if (visible(layers, "lightning")) {
+    for (const s of env.lightning ?? []) drawCellFill(ops, s.x, s.y, LIGHTNING_COLOR);
+  }
 }

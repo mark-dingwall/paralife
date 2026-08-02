@@ -12,9 +12,15 @@ import {
   drawWorld,
   paintOps,
   paintMarker,
+  LAYER_KEYS,
 } from "../../main/resources/static/observer-render.js";
 
-import { SPECIES_COLOR, GRID_COLOR, BACKGROUND_COLOR } from "../../main/resources/static/observer-markers.js";
+import {
+  SPECIES_COLOR,
+  GRID_COLOR,
+  BACKGROUND_COLOR,
+  NUTRIENT_COLOR,
+} from "../../main/resources/static/observer-markers.js";
 
 /**
  * Minimal recording stand-in for a canvas 2D context. It records every drawing
@@ -102,22 +108,29 @@ test("mutagen is categorical: strain changes hue and never opacity", () => {
 const PLACED = {
   rock: { x: 1, y: 0 },
   entity: { x: 6, y: 1 },
+  nutrient: { x: 4, y: 2 },
   toxin: { x: 2, y: 3 },
   mutagen: { x: 7, y: 4 },
   lightning: { x: 0, y: 2 },
 };
 
-function paintedWorld() {
+// `layers` is passed through verbatim, so paintedWorld() with no argument is the
+// all-visible / back-compat case the existing tests already assert against.
+function paintedWorld(layers) {
   const ctx = recordingContext();
   drawWorld(ctx, {
     grid: { width: 8, height: 5 },
     rocks: [PLACED.rock],
-    entities: [{ ...PLACED.entity, kind: "particle", species: "CATALYST", brained: true }],
+    entities: [
+      { ...PLACED.entity, kind: "particle", species: "CATALYST", brained: true },
+      { ...PLACED.nutrient, kind: "nutrient" },
+    ],
     env: {
       toxin: [{ ...PLACED.toxin, intensity: 200 }],
       mutagen: [{ ...PLACED.mutagen, strain: 9 }],
       lightning: [PLACED.lightning],
     },
+    layers,
   });
   return ctx.calls;
 }
@@ -208,6 +221,74 @@ test("absent environment and entity collections degrade gracefully", () => {
   const ctx = recordingContext();
   drawWorld(ctx, { grid: { width: 2, height: 2 }, rocks: [], entities: [], env: {} });
   assert.ok(ctx.calls.length > 0, "background and grid still paint");
+});
+
+// Each key's ops are identified by the COLOUR they paint, never by call index.
+// A count-only assertion ("fewer ops when hidden") passes on crossed wiring —
+// toxin gated on the mutagen key and vice versa still changes the count for both.
+const LAYER_COLOR_MATCH = {
+  entities: (c) => c.color === SPECIES_COLOR.CATALYST,
+  nutrients: (c) => c.color === NUTRIENT_COLOR,
+  toxin: (c) => typeof c.color === "string" && c.color.startsWith("rgba("),
+  mutagen: (c) => typeof c.color === "string" && c.color.startsWith("hsla("),
+  lightning: (c) => c.color === LIGHTNING_COLOR,
+  grid: (c) => c.color === GRID_COLOR,
+};
+// Never gated. Named here so the collateral clause below can assert they survive.
+const UNGATED_MATCH = {
+  background: (c) => c.color === BACKGROUND_COLOR,
+  rock: (c) => c.color === ROCK_COLOR,
+};
+
+test("every layer key gates exactly its own layer and nothing else", () => {
+  for (const key of LAYER_KEYS) {
+    // A key with no predicate would otherwise crash `filter(undefined)` with a
+    // TypeError and read as a broken test rather than as drift.
+    assert.ok(LAYER_COLOR_MATCH[key], `no colour predicate for ${key} — LAYER_KEYS drifted`);
+
+    const shown = paintedWorld({ [key]: true });
+    const hidden = paintedWorld({ [key]: false });
+    const countIn = (calls, pred) => calls.filter(pred).length;
+
+    // Positive control: same fixture, one flag flipped, so a zero below cannot
+    // come from a fixture that simply never populated this layer.
+    assert.ok(countIn(shown, LAYER_COLOR_MATCH[key]) > 0, `${key} painted nothing when visible`);
+    assert.equal(countIn(hidden, LAYER_COLOR_MATCH[key]), 0, `${key} still painted when hidden`);
+
+    // Collateral: hiding one layer must not disturb any other, nor the two
+    // ungated ones. This is what catches an over-broad gate (e.g. a `grid`
+    // check whose scope swallows the rock loop) and what pins "hiding grid
+    // leaves BACKGROUND_COLOR gutters, not holes".
+    for (const [other, pred] of Object.entries({ ...LAYER_COLOR_MATCH, ...UNGATED_MATCH })) {
+      if (other === key) continue;
+      assert.equal(countIn(hidden, pred), countIn(shown, pred), `hiding ${key} disturbed ${other}`);
+    }
+  }
+});
+
+// Both keys act on the same array, so direction is not derivable from the test
+// above: a nutrient branch that read the `entities` key would pass it.
+test("the nutrient split gates per item, in both directions", () => {
+  const noNutrients = paintedWorld({ entities: true, nutrients: false });
+  assert.ok(noNutrients.some((c) => c.color === SPECIES_COLOR.CATALYST), "the particle stays");
+  assert.ok(!noNutrients.some((c) => c.color === NUTRIENT_COLOR), "the nutrient goes");
+
+  const noEntities = paintedWorld({ entities: false, nutrients: true });
+  assert.ok(noEntities.some((c) => c.color === NUTRIENT_COLOR), "the nutrient stays");
+  assert.ok(!noEntities.some((c) => c.color === SPECIES_COLOR.CATALYST), "the particle goes");
+});
+
+// `0` is the discriminator: (0 ?? true) === 0 and !!0 === false both HIDE it,
+// while 0 !== false renders it. The undefined cases separately kill `!!` and
+// `=== true`. Drop either half and one alternative goes unpinned.
+test("only an explicit false hides a layer", () => {
+  for (const layers of [undefined, {}, { toxin: undefined }, { toxin: 0 }]) {
+    const calls = paintedWorld(layers);
+    assert.ok(
+      calls.some((c) => typeof c.color === "string" && c.color.startsWith("rgba(")),
+      `toxin must render for layers=${JSON.stringify(layers)}`,
+    );
+  }
 });
 
 test("the lightning colour is the exact contract value", () => {
