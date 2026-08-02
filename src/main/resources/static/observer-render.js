@@ -36,8 +36,8 @@ export function mutagenColor(strain) {
   return `hsla(${(strain * 47) % 360}, 70%, 45%, 0.400)`;
 }
 
-/** The canvas 2D surface this module uses; the tests' recording context implements exactly this. */
-function paintOps(ctx) {
+/** The canvas 2D surface the renderer and the legend both paint through. */
+export function paintOps(ctx) {
   return {
     fillRect(x, y, w, h, color) {
       ctx.fillStyle = color;
@@ -63,6 +63,15 @@ function drawCellFill(ops, x, y, color) {
   ops.fillRect(cellOrigin(x), cellOrigin(y), CONTENT_SIZE, CONTENT_SIZE, color);
 }
 
+/** Paint one entity's markers at a cell's content origin. drawWorld and the legend share this. */
+export function paintMarker(ops, entity, ox, oy) {
+  for (const op of markerOps(entity)) {
+    if (op.op === "fill") ops.fillRect(ox + op.x, oy + op.y, op.w, op.h, op.color);
+    else if (op.op === "outline") ops.strokeRect(ox + op.x, oy + op.y, op.w, op.h, op.color);
+    else ops.poly(op.points.map(([px, py]) => [ox + px, oy + py]), op.color);
+  }
+}
+
 /**
  * Paint one world frame. Layer order is background, grid, rocks, toxin, mutagen,
  * entities, lightning — rocks sit BELOW the environment field so a toxic or
@@ -86,13 +95,7 @@ export function drawWorld(ctx, state) {
   for (const m of env.mutagen ?? []) drawCellFill(ops, m.x, m.y, mutagenColor(m.strain));
 
   for (const e of state.entities ?? []) {
-    const ox = cellOrigin(e.x);
-    const oy = cellOrigin(e.y);
-    for (const op of markerOps(e)) {
-      if (op.op === "fill") ops.fillRect(ox + op.x, oy + op.y, op.w, op.h, op.color);
-      else if (op.op === "outline") ops.strokeRect(ox + op.x, oy + op.y, op.w, op.h, op.color);
-      else ops.poly(op.points.map(([px, py]) => [ox + px, oy + py]), op.color);
-    }
+    paintMarker(ops, e, cellOrigin(e.x), cellOrigin(e.y));
   }
 
   for (const s of env.lightning ?? []) drawCellFill(ops, s.x, s.y, LIGHTNING_COLOR);

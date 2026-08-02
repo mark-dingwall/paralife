@@ -10,6 +10,8 @@ import {
   ROCK_COLOR,
   LIGHTNING_COLOR,
   drawWorld,
+  paintOps,
+  paintMarker,
 } from "../../main/resources/static/observer-render.js";
 
 import { SPECIES_COLOR, GRID_COLOR, BACKGROUND_COLOR } from "../../main/resources/static/observer-markers.js";
@@ -211,4 +213,35 @@ test("absent environment and entity collections degrade gracefully", () => {
 test("the lightning colour is the exact contract value", () => {
   assert.equal(LIGHTNING_COLOR, "#ffb");
   assert.equal(ROCK_COLOR, "#555");
+});
+
+// drawWorld's fixture contains only a brained particle, which markerOps resolves
+// to a single `fill`. The strokeRect and poly branches of the dispatch therefore
+// have no coverage anywhere. Driving them through the extracted seam pins both,
+// and importing the two symbols by name makes a missing `export` a link-time
+// failure here rather than a page that dies silently in the browser.
+test("the shared painter dispatches outline and poly ops at the origin it is given", () => {
+  const ctx = recordingContext();
+  const ops = paintOps(ctx);
+  const [ox, oy] = [13, 7]; // hand-computed: cellOrigin(2), cellOrigin(1)
+
+  paintMarker(ops, { kind: "particle", species: "SPORE", brained: false }, ox, oy);
+  paintMarker(ops, { kind: "bondedPair", primarySpecies: "CATALYST", secondarySpecies: "MEMBRANE" }, ox, oy);
+
+  // Outline: the half-pixel inset is the painter's contract, not the marker's.
+  // Expected values are hand-computed from ox/oy and CONTENT_SIZE, never read
+  // back from paintOps.
+  const stroke = ctx.calls.find((c) => c.fn === "strokeRect");
+  assert.ok(stroke, "no outline was dispatched — the strokeRect branch is unexercised");
+  assert.deepEqual(
+    { x: stroke.x, y: stroke.y, w: stroke.w, h: stroke.h, color: stroke.color },
+    { x: 13.5, y: 7.5, w: 4, h: 4, color: SPECIES_COLOR.SPORE },
+  );
+
+  // Poly: every point carries the same origin offset. A dropped `.map` or a
+  // transposed ox/oy shows up here and nowhere else.
+  const polys = ctx.calls.filter((c) => c.fn === "fill");
+  assert.equal(polys.length, 2, "a bonded pair is two triangles");
+  assert.deepEqual(polys[0].points, [[13, 7], [18, 12], [13, 12]]);
+  assert.equal(polys[0].color, SPECIES_COLOR.CATALYST);
 });
