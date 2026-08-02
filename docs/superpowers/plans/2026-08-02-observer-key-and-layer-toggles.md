@@ -17,11 +17,11 @@
 Every task's requirements implicitly include this section. Values are verbatim from the spec.
 
 - **Layer keys, exactly six, this spelling:** `["entities", "nutrients", "toxin", "mutagen", "lightning", "grid"]`. Note `nutrients` is plural, while the *entity kind* it gates is the singular `"nutrient"`.
-- **The visibility map rides on the state object as `state.layers`.** `drawWorld`'s signature stays `(ctx, state)`; `layers` is a fourth key alongside `grid` / `rocks` / `entities` / `env`. Every producer and consumer uses that exact path.
+- **The visibility map rides on the state object as `state.layers`.** `drawWorld`'s signature stays `(ctx, state)`; `layers` sits alongside `grid` / `rocks` / `entities` / `env`. Every producer and consumer uses that exact path.
 - **Visibility predicate:** `layers?.[key] !== false`. Absent, `undefined`, and any non-`false` value (including `0`) are visible. Not `?? true`, not `!!`.
 - **Layer order is unchanged:** background → grid → rocks → toxin → mutagen → entities → lightning. Hiding a layer skips it; it never reorders the rest. The background fill is never gated — hiding `grid` leaves `BACKGROUND_COLOR` gutters, not holes. Rocks are never gated.
 - **Nutrients are not a flat layer.** They arrive inside `state.entities` with `kind === "nutrient"`, so the entity loop gates per item: nutrient items on `nutrients`, everything else (`particle`, `bondedPair`, `compositeMember`) on `entities`.
-- **Species literals are the exact uppercase keys `markerOps` switches on:** `CATALYST`, `MEMBRANE`, `SPORE`. Any other string falls through to `UNKNOWN_SPECIES_COLOR`. `compositeId` must be a **string** — the cue-colour hash calls `.length` and `.charCodeAt` on it.
+- **Species values are the exact uppercase `SPECIES_COLOR` keys:** `CATALYST`, `MEMBRANE`, `SPORE`. Any other string resolves to `UNKNOWN_SPECIES_COLOR`. (These are *species*, a colour lookup — distinct from `entity.kind`, which `markerOps` switches on and which is lowerCamel: `nutrient` / `particle` / `bondedPair` / `compositeMember`.) `compositeId` must be a **string** — the cue-colour hash calls `.length` and `.charCodeAt` on it.
 - **Row shape:** `{ label, entity?, swatch?, layer?, note? }`. Exactly one row — the collective control, whose `layer` is `"entities"` — carries `layer` with neither `entity` nor `swatch`. Every other row has `entity` or a non-empty-string `swatch`. `entity` and `layer` compose (the nutrient row carries both).
 - **Row counts:** 15 rows total; 14 visual; 9 rows carry `entity`; 8 of those are *marker rows* (`"entity" in row && !("layer" in row)`); exactly 6 rows carry `layer`, with no duplicates, matching `LAYER_KEYS`.
 - **Swatch surface:** one `<canvas width="6" height="6">` per **visual** row, drawn 1:1, CSS-upscaled to 24 px by a scoped `#knobs canvas { width: 24px; height: 24px; }`. Never `ctx.scale()`. Every swatch canvas fills `BACKGROUND_COLOR` before painting.
@@ -41,8 +41,8 @@ Every task's requirements implicitly include this section. Values are verbatim f
 The op-to-canvas dispatch is currently inlined in `drawWorld`'s entity loop, and `paintOps` is module-private. The legend needs both. The extraction itself is behaviour-preserving, but it is **not** untested: no existing `drawWorld` test ever produces an `outline` or a `poly` op — the fixture's only entity is a brained particle, which is a single `fill` — so two of the three dispatch branches have no coverage at all, and a missing `export` would not fail any gate. This task adds the one test that closes both holes.
 
 **Files:**
-- Modify: `src/main/resources/static/observer-render.js:40-60` (export `paintOps`, update its docstring), `:88-96` (extract `paintMarker`, call it)
-- Test: `src/test/js/observer-render.test.js` (one new test; the existing ten must stay green)
+- Modify: `src/main/resources/static/observer-render.js:39-60` (export `paintOps`, update its docstring), `:88-96` (extract `paintMarker`, call it)
+- Test: `src/test/js/observer-render.test.js` (one new test; the existing eleven must stay green)
 
 **Interfaces:**
 - Consumes: `markerOps` from `observer-markers.js` (already imported)
@@ -73,7 +73,7 @@ Append to `src/test/js/observer-render.test.js`. Add `paintOps` and `paintMarker
 // have no coverage anywhere. Driving them through the extracted seam pins both,
 // and importing the two symbols by name makes a missing `export` a link-time
 // failure here rather than a page that dies silently in the browser.
-test("the shared painter dispatches all three op kinds at the origin it is given", () => {
+test("the shared painter dispatches outline and poly ops at the origin it is given", () => {
   const ctx = recordingContext();
   const ops = paintOps(ctx);
   const [ox, oy] = [13, 7]; // hand-computed: cellOrigin(2), cellOrigin(1)
@@ -306,7 +306,7 @@ Per CLAUDE.md's *Gates are RED-first*: a gate never shown to fire is theatre. Fo
 | 3 | Widen the `grid` gate so the rock loop at `:84` falls inside it | `hiding grid disturbed rock` — this is the collateral clause's demonstration |
 | 4 | Make the nutrient branch read the `entities` key | test 1: `hiding entities disturbed nutrients`; test 2: `the nutrient goes` |
 | 5 | Change `!== false` to `?? true` | `toxin must render for layers={"toxin":0}` |
-| 6 | Change `!== false` to `!!`, then to `=== true` | `toxin must render for layers=undefined` — the loop's first element. Both also cascade into test 1 (`entities painted nothing when visible`), which is expected, not a second defect |
+| 6 | Change `!== false` to `!!`, then to `=== true` | **Four** failures, not one. Test 3: `toxin must render for layers=undefined` (the loop's first element). Then three pre-existing tests, which all call `paintedWorld()` with no `layers` so nothing gated renders: `every layer paints, in exactly the contract order` → `grid layer painted nothing`; `every layer paints its cell at the pixel origin` → `toxin painted no fill`; `the painter sizes its own background and grid` → the vertical border count (0 ≠ 11). Tests 1 and 2 stay green (their `shown` run passes an explicit `true`, and the collateral comparison is 0 == 0 for the un-flipped keys). Two of the remaining pre-existing `drawWorld` tests stay green. The seven tests that never call `drawWorld` — the six pure-function cases plus Task 1's painter test — are unaffected throughout, so the run reads **4 failed / 11 passed of 15**: `absent environment and entity collections degrade gracefully` (the ungated background alone satisfies it) and `the whole grid is drawn before the first rock`, which passes **vacuously** — `lastIndexOf(GRID_COLOR)` is `-1`, so `-1 < firstRock` holds on an empty grid |
 
 - [ ] **Step 9: Commit**
 
@@ -442,7 +442,7 @@ Create `observer-legend.js` with 15 rows in this order. Labels are the exact str
 | 5 | `Unknown species` | `entity: { kind: "particle", species: <any string that is NOT one of the three>, brained: true }` | falls back to `UNKNOWN_SPECIES_COLOR` |
 | 6 | `Bonded pair` | `entity: { kind: "bondedPair", primarySpecies: <one>, secondarySpecies: <a different one> }` | two *distinct* species, or the diagonal split is invisible |
 | 7 | `Composite member` | `entity: { kind: "compositeMember", species: <one>, compositeId: <a string> }` | `note`: the cue hue is per-composite, so this swatch is illustrative |
-| 8 | `Mutated` | `entity: { kind: "particle", species: <one>, brained: true, mutated: true }` | must differ from rows 1–3 under raw `markerOps` — pick a species/brained combination no other row uses, or vary `brained` |
+| 8 | `Mutated` | `entity: { kind: "particle", species: "CATALYST", brained: true, mutated: true }` | **Sharing row 1's base is deliberate.** The mutation outline is appended outside `markerOps`' switch, so this row always emits two ops and can never collide. Giving it a species/brained combination no other row uses would make it stay unique even if `mutated: true` were dropped — the exact failure the distinctness gate (test 4) exists to catch, demonstrated by mutation 11 |
 | 9 | `Nutrient` | `entity: { kind: "nutrient" }`, `layer: "nutrients"` | the one row carrying both |
 | 10 | `Rock` | `swatch: ROCK_COLOR` | no `layer` — not toggleable |
 | 11 | `Toxin` | `swatch: toxinColor(160)`, `layer: "toxin"` | `note`: opacity tracks intensity |
@@ -464,16 +464,17 @@ Apply, run `./gradlew jsTest`, record the failure, revert.
 
 | # | Mutation | Must fail with |
 |---|---|---|
-| 1 | Add a seventh entry to `LAYER_KEYS` only | the drift gate's `deepEqual`. It also reds `observer-render.test.js` test 1 with `no colour predicate for <key> — LAYER_KEYS drifted`; that is the guard working, not a second defect |
+| 1 | Add a seventh entry to `LAYER_KEYS` only | the drift gate's `deepEqual`. It also reds Task 2's gating test in `observer-render.test.js` with `no colour predicate for <key> — LAYER_KEYS drifted`; that is the guard working, not a second defect |
 | 2 | Give a second row `layer: "toxin"` | the drift gate's `deepEqual` (duplicate) |
 | 3 | Typo the Mutated row's `kind` | `Mutated draws nothing` — the one that would have passed a raw length check |
 | 4 | Set the Toxin row's `swatch` to `""` | `Toxin has no paintable identity` |
-| 5 | **Delete** the Grid lines row's `swatch` **key** | `the collective entities control is the only label-only row` — deleting the key changes the row's *shape*, where blanking it (mutation 4) does not |
-| 6 | Move the label-only shape onto Lightning and give Entities a swatch | `the label-only row is the entities control` |
+| 5 | **Delete** the Grid lines row's `swatch` **key** | `the collective entities control is the only label-only row` — deleting the key changes the row's *shape*, where blanking it (mutation 4) does not. The inventory gate's `Grid lines` swatch check reds too; test 3 declares first, so its message is the recorded one |
+| 6 | Move the label-only shape onto Lightning and give Entities a swatch | `the label-only row is the entities control`. The inventory gate's `Lightning` swatch check also reds — same ordering |
 | 7 | Copy the Catalyst row's `entity` onto Membrane | `two rows draw the same swatch` |
 | 8 | Delete the Unknown species row | the inventory gate's `LEGEND_ROWS.length` |
 | 9 | Replace the Grid lines row's `swatch` with the literal `"#ddd"` | *nothing* — the inventory gate compares against `GRID_COLOR`, whose value is `#ddd`. Note this: the "no colour retyped" constraint is pinned only against a *wrong* literal, not an equal one. Code review covers the rest |
 | 10 | Delete `src/test/js/observer-legend.test.js` | Gradle: `Missing required JS test file(s)` |
+| 11 | Delete `mutated: true` from row 8 | `two rows draw the same swatch` — this is what pins row 8 to row 1's base rather than a unique combination. Under a unique combination it would pass |
 
 Mutation 10 is the `requiredJsTests` preflight itself — the gate that exists because Node exits 0 on a zero-match glob.
 
@@ -494,7 +495,7 @@ Include the Step 5 RED evidence in the commit body.
 
 **Files:**
 - Modify: `src/main/resources/static/observer.html` (CSS at `:10-19`, markup at `:24-33`, module script at `:34-127`)
-- Modify: `src/test/java/com/paralife/observer/ObserverPageServesTest.java:40-53` and `:63-68`
+- Modify: `src/test/java/com/paralife/observer/ObserverPageServesTest.java:40-53`; add a new `@Test` after `:68`, mirroring `renderModuleIsServedAsStaticContent` (`:63-68`, itself unchanged)
 
 **Interfaces:**
 - Consumes from `./observer-render.js`: `LAYER_KEYS`, `paintOps`, `paintMarker`, `drawWorld`, `cellOrigin`, `canvasWidth`, `canvasHeight`
@@ -510,11 +511,11 @@ Include the Step 5 RED evidence in the commit body.
    - marker row — `"entity" in row && !("layer" in row)` (the eight rows 1–8)
    - the collective control — the row with `layer` and neither `entity` nor `swatch` (Task 3's gates pin that exactly one exists and that its `layer` is `"entities"`)
 3. **Row rendering.** Each row renders its swatch, `row.label`, and `row.note` when present — the notes are the only place the panel says "this hue is per-composite" or "opacity tracks intensity". Rows carrying `layer` also render a checkbox.
-4. **Swatch painting.** Each of the **14 visual** rows gets a `<canvas width="6" height="6">`, sized to 24 px by CSS only. The collective control (row 14) has no swatch: render its label and checkbox with a 24 px spacer so the column stays aligned. Fill `BACKGROUND_COLOR` over the whole 6×6 first — `toxinColor`/`mutagenColor` return alpha values that only read correctly over black. Then:
+4. **Swatch painting.** Each of the **14 visual** rows gets a `<canvas width="6" height="6">`, sized to 24 px by CSS only. The collective control — the one label-only row from contract 2 — has no swatch: render its label and checkbox with a 24 px spacer so the column stays aligned. Fill `BACKGROUND_COLOR` over the whole 6×6 first — `toxinColor`/`mutagenColor` return alpha values that only read correctly over black. Then:
    - `entity` rows: `paintMarker(paintOps(ctx), row.entity, cellOrigin(0), cellOrigin(0))`
    - `swatch` rows: fill `CONTENT_SIZE`×`CONTENT_SIZE` at `cellOrigin(0)` with `row.swatch`
 5. **`render()` is exactly `drawWorld` plus the render-stats text.** `updatePanels`, `pushHistory`, and `drawSeries` stay in `onWorld`. Folding `pushHistory` in would append a duplicate population sample on every checkbox click and silently compress the 512-point series' time axis.
-6. **`render()` passes `layers` into `drawWorld`.** The state object is `{ grid: dims, rocks, entities, env, layers }` — `layers` is the fourth key, and without it every checkbox is a silent no-op that no automated gate can see.
+6. **`render()` passes `layers` into `drawWorld`.** The state object is `{ grid: dims, rocks, entities, env, layers }`. Without that key every checkbox is a silent no-op that no automated gate can see.
 7. **`render()` is safe before the first frame.** `dims` and `rocks` are set at bootstrap, so it passes `entities: lastFrame?.entities ?? []`, `env: lastFrame?.env ?? {}`, and reads `tick ${lastFrame?.tick ?? "—"}`. No guard-return — background, grid, and rocks are honest output.
 8. **`#status` stays socket-owned.** The tick / render-ms readout moves to a new `#render-stats` element, written through a handle named `renderStatsEl` (the JUnit pattern in Step 1 greps for that name). `render()` must not write to `statusEl` at all — otherwise a toggle click after a disconnect overwrites the operator's only liveness signal with a stale tick line.
 9. **Dimming.** A hidden layer's row gets `.off`. Unchecking the collective control dims all eight marker rows plus its own; the nutrient row keeps its own state.
@@ -549,9 +550,17 @@ void legendModuleIsServedAsStaticContent() {
 ```
 
 Run: `./gradlew test --tests 'com.paralife.observer.ObserverPageServesTest'`
-Expected: FAIL on `pageDelegatesRenderingToTheExtractedModules` — the page has no `./observer-legend.js` import and no `renderStatsEl`. The `doesNotContainPattern` assertion passes for now (`observer.html:89` still writes `renderMs` to `statusEl`, so it will go red the moment the page is *half* migrated — that is its job).
+Expected: FAIL on `pageDelegatesRenderingToTheExtractedModules` — the page has no `./observer-legend.js` import and no `renderStatsEl`.
 
-`legendModuleIsServedAsStaticContent` **passes immediately**: Task 3 already shipped the module, and Spring serves `src/main/resources/static/**` unconditionally. It is a 404-regression guard, not a RED step — so RED-test it explicitly: `git mv src/main/resources/static/observer-legend.js /tmp/`, re-run, quote the failure, move it back.
+All three of that method's new assertions are red at this point, including `doesNotContainPattern`: `observer.html:89` is ``statusEl.textContent = `tick ${f.tick} · render ${renderMs}ms`;`` and there is no `;` between the handle and `renderMs`, so the pattern matches. AssertJ is not soft here, so the first assertion throws and the later ones never evaluate. To capture each RED message, run the three in isolation (comment out the preceding two, or split them temporarily) and record all three before implementing. The migration itself turns all three green — `doesNotContainPattern` needs no separate mutation.
+
+`legendModuleIsServedAsStaticContent` **passes immediately**: Task 3 already shipped the module, and Spring serves `src/main/resources/static/**` unconditionally. It is a 404-regression guard, not a RED step — so RED-test it explicitly:
+
+```bash
+mv src/main/resources/static/observer-legend.js /tmp/          # not `git mv` — it refuses a destination outside the work tree
+./gradlew test --tests 'com.paralife.observer.ObserverPageServesTest'   # re-runs processResources, so the removal reaches build/resources/main
+mv /tmp/observer-legend.js src/main/resources/static/
+```
 
 - [ ] **Step 2: Implement the page**
 
@@ -587,5 +596,8 @@ git commit -m "feat(observer): build the merged key and layer-toggle panel"
 Per CLAUDE.md's close-out gates, before opening the PR:
 
 - [ ] **Evidence-bound done** — the RED evidence from Task 1 Step 6, Task 2 Step 8 and Task 3 Step 5 is in the commit bodies, each quoting the assertion message the mutation produced.
-- [ ] **Scope-diff** — one line in the PR: delivered vs the spec's intent, naming anything added or dropped.
+- [ ] **Scope-diff** — one line in the PR: delivered vs the spec's intent, naming anything added or dropped. This plan ships **three gates the spec does not enumerate**, all intent-faithful rather than creep — name them explicitly so the PR does not under-report against a spec that counts its own gates:
+  - Task 1's painter test — the spec assumed the extraction was covered; no `drawWorld` test has ever produced an `outline` or `poly` op, and a missing `export` would have failed nothing.
+  - Task 3's row-inventory test — pins the 15 / 9 / 8 counts the spec states but never gates, plus the "no colour retyped" constraint.
+  - Task 4's `doesNotContainPattern` assertion — pins the spec's `#status`-stays-socket-owned rule, which the retargeted R11 pattern alone does not enforce.
 - [ ] **Merge-back** — the spec has no canonical living-doc counterpart for client-side modules (`docs/ARCHITECTURE.md` §Observer covers server packages only), so there is no doc to fold into. State that explicitly in the PR rather than leaving the gate silently unaddressed.
