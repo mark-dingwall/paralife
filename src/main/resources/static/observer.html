@@ -158,10 +158,12 @@
     const collectiveRow = LEGEND_ROWS.find(isCollectiveRow);
 
     // A row without its own `layer` (the eight marker rows) follows the
-    // collective control's layer instead of a hardcoded key.
+    // collective control's layer instead of a hardcoded key. A row with
+    // neither `layer` nor `entity` (Rock) has no layer to follow — it is
+    // always visible.
     function rowVisible(row) {
-      const key = "layer" in row ? row.layer : collectiveRow.layer;
-      return layers[key] !== false;
+      const key = "layer" in row ? row.layer : ("entity" in row ? collectiveRow.layer : null);
+      return key === null || layers[key] !== false;
     }
 
     function makeSwatch(row) {
