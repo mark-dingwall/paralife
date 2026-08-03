@@ -13,6 +13,7 @@ import { ROCK_COLOR, LIGHTNING_COLOR, toxinColor, mutagenColor } from "./observe
  *   swatch  — a flat colour string, for layers markerOps does not draw
  *   layer   — the LAYER_KEYS entry this row's checkbox toggles
  *   note    — a qualifier rendered beside the label
+ *   defaultOff — this layer starts hidden; only meaningful with `layer`
  * A row carries `entity` or `swatch`, except the one collective control
  * (layer "entities") that carries `layer` alone. `entity` and `layer`
  * compose — the nutrient row carries both.
@@ -50,5 +51,5 @@ export const LEGEND_ROWS = [
   { label: "Mutagen", swatch: mutagenColor(3), layer: "mutagen", note: "hue tracks strain" },
   { label: "Lightning", swatch: LIGHTNING_COLOR, layer: "lightning" },
   { label: "Entities", layer: "entities", note: "all non-nutrient markers" },
-  { label: "Grid lines", swatch: GRID_COLOR, layer: "grid" },
+  { label: "Grid lines", swatch: GRID_COLOR, layer: "grid", defaultOff: true },
 ];

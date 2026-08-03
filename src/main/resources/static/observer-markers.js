@@ -15,7 +15,7 @@ export const SPECIES_COLOR = {
 export const UNKNOWN_SPECIES_COLOR = "#888";
 export const NUTRIENT_COLOR = "#7a5";
 export const MUTATION_COLOR = "#ff0";
-export const GRID_COLOR = "#ddd";
+export const GRID_COLOR = "#333";
 export const BACKGROUND_COLOR = "#000";
 export const ROCK_COLOR = "#555";
 

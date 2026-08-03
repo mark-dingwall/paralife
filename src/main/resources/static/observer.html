@@ -65,7 +65,10 @@
     const HISTORY_MAX = 512;
 
     // ── layer visibility ───────────────────────────────────────────────
-    const layers = Object.fromEntries(LAYER_KEYS.map((k) => [k, true]));
+    // Initial state comes from LEGEND_ROWS' `defaultOff`, so the key list and
+    // its defaults stay in the one tested module — the page still types no key.
+    const startsHidden = new Set(LEGEND_ROWS.filter((r) => r.defaultOff).map((r) => r.layer));
+    const layers = Object.fromEntries(LAYER_KEYS.map((k) => [k, !startsHidden.has(k)]));
 
     // ── connection ──────────────────────────────────────────────────────
     // Derive scheme from the page origin: wss:// under HTTPS (a hardcoded ws://

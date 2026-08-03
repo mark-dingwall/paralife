@@ -468,6 +468,17 @@ operations — about 6% of a saturated frame. The conclusion holds a fortiori: t
 to win from caching than the figures above suggest. The saturated wall-clock numbers themselves
 have not been re-measured since the density change and will have improved somewhat.
 
+**Re-measured 2026-08-02, at `density-threshold: 185`, during the Slice B visual pass.** An
+operator watched a `bootRun` session to full environment saturation — mutagen covering every
+cell, toxin widespread, most remaining cells rocks or nutrients — and observed a **40–60 ms**
+worst case against the 500 ms tick (8–12%), versus the 93–268 ms recorded above. The rock
+reduction accounts for most of it. Two caveats on reading this as headroom: the world held
+**zero entities** (no bot clients were connected, so the marker layers were empty — see
+`observer-render.js`'s entity loop, the one layer that scales with population), and the toxin
+figure was inflated by the permanent-stain bug recorded below, which paints intensity-1 cells
+forever. Trigger 2 remains fired on the original measurement; this narrows the gap rather than
+closing it, and the item stays live pending a saturated-env-plus-full-population figure.
+
 Work: a bounded or tiled viewport with zoom/pan, plus a stated render budget. Reintroducing
 an **offscreen full-world buffer is the first move** once panning is in scope — panning under
 direct rendering repaints the entire world every pan frame, whereas panning over a buffer is a
@@ -486,3 +497,105 @@ tick signal) is not executed by any test. When a headless-browser harness is jus
 (htmlunit for JVM-only, or Playwright for real canvas), add a smoke that loads the page,
 completes the observer handshake, and asserts `#status` shows a tick — RED-tested with a
 deliberate JS error. Deferred per the M5-A review (2026-07-19); not blocking MVP.
+
+## Environment persistence defects (found 2026-08-02 by observer visual pass)
+
+Three findings from the first real visual session on the Slice B panel. The observer did not
+cause any of them — it made pre-existing engine behaviour visible for the first time, which is
+the point of building it. Verdicts below are from a static-read investigation; each cites the
+line that decides it. **None is fixed.**
+
+### E-1 · Toxin never reaches zero — every event leaves a permanent stain
+
+`CellularAutomaton.java:61` computes `(int) Math.round(mixed * (1.0 - decayRate))`. With the
+configured `decayRate = 0.1` (agreeing in `application.yml:188` and `EnvironmentConfig.Toxin
+.defaults()`), a locally uniform value `v` decays to `round(0.9v)`, which **equals `v` for every
+`v` in 1..5** — `Math.round` is half-up, so even `round(4.5) = 5`. Intensities 1–5 are fixed
+points. The `if (after < threshold) after = 0` clear on the next line uses a hardcoded
+`threshold = 1` (passed at `EnvironmentEngine.java:468`), so it only zeroes cells that already
+rounded to 0; it never breaks the plateau.
+
+Reproduced numerically against the production loop (64×64 torus, one 255 stamp, real
+parameters): by tick 10 the stamp has flattened to 49 cells at intensity 1, and at tick 400 it
+is still 49 cells at intensity 1. Each toxin event therefore unions a permanent radius-3 Moore
+stain onto the map. It is permanently *visible* because the snapshot (`EnvironmentEngine.java
+:1076`) and the renderer (`observer-render.js:31`, `alpha = 0.15 + 0.6*(i/255)`) both draw
+anything `> 0` — intensity 1 paints at alpha 0.152.
+
+Secondary cost: `advanceToxin`'s idle short-circuit (`EnvironmentEngine.java:439`) tests
+`nonZeroToxinCellCount`, which can never return to 0 once any toxin has spawned. The full
+O(W·H·nonzero) CA sweep therefore runs every tick for the life of the process.
+
+Fix is a code change in `CellularAutomaton.diffuseStep` — guarantee strict monotonic decay when
+`decayRate > 0` (floor instead of round, plus a `self - 1` fallback when the result fails to
+descend). Raising the hardcoded `threshold` literal is smaller but clamps the symptom rather
+than fixing the arithmetic. No config-only fix: `decay-rate >= 0.6` would clear value-1 cells
+but guts toxin lethality and still rides the rounding boundary.
+
+**Mechanism, not emergence** — "toxin intensity strictly decreases each tick while decayRate > 0"
+is an EARS-shaped invariant and should be pinned. The resulting *coverage share* is emergence
+and must not be.
+
+### E-2 · Mutagen blooms are unbounded and ratchet across outbreaks
+
+`EnvironmentEngine.advanceMutagen` (`:565-627`). Two independent defects:
+
+1. **No radius cap and no intensity decay.** While an outbreak is active, every non-zero cell
+   gossips outward each tick. There is no distance-from-origin test anywhere, and the strain
+   byte is only copied (`:602`), never attenuated — the optional ±1 mutation is a *hue* drift,
+   not a magnitude. The sole brake is `outbreak-lifetime-ticks: 300`.
+2. **The bloom ratchets.** The gossip loop at `:581-583` iterates every non-zero cell in
+   `mutagenGrid`, not just the active outbreak's descendants, and `spawnMutagen` (`:536`) stamps
+   a new origin without clearing the grid. Any surviving legacy zone becomes a full-strength
+   gossip source the moment the next outbreak begins, so the bloom grows from its whole existing
+   perimeter rather than from a fresh point. Zone decay (`:612-626`) only runs when
+   `activeMutagen == null`, and `mutagenLastReinforcedTick` is refreshed on every gossip touch
+   (`:603`), so no cell inside an active bloom ever ages out.
+
+Smallest fixes, independent of each other: gate gossip on a new `maxRadius` against the origin
+already carried on `MutagenEvent` (~3 lines at `:586-593`); and source the gossip loop only from
+cells belonging to the active outbreak, e.g. `mutagenLastReinforcedTick[x][y] >= activeMutagen
+.startTick()` (one condition at `:583`). No config-only fix — lowering the lifetime shortens each
+bloom without touching the cross-outbreak accumulation.
+
+Not statically determinable: whether the observed session actually crossed the 300-tick lifetime
+plus 50 quiet ticks needed for full clearance. The ratchet holds either way.
+
+### E-3 · Mutagen bloom shape is a near-solid diamond, not a ragged front
+
+Wanted: a more irregular, organic bloom. The current shape is 8-neighbour Moore with
+`gossip-probability: 0.3` rolled per neighbour per tick, and `if (existingStrain != 0) continue`
+at `:592` means a cell is written once and never revisited. Because the roll re-fires every tick
+against a persistent frontier, gaps fill within a few ticks — the frontier advances ~0.3 cells
+per tick in Chebyshev distance and the interior is solid, leaving only a thin ragged rim.
+
+Raggedness will not come from changing the neighbourhood. It needs one of: per-cell
+susceptibility (weight the probability by fertility or terrain), a one-shot infection roll per
+neighbour instead of a repeating one, or an anisotropic / noise-modulated probability field.
+
+**Emergence, not mechanism** — bloom shape is tuning-sensitive and cannot be phrased as an EARS
+clause. Per the constitution clause it gets no default-suite test; judge it by eye on the
+visualiser, and pin at most a tuning-invariant ordinal ratio in the `@Tag("slow")` suite.
+
+### E-4 · No way to watch life without running bots
+
+Not a defect — recording it because it cost an operator two confused sessions. Particles exist
+if and only if a WebSocket client registered one: `WorldWebSocketHandler.java:619` is the sole
+spawn site, with reproduction (`ActionResolver.java:685/704/949`) and composite dissolution
+(`SimulationEngine.java:1349`) the only other constructions. Startup places rocks
+(`RockGenerator.java:110`) and fertility only; nutrients arrive per-tick. No `initial-population`
+key exists anywhere in `src/main`.
+
+So a bare `bootRun` renders a lifeless world forever. The operator workaround is a second shell:
+
+```
+./gradlew runBot --args="ws://localhost:8080/ws/world 100"
+```
+
+Positional args are `<server-uri> <count 1..100> [duration-seconds]` (`BotRunner.java:44-53`,
+capped at `MAX_BOTS`); omit the duration for a visualiser session so it runs until Ctrl-C.
+
+If "start the server and watch life" is wanted as a first-class mode, it is a code change — an
+`ApplicationReadyEvent` seeder placing N particles through the existing `EligibleCellIndex`
+path, gated on a new key defaulting to 0. Note that unowned particles have no brain, so they
+would decay and never act; the fuller version is an auto-started in-process bot fleet.

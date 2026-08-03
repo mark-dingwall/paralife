@@ -65,3 +65,20 @@ test("the row inventory matches the panel contract", () => {
   assert.equal(rowNamed("Rock").swatch, ROCK_COLOR);
   assert.equal(rowNamed("Grid lines").swatch, GRID_COLOR);
 });
+
+// `defaultOff` is the page's only source for a layer's initial checkbox state,
+// and the inline page script that reads it has no test coverage of its own. A
+// flag on a row with no `layer` would be silently unreachable — the page keys
+// the default off `row.layer`.
+test("defaultOff appears only on layer rows, and Grid lines is the one that carries it", () => {
+  for (const row of LEGEND_ROWS.filter((r) => "defaultOff" in r)) {
+    assert.ok("layer" in row, `${row.label} declares defaultOff but toggles no layer`);
+    assert.equal(typeof row.defaultOff, "boolean", `${row.label}'s defaultOff is not a boolean`);
+  }
+  // Positive control: without this the loop above is vacuous if the flag is
+  // dropped entirely, and the world would come up gridded again.
+  assert.deepEqual(
+    LEGEND_ROWS.filter((r) => r.defaultOff === true).map((r) => r.layer),
+    ["grid"],
+  );
+});

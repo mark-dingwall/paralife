@@ -48,7 +48,7 @@ test("the palette is the exact contract values", () => {
   });
   assert.equal(NUTRIENT_COLOR, "#7a5");
   assert.equal(MUTATION_COLOR, "#ff0");
-  assert.equal(GRID_COLOR, "#ddd");
+  assert.equal(GRID_COLOR, "#333");
   assert.equal(BACKGROUND_COLOR, "#000");
 });
 
