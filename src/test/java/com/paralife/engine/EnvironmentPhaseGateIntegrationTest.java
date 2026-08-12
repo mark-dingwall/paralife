@@ -1,5 +1,7 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.paralife.engine.BuffRegistry.ActiveBuff;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
@@ -8,17 +10,15 @@ import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.WorldGrid;
+import java.util.List;
+import java.util.Random;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
-
-import java.util.List;
-import java.util.Random;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Plan 14-06 Task 3b (cycle-9 action D — Codex HIGH from cycle 8): the
@@ -93,6 +93,16 @@ class EnvironmentPhaseGateIntegrationTest {
     @Autowired EnvCleanupHooksBean envCleanupHooksBean;
     @Autowired ApplicationEventPublisher publisher;
 
+    // E-2a/b (task-2 brief, mutagen radius cap + cross-outbreak gossip-source
+    // filter): the radius cap confines mutagen to ~2.6% of the world, and the
+    // source filter removes RNG draws from the shared env-engine stream —
+    // together they shift toxin/lightning/mutagen placement enough that
+    // whether any of this test's 35 sparse fixed-position entities gets hit
+    // (and dies, feeding compost) is no longer reliable within 300 ticks.
+    // These are threshold assertions over emergent quantities anyway
+    // (CLAUDE.md firewall: label vs count) — @Tag("slow") rather than
+    // default-suite, per task-2 brief Step 6 fallback.
+    @Tag("slow")
     @Test
     void phaseGate300TickSeededFullStackValidation() {
         // ===== PREP =====

@@ -582,6 +582,10 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 for (int y = 0; y < h; y++) {
                     int strain = mutagenGrid[x][y] & 0xFF;
                     if (strain == 0) continue;
+                    // EARS-4: only gossip from cells colonized at or after the active
+                    // outbreak's spawnTick — stops an earlier outbreak's surviving
+                    // strain cells from re-seeding the new one (cross-outbreak ratchet).
+                    if (mutagenLastReinforcedTick[x][y] < activeMutagen.spawnTick()) continue;
                     // Gossip to 8 Moore neighbors per-neighbor with configured probability.
                     for (int dx = -1; dx <= 1; dx++) {
                         for (int dy = -1; dy <= 1; dy++) {
@@ -599,6 +603,16 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                                 if (mutated <= 0) mutated = 1;
                                 if (mutated > 255) mutated = 255;
                             }
+                            // EARS-3: radius cap, checked AFTER both RNG draws above.
+                            // Hoisting this above the probability/mutation rolls would
+                            // save a wasted draw for rejected neighbors, but it would
+                            // also remove draws from the shared rng stream, shifting
+                            // every subsequent draw and moving the spawn ticks of
+                            // toxin, mutagen and lightning. Leave the waste in place.
+                            Position origin = activeMutagen.originCell();
+                            int distX = Math.min(Math.abs(nx - origin.x()), w - Math.abs(nx - origin.x()));
+                            int distY = Math.min(Math.abs(ny - origin.y()), h - Math.abs(ny - origin.y()));
+                            if (Math.max(distX, distY) > cfg.maxRadius()) continue;
                             mutagenGridNext[nx][ny] = (byte) mutated;
                             mutagenLastReinforcedTick[nx][ny] = tickNumber;
                         }
