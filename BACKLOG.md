@@ -500,10 +500,10 @@ deliberate JS error. Deferred per the M5-A review (2026-07-19); not blocking MVP
 
 ## Environment persistence defects (found 2026-08-02 by observer visual pass)
 
-Three findings from the first real visual session on the Slice B panel. The observer did not
-cause any of them — it made pre-existing engine behaviour visible for the first time, which is
-the point of building it. Verdicts below are from a static-read investigation; each cites the
-line that decides it. **None is fixed.**
+Findings from the first two visual sessions on the Slice B panel. The observer did not cause any
+of them — it made pre-existing engine behaviour visible for the first time, which is the point of
+building it. Verdicts are from static-read investigation; each cites the line that decides it.
+**None is fixed.** E-1..E-4 came from session 1, E-5..E-9 from session 2.
 
 ### E-1 · Toxin never reaches zero — every event leaves a permanent stain
 
@@ -549,8 +549,14 @@ and must not be.
    a new origin without clearing the grid. Any surviving legacy zone becomes a full-strength
    gossip source the moment the next outbreak begins, so the bloom grows from its whole existing
    perimeter rather than from a fresh point. Zone decay (`:612-626`) only runs when
-   `activeMutagen == null`, and `mutagenLastReinforcedTick` is refreshed on every gossip touch
-   (`:603`), so no cell inside an active bloom ever ages out.
+   `activeMutagen == null`.
+3. **The whole field clears in one tick, which reads as a visual glitch.**
+   `mutagenLastReinforcedTick[nx][ny]` is written at `:603`, but `:592`'s
+   `if (existingStrain != 0) continue` short-circuits first — so a cell's timestamp is stamped
+   once at colonization and never refreshed. Every cell in a bloom therefore ages out within a
+   few ticks of its neighbours, and once the outbreak ends the entire field vanishes together
+   instead of receding. Fix travels with the decay model: attenuate intensity per tick and draw
+   alpha from it, so the bloom fades rather than being switched off.
 
 Smallest fixes, independent of each other: gate gossip on a new `maxRadius` against the origin
 already carried on `MutagenEvent` (~3 lines at `:586-593`); and source the gossip loop only from
@@ -599,3 +605,100 @@ If "start the server and watch life" is wanted as a first-class mode, it is a co
 `ApplicationReadyEvent` seeder placing N particles through the existing `EligibleCellIndex`
 path, gated on a new key defaulting to 0. Note that unowned particles have no brain, so they
 would decay and never act; the fuller version is an auto-started in-process bot fleet.
+
+### E-5 · Bots cannot perceive the residual toxin field, and mostly ignore the rest
+
+Observed: a Membrane bot repeatedly walking straight through visible toxin. Three independent
+deciders, in firing order — fixing any one alone changes nothing:
+
+1. **The bit is never set for the residual field.** `EnvironmentEngine.java:966` sets
+   `CELL_STATUS_TOXIN_PRESENT` only when `intensity >= intensity-threshold` (`20`,
+   `application.yml:191`). E-1's permanent stain sits at intensity `1`. The renderer paints
+   anything `> 0`, so the operator sees a hazard the bots are never told about. **E-5 is
+   downstream of E-1 — fix E-1 first, then re-observe.**
+2. **Avoidance is gated on near-starvation.** `HeuristicBrain.java:154/161/331` all read
+   `if (!(lowEnergy && toxic))`, with `lowEnergy` = energy < 30% of max
+   (`TOXIC_AVOIDANCE_ENERGY_FRACTION`, `:73`). Above 30% the bit is decoded into a local and
+   never branched on. A healthy bot is *designed* to ignore toxin.
+3. **It is exclusion, not repulsion.** Those three sites only drop toxic cells from candidate
+   lists. The flee, chase, and fallback-walk branches never consult `cellStatus` at all, so a
+   bot fleeing a predator or chasing prey will cross toxin regardless of energy.
+
+Decide intent before coding: (2) may well be deliberate ("desperate bots take risks"). (1) is a
+plain defect once E-1 is fixed.
+
+### E-6 · Bonding and composites are statistically unreachable at current defaults
+
+Observed: no bonded pairs or composites in two long sessions. Both are passive engine scans
+(`SimulationEngine.java:456-462` and `:632-658`) — no bot verb is required, so this is not a
+brain gap. (`V` is a locomotor ballot, not composite formation.)
+
+The blocker is the energy gate: bonding needs **both** partners at ≥ `bond-energy-threshold: 50`,
+and children spawn at `childStartEnergy() = maxEnergy / 2` (`MetabolicProfile.java:93`):
+
+| species | child E | decay/tick | nutrient gain | net per eat-tick | combat win |
+|---------|---------|------------|---------------|------------------|------------|
+| CATALYST | 40 | 3 | 3 | **0** | +15 |
+| SPORE | 30 | 2 | 5 | +3 | +8 |
+| MEMBRANE | 60 | 1 | 8 | +7 | +5 |
+
+All three legal bond pairs (C→S, S→M, M→C) need a Catalyst or Spore at ≥50. **A Catalyst child
+cannot get there by feeding at all** — gain 3 exactly cancels decay 3 — so its only route up is
+winning combat. Spore needs ~7 net eat-ticks. Then a 0.10 roll. Composites need two such pairs
+adjacent — roughly the square of an already-small rate.
+
+Config-only fixes exist (lower the threshold, or raise Catalyst's `nutrientConsumeEnergy` to 4).
+This is **balance tuning, not a defect** — it belongs with E-9, not ahead of it.
+
+### E-7 · The solo attack verb is a no-op, so bot combat intent is discarded
+
+`ActionResolver.java:509-512` handles `case 'A'` by incrementing `restCount` and nothing else.
+`HeuristicBrain.java:199` emits `A` whenever prey is at distance 1. So the brain's one offensive
+decision is dropped every time, and *all* combat is the passive engine scan.
+
+Consequence, given E-6: Catalyst's only energy route up is combat, and combat is something it
+cannot choose to do. This is the strongest single candidate for E-9's extinction ordering.
+
+Not obviously a bug — the comment says composite-`A` dispatch was Phase 3 work and solo-`A` was
+left equivalent to rest deliberately. But brain and resolver now disagree, which is a real seam.
+Cheapest honest fix is to stop emitting `A` in the brain; the interesting one is to make it do
+something.
+
+### E-8 · Lightning fires as configured but is unobservable
+
+Not a spawn bug — confirmed empirically, not inferred. A bare `bootRun` logged 5 strikes in the
+first 257 ticks (~2 min), via `EnvironmentEngine.java:1126`:
+
+```
+Lightning strike: tick=48  center=(246,2)   inner=2 outer=4 damage=40 fertility=25 fleeing=8
+Lightning strike: tick=55  center=(209,42)  ...
+Lightning strike: tick=212 center=(222,186) ...
+Lightning strike: tick=249 center=(200,201) ...
+Lightning strike: tick=257 center=(227,145) ...
+```
+
+Consistent with λ = 0.04 at summer peak / 0.005 off-season over a 200-tick year
+(`application.yml:165-168`).
+
+It is invisible because `EnvironmentEngine.java:370` clears `lightningStrikesThisTick` every
+tick, so a strike appears in **exactly one 500ms frame** — one 6px square on a 1536px canvas.
+The wire also carries only the centre `Position` (`:1184`), never `outer-radius: 4`, so the
+rendered mark is 1/81 of the area actually damaged.
+
+Two independent fixes: hold the strike in the observer frame for N ticks (or fade it client-side),
+and put the radius on the wire so the affected disc is drawn. Renderer-side persistence alone is
+enough to make it visible.
+
+### E-9 · Extinction ordering: Catalyst first, then Spore; Membrane persists
+
+Observed across both sessions. **This is the balance-tuning signal that was being waited on** —
+tuning was deferred until a GUI existed to give visual feedback, and it now does.
+
+The E-6 table is a plausible mechanism (Catalyst net-zero on feeding, Spore marginal, Membrane
+comfortable) and E-7 removes Catalyst's only escape route. **Neither has been tested** — the
+ordering matching the arithmetic so neatly is exactly when to be suspicious. Confirm before
+tuning on it.
+
+**Emergence, not mechanism.** Per the constitution clause, population outcomes get no
+default-suite test. Verify by instrumented observation (`DeathDiagnostics` census, which already
+exists behind `paralife.diagnostics.death-trace.enabled`) and judge by eye on the visualiser.
