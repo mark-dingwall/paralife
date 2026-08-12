@@ -63,6 +63,21 @@ and `M ≥ 1`, `M − dM < M`, and the floor of a value strictly below the integ
 `M − 1`. The maximum therefore drops by ≥ 1 every tick and the field is empty within ≤ 255 ticks.
 `Math.round` fails exactly here: `round(0.9 × v) == v` for every `v` in 1..5.
 
+**Confirmed empirically before planning.** A faithful simulation of `diffuseStep` on a 64×64 torus
+with the real production parameters (`diffusionRate 0.5`, `decayRate 0.1`, `threshold 1`,
+`radius 3` — `EnvironmentEngine.java:467-468`), one 255 stamp, both rounding modes:
+
+| mode | outcome |
+|---|---|
+| `round` | never clears — 49 cells stuck at intensity 1 at tick 400 |
+| `floor` | field fully clear at **tick 7** |
+
+That reproduces the BACKLOG's 49-cell stain exactly. Quote it in the Task 1 commit body.
+
+Edge case, not a blocker: the proof needs `M × (1 − d) != M` in double arithmetic, i.e.
+`decayRate ≳ 2⁻⁵³`. `Toxin`'s compact constructor admits any `decayRate` in `[0, 1]`, so a
+pathological `1e-20` is bindable. Irrelevant at `decay-rate: 0.1`; do not add a guard for it.
+
 **Files:**
 - Modify: `src/main/java/com/paralife/engine/CellularAutomaton.java:61` (the decay expression) and
   its class javadoc formula at `:13-16`
@@ -277,13 +292,24 @@ field clears on the first idle tick. That is the single-frame disappearance the 
   cell whose colonization tick is older than `zone-decay-ticks`, on the same schedule as when no
   outbreak is active.
 
-**Behaviour change to expect, and the knob that controls it.** Ageing during growth turns the bloom
-from a filled disc into an expanding annulus that stops at `max-radius` and then burns out from the
-centre. With the shipped defaults the frontier advances ~0.3 cells/tick, so it reaches radius 20 in
-roughly 67 ticks while cells expire after 50 — a ring of order 15 cells thick. **`zone-decay-ticks`
-is the ring-thickness knob:** raise it above the time-to-cap for a filled disc that dies all at once
-at the end, lower it for a thinner ring. This is a look-and-feel decision to make by eye on the
-visualiser, not something to pin with a test.
+**Behaviour change to expect.** Not a clean annulus. A cell cleared by the sweep has
+`existingStrain == 0` on the next tick, so any live neighbour re-colonizes it at `gossip-probability`
+per neighbour and stamps a *fresh* timestamp (`:602-603`). The outward ring is always younger than
+the ring it just cleared, so it continuously reseeds inward. Expect a **bounded, mottled, churning
+disc** — not a hollow ring and not a centre burnout. `zone-decay-ticks` therefore is not cleanly a
+"ring-thickness" knob; treat it as a churn-rate knob and judge it by eye on the visualiser.
+
+**The E-2c fix still lands regardless of that shape.** What changes is the *distribution* of
+colonization timestamps: today they are uniformly ancient by the time a 300-tick outbreak ends, so
+every cell clears on the same idle tick. With rolling decay they are staggered, so the field
+recedes progressively instead of vanishing in one frame. That is the whole point of the task.
+
+Arithmetic for scale, not for a test: a frontier cell typically has ~3 colonized neighbours, so
+per-tick colonization is `1 − 0.7³ ≈ 0.66`, and radius 20 is reached in roughly 30 ticks.
+
+**Perf note for the commit body:** the O(w·h) sweep now runs every tick rather than only on idle
+ticks — ~65k extra reads/tick at the default 256×256, on top of the existing gossip scan.
+Negligible, but say it rather than let a reviewer discover it.
 
 **Files:**
 - Modify: `src/main/java/com/paralife/engine/EnvironmentEngine.java:565-627` (`advanceMutagen` —
@@ -300,17 +326,28 @@ visualiser, not something to pin with a test.
 ```java
 // EARS-5 — decay runs during an active outbreak.
 // Fixture: outbreak whose lifetimeTicks far exceeds zoneDecayTicks (e.g. 300 vs 5),
-// so the window under test sits strictly INSIDE the active period. Colonize a known
-// cell, then advance past zoneDecayTicks while the outbreak is still active.
-// Assert: that cell is clean, AND activeMutagenEvent() is still non-null at the
-//   moment of assertion — without that second half the test would pass for the
-//   wrong reason if the outbreak had quietly expired and the old idle-only path
-//   did the clearing.
-// Positive control: a cell colonized within the last zoneDecayTicks is still set,
-//   proving the sweep discriminates by age rather than clearing everything.
+// so the window under test sits strictly INSIDE the active period.
+//
+// ISOLATION IS LOAD-BEARING. A cleared cell has strain 0 next tick, so any live
+// neighbour re-colonizes it with a FRESH timestamp and the assertion flakes. Place
+// the target cell with no colonized cell in its Moore neighbourhood — put the
+// outbreak origin far away and stamp the target directly, then set its age with
+// setMutagenLastReinforcedTickForTest. Do NOT let gossip reach it.
+//
+// Assert: the target cell is clean, AND activeMutagenEvent() is still non-null at
+//   the moment of assertion — without that second half the test passes for the
+//   wrong reason if the outbreak quietly expired and the OLD idle-only path did
+//   the clearing.
+// Positive control: a second isolated cell whose timestamp is within the last
+//   zoneDecayTicks is still set, proving the sweep discriminates by age rather
+//   than clearing everything.
 ```
 
-The `activeMutagenEvent()` accessor already exists at `EnvironmentEngine.java:1660`.
+Package-private test seams that already exist on `EnvironmentEngine` — use these rather than
+inventing a harness: `forceSpawnMutagenForTest(tick, origin, strain, lifetime)` `:1651`,
+`stampMutagenForTest(pos, strain)` `:1633`, `mutagenStrainAtForTest(pos)` `:1665`,
+`mutagenLastReinforcedTickForTest(pos)` `:1670`, `setMutagenLastReinforcedTickForTest(pos, tick)`
+`:1675`, `advanceMutagenForTest(tick)` `:1700`, `activeMutagenEvent()` `:1660`.
 
 - [ ] **Step 2: Run and record the real failure**
 
@@ -320,8 +357,14 @@ Expected: FAIL — the cell is still colonized. Paste the actual message.
 - [ ] **Step 3: Run the decay sweep unconditionally**
 
 Restructure `advanceMutagen` so the age-out sweep executes on every tick rather than only in the
-`activeMutagen == null` branch. Ordering matters and must be stated in a comment: gossip first, then
-decay, so a cell colonized this tick is not aged out in the same tick it was created.
+`activeMutagen == null` branch.
+
+**Placement is load-bearing, and not for the obvious reason.** A cell colonized this tick has
+`tickNumber − lastReinforced == 0`, so it could never be aged out in the same tick either way. The
+real constraint is the double buffer: the sweep reads and writes `mutagenGrid`, but the active
+branch's gossip writes land in `mutagenGridNext` and only reach `mutagenGrid` at the
+`System.arraycopy` swap (`:609-611`). **The sweep must therefore run after that swap, outside the
+`if/else`** — placing it before would sweep a stale grid. Say this in the comment.
 
 - [ ] **Step 4: Run the mutagen suite, then the full suite**
 
@@ -393,10 +436,12 @@ Expected: FAIL with the verb assertion showing `A`. Paste the actual message.
 
 - [ ] **Step 4: Remove the branch**
 
-In the chase branch, drop the `adj` computation and always emit `M`. Replace the two-line comment
-about `A` with one line stating why: solo `A` resolves to rest because combat is a passive
-adjacency scan, so emitting it costs the bot its action. Delete the now-orphaned `adj` local —
-leaving it would fail the build as an unused variable under the project's settings.
+In the chase branch (`HeuristicBrain.java:196-201` — `:194` is target selection and stays), drop the
+`adj` computation and always emit `M`. Replace the two-line comment about `A` with one line stating
+why: solo `A` resolves to rest because combat is a passive adjacency scan, so emitting it costs the
+bot its action. Delete the now-orphaned `adj` local — the build does **not** set `-Werror` and javac
+will not fail on an unused local, so this is tidiness required by `CLAUDE.md` §Editing existing code,
+not something a gate will catch for you.
 
 - [ ] **Step 5: Run the bot suite, then the full suite**
 
@@ -415,8 +460,9 @@ git commit   # body: EARS-6, RED output, and every flipped pre-existing test
 
 ## Task 5: E-8a — the observer wire carries each strike's radius
 
-**The defect.** A strike damages a Euclidean disc of `outer-radius: 4` (≈49 cells) but the wire
-carries only its centre, so the renderer draws 1/81 of the affected area.
+**The defect.** A strike damages a Euclidean disc of `outer-radius: 4` — exactly 49 cells
+(hand-counted over `dx² + dy² ≤ 16`) — but the wire carries only its centre, so the renderer draws
+**1/49** of the affected area.
 
 **EARS clause:**
 
@@ -436,8 +482,26 @@ existing consumers ignore an added key, exactly as the `mutated` field precedent
   construction — map centre + config radius)
 - Modify: `src/main/java/com/paralife/observer/ObserverFrame.java:69,71` (`Coord` → `Strike`)
 - Modify: `src/main/java/com/paralife/observer/ObserverFrameBuilder.java:95-96` (the mapping)
-- Test: `src/test/java/com/paralife/engine/EnvironmentSnapshotTest.java:87,93,120`
-- Test: `src/test/java/com/paralife/observer/ObserverFrameBuilderTest.java:115`
+- Test: `src/test/java/com/paralife/engine/EnvironmentSnapshotTest.java:87-89, 108, 115, 120`
+- Test: `src/test/java/com/paralife/observer/ObserverFrameBuilderTest.java:102-106, 115-116`
+
+**Every site that fails to compile once `lightning` is `List<Strike>` — all four verified present:**
+
+| site | current code | note |
+|---|---|---|
+| `EnvironmentSnapshotTest:89` | `.containsExactly(new Position(7, 8), new Position(9, 10))` | comparison |
+| `EnvironmentSnapshotTest:108` | `List<Position> lightning = new ArrayList<>(List.of(new Position(3, 3)))` | construction |
+| `EnvironmentSnapshotTest:115` | `lightning.add(new Position(9, 9))` | construction |
+| `EnvironmentSnapshotTest:120` | `.containsExactly(new Position(3, 3))` | comparison |
+| `ObserverFrameBuilderTest:105` | `List.of(new Position(5, 6), new Position(7, 8))` | construction |
+| `ObserverFrameBuilderTest:116` | `.containsExactly(new ObserverFrame.Coord(5, 6), ...)` | comparison |
+
+`EnvironmentSnapshotTest:93`'s `isEmpty()` assertion needs no change and must stay — it is the
+positive control proving the list is not merely always populated.
+
+**Orphaned import.** `EnvironmentSnapshot.java:3` imports `com.paralife.world.Position` solely for
+the `lightning` component; remove it once the type changes. Do **not** remove it from
+`EnvironmentSnapshotTest` — that file still uses `Position` at `:59`, `:60`, and `:136`.
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
@@ -521,8 +585,9 @@ strike appears in exactly one 500ms frame as a single 6px square on a 1537px can
 
 **EARS clauses:**
 
-- **EARS-8** — WHEN a strike first appears in a world frame, THE SYSTEM SHALL keep drawing it for
-  `LIGHTNING_TRAIL_TICKS` subsequent frames, at monotonically decreasing opacity.
+- **EARS-8** — WHEN a strike appears in a world frame at tick `T`, THE SYSTEM SHALL draw it on every
+  frame from `T` through `T + LIGHTNING_TRAIL_TICKS − 1` inclusive, at monotonically decreasing
+  opacity, and SHALL NOT draw it from `T + LIGHTNING_TRAIL_TICKS` onward.
 - **EARS-9** — WHEN a strike is drawn, THE SYSTEM SHALL paint every cell whose Euclidean distance
   from the centre is ≤ its `radius`, with toroidal wrap.
 
@@ -585,9 +650,28 @@ export function discOffsets(radius)
 //   state.lightningTrail  ->  [{x, y, radius, alpha}], supplied by the page.
 // Still gated by visible(layers, "lightning"), still painted last in the layer
 // order. Cells wrap toroidally against state.grid before painting.
+//
+// BACK-COMPAT CONTRACT — both defaults are load-bearing, see below:
+//   entry with no `alpha`   -> paint the literal LIGHTNING_COLOR ("#ffb")
+//   entry with no `radius`  -> paint a single cell (radius 0)
 // Falls back to state.env.lightning when state.lightningTrail is absent, so the
 // module stays renderable from a bare frame.
 ```
+
+**Why those two defaults are mandatory, not stylistic.** Four existing gates in
+`observer-render.test.js` depend on them, and the fixture at `:114`/`:131` supplies
+`lightning: [{x: 0, y: 2}]` — no `radius`, no `alpha`:
+
+| line | gate |
+|---|---|
+| `:148-159` | layer-order test, finds the lightning op by `c.color === LIGHTNING_COLOR` |
+| `:185` | per-layer coordinate check, same colour match |
+| `:234` | layer-toggle matrix, same colour match |
+| `:294-295` | pins `LIGHTNING_COLOR === "#ffb"` |
+
+Emitting `rgba(255, 255, 187, α)` unconditionally turns three of those red. Honour the defaults and
+they stay green untouched — which is the point: they are the regression net for the layer ordering
+and the toggle gate, and rewriting them to match new output would forfeit exactly that.
 
 - [ ] **Step 1: Write `observer-lightning.test.js` against the contracts above**
 
@@ -669,7 +753,7 @@ A slice is not done until the canonical doc matches shipped code (`CLAUDE.md` §
    `{x, y, radius}`.
 2. `:659` — the `lightning` bullet documents `radius` and states it is the **Euclidean** outer
    radius of the damaged disc.
-3. `:678` — the pitch paragraph says grid lines are `#ddd`. They are `#333` and the layer starts
+3. `:667` — the pitch paragraph says grid lines are `#ddd`. They are `#333` and the layer starts
    hidden (shipped in `8a207b3`). Fix both; this is merge-back debt from the previous slice.
 4. `:685` — the layer-order line stays correct, but add the trail contract: a strike is drawn for
    `LIGHTNING_TRAIL_TICKS` frames at decreasing opacity, as a Euclidean disc of its `radius`.
