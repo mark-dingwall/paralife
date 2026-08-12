@@ -4,6 +4,11 @@
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
+**Status: FROZEN 2026-08-12** after four review rounds (correctness, test design, executability, and
+a diff-scoped re-review). Round 4 raised no Criticals and both reviewers re-derived the round-2
+fixes from source rather than accepting their descriptions. Changes from here re-enter review
+diff-scoped, per `CLAUDE.md` §close-out gates.
+
 **Goal:** Make toxin decay to zero, bound and age the mutagen bloom, stop the brain emitting a verb
 the resolver discards, and make lightning visible on the observer at its true size.
 
