@@ -267,17 +267,29 @@ changes behaviour.
 // legacy cell placed OUTSIDE max-radius has every neighbour rejected by the radius
 // cap and the assertion passes green with the source filter deleted — vacuous.
 // Place the legacy cell INSIDE the cap instead:
-//   origin (8,8), max-radius 3, legacy cell (11,8) — Chebyshev 3, inside the cap.
-//   stampMutagenForTest(legacy, strain) then
-//   setMutagenLastReinforcedTickForTest(legacy, spawnTick - 1).
-// Advance EXACTLY ONE tick: the origin's own front reaches only Chebyshev 1, so
-//   any colonization at Chebyshev 2-3 can ONLY have come from the legacy cell.
+//   SPAWN AT A NON-ZERO TICK: forceSpawnMutagenForTest(10L, (8,8), strain, 300).
+//   stampMutagenForTest(legacy=(11,8), strain)          // Chebyshev 3 — inside cap
+//   setMutagenLastReinforcedTickForTest(legacy, 9L)     // AFTER the stamp
+//   advanceMutagenForTest(11L)                          // EXACTLY ONE tick
+// The origin's front reaches only Chebyshev 1 in one tick, so any colonization at
+//   Chebyshev 2-3 can ONLY have come from the legacy cell.
 // Assert: (10,7) (10,8) (10,9) (11,7) (11,9) — legacy's neighbours, all inside
 //   the cap — are strain 0. A broken source filter colonizes them => RED.
+//   ((12,*) are Chebyshev 4, rejected by the cap — do not assert on them, they
+//   prove nothing about the source filter.)
 // Positive control: the origin's own 8 neighbours ARE colonized. This also pins
 //   the filter as >= spawnTick and not > : the origin's own timestamp EQUALS
 //   spawnTick, so a strict > filter silently kills the entire bloom.
 ```
+
+**Two fixture hazards that will cost an hour each if you hit them blind.**
+
+1. **`stampMutagenForTest` RESETS the reinforcement tick to `0L`** (`EnvironmentEngine.java:1637`).
+   Always call `setMutagenLastReinforcedTickForTest` *after* the stamp, never before — the stamp
+   would silently undo it.
+2. **Never spawn the outbreak at tick 0 in this test.** Combined with hazard 1, a legacy cell would
+   carry timestamp `0` equal to `spawnTick` `0`, pass the `>= spawnTick` filter, and the gate would
+   fail for a reason that looks nothing like its cause. Spawn at tick 10.
 
 Both assertions are structural (a named coordinate is or is not colonized), not statistical — no
 cell counts, shares, or densities.
@@ -385,7 +397,9 @@ clear a cell, which is exactly the gate under test.
 // forceSpawnMutagenForTest(0L, origin, strain, 300) — lifetime is a PARAMETER, so
 //   it is test-owned; it must far exceed zoneDecayTicks so the whole window under
 //   test sits strictly INSIDE the active period.
-// stampMutagenForTest(target, strain) + setMutagenLastReinforcedTickForTest(target, 0L).
+// stampMutagenForTest(target, strain) THEN setMutagenLastReinforcedTickForTest(target, 0L)
+//   — that order matters: the stamp resets the reinforcement tick to 0L
+//   (EnvironmentEngine.java:1637), so setting it first would be silently undone.
 // Advance past zoneDecayTicks via advanceMutagenForTest.
 //
 // Assert: target is strain 0, AND activeMutagenEvent() != null at the moment of
