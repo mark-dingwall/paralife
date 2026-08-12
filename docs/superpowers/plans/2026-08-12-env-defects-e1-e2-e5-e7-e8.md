@@ -145,8 +145,14 @@ Expected: PASS, including all pre-existing tests.
 //   The cap is a LOOP BOUND, not a tuned expectation — assert termination, never
 //   "cleared in exactly N ticks" (that magnitude moves with decay-rate tuning).
 //   500 is safe: from 255 at diffusionRate 0.5 the max collapses in well under 60.
-// Positive control: assert nonZeroToxinCellCountForTest() > 0 BEFORE the loop, so
-//   a stamp that silently failed cannot make this pass for the wrong reason.
+// Positive control 1: assert nonZeroToxinCellCountForTest() > 0 BEFORE the loop,
+//   so a stamp that silently failed cannot make this pass for the wrong reason.
+// Positive control 2, and the one that matters: assert the field is STILL
+//   non-empty after the FIRST tick. Without it, "zero the whole grid whenever
+//   activeToxin == null" passes EARS-2 outright while being no fix at all.
+//   EARS-1 also discriminates that, but it lives in another file — keep the
+//   discrimination inside the clause that closes E-5. Safe by the empirical
+//   table above: floor needs 7 ticks on 64x64, so tick 1 is comfortably non-empty.
 ```
 
 Seams (all verified present): `stampToxinIntensityForTest(Position, int)`
@@ -239,28 +245,67 @@ unlikely. The failure this step really catches is a **missing yaml key**: Spring
 context load. That presents as mass `ApplicationContextException`, not an obvious config error —
 recognise it and check `application.yml` first.
 
-- [ ] **Step 3: Write the two failing tests**
+Package-private `EnvironmentEngine` seams this task needs — all verified present, use them rather
+than building a harness: `forceSpawnMutagenForTest(tick, origin, strain, lifetime)` `:1651`,
+`stampMutagenForTest(pos, strain)` `:1633`, `setMutagenLastReinforcedTickForTest(pos, tick)` `:1675`,
+`mutagenStrainAtForTest(pos)` `:1665`, `advanceMutagenForTest(tick)` `:1701`, `activeMutagenEvent()`
+`:1660`.
+
+- [ ] **Step 3: Write the failing tests**
 
 **Put these in a NEW class, `MutagenRadiusTest`, not in `MutagenTest`.** `@TestPropertySource` is
-class-level and there is no per-test override seam, so the three new mutagen gates need property
-sets that cannot coexist (this task wants `max-radius=3`; Task 3 wants `gossip-probability=0.0`
-while `MutagenTest.java:50` pins `1.0`). Give the new class `paralife.world.width/height=16`,
-`gossip-probability=1.0`, `strain-mutation-chance=0.0`, `max-radius=3`, and a seed — copy
-`MutagenTest`'s block and change those keys.
+class-level with no per-test override seam, so the new mutagen gates need property sets that cannot
+coexist (this task wants `max-radius=3`; Task 3 wants `gossip-probability=0.0` while
+`MutagenTest.java:50` pins `1.0`). Copy `MutagenTest`'s block (`:37-55`) and set:
+
+```
+paralife.world.width=16
+paralife.world.height=16
+paralife.simulation.events.mutagen.max-radius=3
+paralife.simulation.events.mutagen.gossip-probability=1.0
+paralife.simulation.events.mutagen.strain-mutation-chance=0.0
+paralife.simulation.events.mutagen.zone-decay-ticks=500   # see below
+```
+
+**`zone-decay-ticks=500` is deliberate.** Task 3 makes the age-out sweep run every tick. At
+`MutagenTest`'s value of 5 the EARS-3 control cell — "the diagonal at Chebyshev 3 is colonized" —
+would be swept away five ticks after it colonizes, making the gate a race. Parking the value far
+above the test's tick budget decouples this task from Task 3 entirely. That is why a separate class
+is worth the churn rather than adding one key to `MutagenTest`.
+
+**Leave `MutagenTest` itself untouched.** Its world is 16×16, so the maximum toroidal Chebyshev
+distance is 8 and the production default `max-radius: 20` can never bind there. No existing test
+changes behaviour.
+
+**You already own a boundary gate for free.** `MutagenTest.java:206-219`
+(`strainGossipPropagatesToMooreNeighbors`) force-spawns at tick 0 — so the origin's timestamp equals
+`spawnTick` — and asserts all 8 neighbours colonize at tick 1. Write the source filter as `>` rather
+than `>=` and the origin excludes itself, gossip never starts, and that pre-existing test goes red.
+Do not weaken it.
 
 **Leave `MutagenTest` itself untouched.** Its world is 16×16, so the maximum toroidal Chebyshev
 distance is 8 and the production default `max-radius: 20` can never bind there. No existing test
 changes behaviour.
 
 ```java
-// EARS-3 — radius cap.
-// Fixture: forceSpawnMutagenForTest(0L, origin, strain, lifetime) at a known origin.
-// max-radius = 3, gossip-probability = 1.0 so propagation is deterministic.
+// EARS-3 — radius cap. TWO fixtures, because one cannot discriminate the metric.
+//
+// 3a. Chebyshev, not Euclidean.
+// forceSpawnMutagenForTest(10L, (8,8), strain, 300); max-radius 3; gossip 1.0.
 // Advance enough ticks that an uncapped front would pass distance 3 (>= 5 on a
-// 16x16 world, where the front would otherwise reach 8).
+//   16x16 world, where it would otherwise reach 8).
 // Assert: EVERY non-zero cell is within Chebyshev 3 of origin.
-// Positive control: a cell AT exactly Chebyshev 3 IS colonized — without it,
-//   "nothing outside the cap" also passes when gossip is broken entirely.
+// Positive control MUST BE THE DIAGONAL CORNER (11,11): Chebyshev 3 but Euclidean
+//   4.24. An on-axis control like (11,8) is Euclidean 3 as well, so it is
+//   colonized under BOTH metrics — a Euclidean cap would ship with both halves
+//   green. Euclidean-<=3 is a strict subset of Chebyshev-<=3, so the invariant
+//   half cannot catch it either. The diagonal is the only discriminator.
+//
+// 3b. Toroidal, not absolute.
+// With origin (8,8) on a 16x16 world and radius 3, wrap never engages, so
+//   Math.abs(a-b) and min(|a-b|, dim-|a-b|) are indistinguishable. Re-run with
+//   origin (0,0): assert (15,15) — toroidal Chebyshev 1 — IS colonized, and
+//   (4,0) — Chebyshev 4 — is not. A non-toroidal cap leaves (15,15) clean.
 
 // EARS-4 — no cross-outbreak ratchet.
 // THE FIXTURE MUST DEFEAT ITS OWN SIBLING GUARD. Both guards land in Step 5, so a
@@ -497,6 +542,10 @@ body — do not silently delete one.
 //   a brain that stopped chasing altogether.
 // Positive control: prey at distance 2 still yields 'M' toward it, proving the
 //   chase branch is reached in both cases and only the verb changed.
+// Run the adjacent case for TWO different directions (e.g. N and SE). A brain
+//   that fell out of the chase branch into the fallback random walk still returns
+//   'M', and could match one numpad code by luck — it cannot track the prey
+//   across two.
 ```
 
 - [ ] **Step 3: Run and record the real failure**
@@ -566,7 +615,7 @@ existing consumers ignore an added key, exactly as the `mutated` field precedent
 | `ObserverFrameBuilderTest:105` | `List.of(new Position(5, 6), new Position(7, 8))` | construction |
 | `ObserverFrameBuilderTest:116` | `.containsExactly(new ObserverFrame.Coord(5, 6), ...)` | comparison |
 
-`EnvironmentSnapshotTest:93`'s `isEmpty()` assertion needs no change and must stay — it is the
+`EnvironmentSnapshotTest:94`'s `isEmpty()` assertion needs no change and must stay — it is the
 positive control proving the list is not merely always populated.
 
 **Orphaned import.** `EnvironmentSnapshot.java:3` imports `com.paralife.world.Position` solely for
@@ -694,7 +743,7 @@ misreport the mechanic.
 ```js
 // observer-lightning.js — the whole exported surface.
 
-/** Frames a strike stays visible after the tick it arrived on. */
+/** Total frames a strike stays visible, COUNTING its arrival frame. */
 export const LIGHTNING_TRAIL_TICKS = 6;
 
 /** Base colour; the trail supplies the alpha. Matches the existing LIGHTNING_COLOR hue. */
@@ -712,8 +761,11 @@ export function trailAlpha(age)
  * Closure over the strikes still in their trail window.
  *   record(tick, strikes)  strikes are [{x, y, radius}] from env.lightning
  *   active(tick)           -> [{x, y, radius, alpha}], newest first, expired dropped
- * A strike recorded twice at the same tick is stored once (frames are latest-wins
- * and a slow observer may re-render the same tick).
+ *
+ * Dedupe key is (tick, x, y) — NOT tick alone. Frames are latest-wins and a slow
+ * observer may re-render the same tick, so re-recording must be idempotent; but
+ * the engine appends MULTIPLE strike centres in one tick, and keying on tick
+ * alone would silently collapse two simultaneous strikes into one.
  */
 export function createLightningTrail()
 
@@ -779,7 +831,12 @@ contract above is wrong or unimplemented, and loosening the predicate hides the 
 //    active(T + LIGHTNING_TRAIL_TICKS - 1), and absent from
 //    active(T + LIGHTNING_TRAIL_TICKS). The "present" halves are the positive
 //    control for the "absent" half.
-//  - recording the same tick twice yields one entry, not two.
+//  - recording the SAME strike at the same tick twice yields one entry.
+//  - TWIN GATE, and the one that matters: two DISTINCT strikes recorded at the
+//    same tick yield TWO entries in active(T). Without it, an impl keyed on tick
+//    alone passes the idempotence gate and silently drops simultaneous strikes —
+//    which the engine really does produce (EnvironmentSnapshotTest:82-89 applies
+//    two centres on one tick).
 // EARS-9 gates:
 //  - discOffsets(0) is exactly [[0, 0]].
 //  - discOffsets(4) includes [4, 0] and [2, 2] (sqrt(8) <= 4) and excludes
@@ -810,9 +867,13 @@ Expected: PASS.
 Add three gates to `observer-render.test.js`, using the existing fake-context harness (no canvas):
 
 1. A strike with `radius: 1, alpha: 0.5` paints exactly 5 cells — the Euclidean disc of radius 1.
-   **Scope the predicate.** `paintedWorld()` collects every layer's fills into one `ctx.calls`
-   array, and toxin also emits `rgba(`, so match on the full lightning prefix
-   `rgba(255, 255, 187,` rather than on `rgba(` — otherwise toxin calls inflate the count.
+   **Give this its own fixture helper; do not reuse `paintedWorld()`.** That helper paints
+   background, grid, rock, toxin, mutagen and entity fills into one `ctx.calls` array, and an
+   alpha-bearing lightning entry emits `rgba(255, 255, 187, 0.5)` — which satisfies the existing
+   *toxin* predicate `startsWith("rgba(")`. The back-compat contract protects the *old* fixtures
+   (they carry no alpha); a new alpha-bearing fixture routed through `paintedWorld()` reintroduces
+   the collision. Use a bare state with no toxin, and match on the full prefix
+   `rgba(255, 255, 187,`.
 2. The same strike paints nothing when `layers.lightning === false`. That is the positive/negative
    pair for the layer gate.
 3. **EARS-9's toroidal wrap, which otherwise ships untested** — `discOffsets` is deliberately
@@ -821,10 +882,20 @@ Add three gates to `observer-render.test.js`, using the existing fake-context ha
    `(7, 0)` and `(0, 4)`, at their hand-computed pixel origins (`index * 6 + 1`, from
    `cellOrigin`). An unwrapped implementation paints at a negative origin and fails this.
 
-In `observer.html`, create one `createLightningTrail()` for the page lifetime, call `record(tick,
-frame.env.lightning ?? [])` on each world frame, and put `active(tick)` on the state object passed
-to `drawWorld`. The page must still type no layer key of its own — derive from the module exports,
-per the Contract-1 rule the previous slice established.
+In `observer.html`, create one `createLightningTrail()` for the page lifetime. **Placement is
+ambiguous unless stated, and the two readings differ:** `drawWorld` is called from `render()`
+(`:105-111`), which runs on *both* a new world frame (`onWorld`, `:118`) *and* every layer-toggle
+click — and `render()` has no frame in scope, only `lastFrame`, which is `undefined` before the
+first frame. So:
+
+- `record(f.tick, f.env?.lightning ?? [])` goes in **`onWorld(f)`**, never in `render()` — recording
+  from `render()` would re-record on every toggle click.
+- `render()` reads `active(lastFrame?.tick ?? 0)`. The `?? 0` matters: `active(undefined)` yields
+  `NaN` ages on the pre-first-frame paint, and every comparison against `NaN` is false, so strikes
+  would neither draw nor expire.
+
+The page must still type no layer key of its own — derive from the module exports, per the
+Contract-1 rule the previous slice established.
 
 - [ ] **Step 6: Extend `ObserverPageServesTest` in BOTH places**
 
