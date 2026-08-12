@@ -356,16 +356,44 @@ Two additions inside `advanceMutagen`'s active branch:
   `mutagenLastReinforcedTick[x][y]` is earlier than `activeMutagen.spawnTick()`. That timestamp is
   already maintained and is stamped once at colonization (`:592`'s `existingStrain != 0` guard
   short-circuits before the write at `:603`), so it is exactly "which outbreak colonized this cell".
-- **Radius cap (EARS-3)** — in the per-neighbour loop at `:586-593`, before writing
-  `mutagenGridNext[nx][ny]`, reject the neighbour when its toroidal Chebyshev distance from
-  `activeMutagen.originCell()` exceeds `cfg.maxRadius()`. Toroidal distance per axis is
-  `min(|a-b|, dim - |a-b|)`; the cell distance is the max of the two axes.
+- **Radius cap (EARS-3)** — in the per-neighbour loop at `:586-593`, reject the neighbour when its
+  toroidal Chebyshev distance from `activeMutagen.originCell()` exceeds `cfg.maxRadius()`. Toroidal
+  distance per axis is `min(|a-b|, dim - |a-b|)`; the cell distance is the max of the two axes.
+
+  **Placement is RNG-stream-critical, not a style choice.** The check must go **after** both random
+  draws — the gossip-probability roll (`:591`) and the strain-mutation roll (`:595`) — immediately
+  before the write to `mutagenGridNext[nx][ny]`. Hoisting it above the probability roll is the
+  obvious optimisation (why draw for a neighbour you will reject?) and it is wrong here: it removes
+  draws from the shared `EnvironmentEngine` `rng`, shifting every subsequent draw and moving the
+  spawn ticks of toxin, mutagen **and** lightning. Leave the wasted draw in place and say why in a
+  comment, or the next reader will "fix" it.
 
 - [ ] **Step 6: Run the mutagen suite, then the full suite**
 
-Run: `./gradlew test --tests 'com.paralife.engine.MutagenTest' > /tmp/green2.log 2>&1; echo "EXIT=$?"`
+Run: `./gradlew test --tests 'com.paralife.engine.MutagenRadiusTest' > /tmp/green2.log 2>&1; echo "EXIT=$?"`
 then `./gradlew test > /tmp/full2.log 2>&1; echo "EXIT=$?"`
-Expected: PASS both.
+
+**Two integration tests are expected to be the ones that move, and the response is decided in
+advance — do not improvise it at this step.** Neither sets a world size, and there is no
+`application-test.yml` under `src/test/resources`, so both run on `application.yml`'s **256×256**,
+where `max-radius: 20` confines a bloom to a 41×41 patch — about 2.6% of the grid:
+
+| test | assertion at risk |
+|---|---|
+| `EnvironmentPhaseGateIntegrationTest:127-129` | `getMutagenInfectionEventCount() > 0` over 300 ticks |
+| `EnvironmentPhaseGateIntegrationTest:138-141` | `maxBuffsObserved > 0` — the mutagen survivor path, downstream of the same event |
+
+A bloom on 2.6% of the world is much less likely to reach a seeded particle. The EARS-4 source
+filter independently shifts the RNG stream (skipping a source cell removes its 8 draws), so these
+counters will move once regardless and need a deliberate re-baseline.
+
+**If they go red: raise `mutagen.peak-lambda` in that class's `@TestPropertySource`.** That class
+already documents its lambdas as "NOT production values — forces event firing within 300-tick
+window" (`:68-75`), so raising it further is exactly in keeping with its design. Do **not** raise
+`max-radius` for the test — that disables the behaviour this task exists to add. If lambda alone
+will not do it, move those two assertions to `@Tag("slow")` and say so in the commit body; they are
+threshold assertions over emergent quantities and are firewall-questionable as default gates
+anyway (`CLAUDE.md` §label vs count). Never weaken the cap to make a test pass.
 
 - [ ] **Step 7: Commit**
 
@@ -429,7 +457,14 @@ avoids a pointless conflict.
 
 - [ ] **Step 1: Write the failing test**
 
-**Put this in a NEW class, `MutagenZoneDecayTest`, with `gossip-probability=0.0`.** This is not a
+**Put this in a NEW class, `MutagenZoneDecayTest`.** Copy `MutagenTest`'s whole class header
+(`MutagenTest.java:37-55`) — annotations included — then change only
+`paralife.simulation.events.mutagen.gossip-probability` to `0.0`, keeping `zone-decay-ticks=5`.
+Copying rather than hand-writing is the instruction: the block carries
+`paralife.tick.auto-start=false`, and omitting that leaves the tick loop running live against the
+world under test, which presents as an intermittent failure that looks like a logic bug.
+
+**Why `gossip-probability=0.0`.** This is not a
 style preference — under `MutagenTest`'s class-level `gossip-probability=1.0` the test *cannot* go
 green after the fix. A cell the sweep clears has `existingStrain == 0` on the next tick, so any live
 neighbour re-colonizes it with a fresh timestamp; on the 16×16 test world at p=1.0 the front covers
@@ -805,7 +840,7 @@ export function discOffsets(radius)
 | `:294-295` | pins `LIGHTNING_COLOR === "#ffb"` |
 
 **And there is a second, worse collision.** The toxin predicate in the same file is
-`typeof c.color === "string" && c.color.startsWith("rgba(")` — at `:143` (layer-order) and `:232`
+`typeof c.color === "string" && c.color.startsWith("rgba(")` — at `:145` (layer-order), `:232` (`LAYER_COLOR_MATCH.toxin`) and `:288`
 (`LAYER_COLOR_MATCH.toxin`). Toxin is the *only* layer currently emitting `rgba(`. If lightning
 starts emitting `rgba(255, 255, 187, α)`, it also satisfies the toxin predicate, so the layer-order
 gate mis-resolves `toxin` to a lightning call and the toggle matrix's collateral checks fire
@@ -814,9 +849,18 @@ destroying the discrimination the gates exist for.
 
 **Required resolution, so no existing test is touched:** emit the opaque literal `LIGHTNING_COLOR`
 whenever `alpha` is absent **or equals 1**, and `rgba(...)` only for genuinely aged frames. Define
-`trailAlpha(0) === 1` so the arrival frame takes the opaque path too. Existing fixtures carry no
-`alpha`, so all four gates stay green with zero edits; only the new aged-frame gate sees `rgba(`,
-and that gate is yours to scope.
+`trailAlpha(0) === 1` so the arrival frame takes the opaque path too.
+
+**Be precise about which half does which job** — the two are easy to conflate, and conflating them
+invites relaxing the wrong one later:
+
+- **`alpha` absent ⇒ opaque** is what keeps the four existing gates green. Those fixtures build
+  `state` literally (`:114`, `:131`) and never call `createLightningTrail`, so they travel the
+  `state.env.lightning` fallback with no `alpha` at all.
+- **`trailAlpha(0) === 1`** buys something different: visual consistency, so a strike looks
+  identical whether or not the page supplies a trail. It does *not* protect the existing gates.
+
+Both need their own gate, because each can be violated while the other holds — see Step 1.
 
 If you find yourself editing `observer-render.test.js`'s toxin or lightning predicates, stop — the
 contract above is wrong or unimplemented, and loosening the predicate hides the regression.
@@ -827,6 +871,9 @@ contract above is wrong or unimplemented, and loosening the predicate hides the 
 // EARS-8 gates:
 //  - trailAlpha is strictly decreasing across 0..LIGHTNING_TRAIL_TICKS-1, and
 //    every value is in (0, 1].
+//  - assert.equal(trailAlpha(0), 1) EXACTLY. The range gate above is satisfied by
+//    a trailAlpha returning 0.99 at age 0, which silently pushes every arrival
+//    frame onto the rgba( path. One line, and it makes the contract real.
 //  - a strike recorded at tick T is in active(T) and in
 //    active(T + LIGHTNING_TRAIL_TICKS - 1), and absent from
 //    active(T + LIGHTNING_TRAIL_TICKS). The "present" halves are the positive
@@ -878,9 +925,25 @@ Add three gates to `observer-render.test.js`, using the existing fake-context ha
    pair for the layer gate.
 3. **EARS-9's toroidal wrap, which otherwise ships untested** — `discOffsets` is deliberately
    wrap-free and the caller wraps, so nothing in the module test can catch an unwrapped caller.
-   Strike at `(0, 0)` with `radius: 1` on a `grid {width: 8, height: 5}`: assert fills land at cells
-   `(7, 0)` and `(0, 4)`, at their hand-computed pixel origins (`index * 6 + 1`, from
-   `cellOrigin`). An unwrapped implementation paints at a negative origin and fails this.
+   Strike at `(0, 0)` with `radius: 1` **and `alpha: 0.5`** on a `grid {width: 8, height: 5}`:
+   assert fills land at cells `(7, 0)` and `(0, 4)`, at their hand-computed pixel origins
+   (`index * 6 + 1` from `cellOrigin`, so x=43 and y=25). An unwrapped implementation paints at a
+   negative origin and fails this.
+
+   **Give it `alpha: 0.5` deliberately** so it shares gate 1's `rgba(` predicate. Omit `alpha` and
+   the back-compat contract routes it to the opaque literal instead, the `rgba(` predicate matches
+   nothing, and the gate passes on an empty set — green while proving nothing.
+
+4. **The `alpha === 1 ⇒ opaque` half of the contract**, which nothing else covers: existing fixtures
+   exercise *absent* alpha and gates 1–3 use `0.5`. An implementation reading "absent ⇒ opaque, else
+   rgba" passes every other gate while violating the stated contract. Assert an entry with
+   `alpha: 1` paints `LIGHTNING_COLOR`.
+
+**Predicate spelling is load-bearing.** `rgba(255, 255, 187,` must match the emitted string
+byte-for-byte, spaces included. If the module builds its colour as `rgba(${r},${g},${b},${a})` with
+no spaces, the predicate matches nothing and the disc-count gate reads 0 instead of 5 — a false red
+that looks exactly like a geometry bug. Derive the prefix from `LIGHTNING_RGB` in the test rather
+than hand-typing it, so the two cannot drift.
 
 In `observer.html`, create one `createLightningTrail()` for the page lifetime. **Placement is
 ambiguous unless stated, and the two readings differ:** `drawWorld` is called from `render()`
@@ -995,10 +1058,21 @@ reads. `maxRadius` (record) / `max-radius` (yaml) is the single new config name.
 contract block, its test gates, and the renderer wiring. New test classes are `MutagenRadiusTest`
 (Task 2) and `MutagenZoneDecayTest` (Task 3); `MutagenTest` itself is not modified by any task.
 
-**Ordering.** Tasks 1–4 are mutually independent in code. Task 6 depends on Task 5's wire shape.
-Task 7 depends on 5 and 6. Tasks 2 and 3 both edit `advanceMutagen`, so run 2 before 3 to avoid a
-pointless conflict — that is a merge concern, not a behavioural dependency: Task 3's gate sets
-`gossip-probability=0.0` precisely so it does not lean on Task 2's radius cap for isolation.
+**Ordering.** Tasks 1–4 are independent in **production** code. Task 6 depends on Task 5's wire
+shape. Task 7 depends on 5 and 6. Tasks 2 and 3 both edit `advanceMutagen`, so run 2 before 3 to
+avoid a pointless conflict — that is a merge concern, not a behavioural dependency: Task 3's gate
+sets `gossip-probability=0.0` precisely so it does not lean on Task 2's radius cap for isolation.
+
+**One caveat the class split creates.** `MutagenRadiusTest` is a new persistent test class, and
+Task 3 then changes the engine behaviour it runs under — the age-out sweep becomes unconditional
+and fires inside that class too. It is decoupled deliberately (`zone-decay-ticks=500` there, far
+above its tick budget), so nothing should move; that is exactly why Task 3's Step 4 runs the **full**
+suite and not just its own class.
+
+**Two new Spring contexts.** Each new test class carries a distinct `@TestPropertySource`, so
+neither shares a cached `ApplicationContext` with `MutagenTest` — two additional contexts in a
+`forkEvery=0` shared JVM that `CLAUDE.md` calls leak-sensitive by design. The split is still the
+right call, but note it in the commit body rather than leaving it to be discovered.
 
 **Two gates that could have shipped vacuous, and how they were fixed.** Both were caught in plan
 review, before any code existed, and both are worth re-checking at implementation time:
