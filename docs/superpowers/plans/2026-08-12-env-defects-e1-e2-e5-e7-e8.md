@@ -104,6 +104,12 @@ Test-owned inputs so the literal stays valid under any production retuning:
 // Fixture: uniform 5x5 plateau at intensity 3 — the exact band Math.round pins
 // (round(0.9*v) == v for v in 1..5). diffusionRate 0.5 keeps it locally uniform,
 // so diffusion cannot mask the decay by importing higher neighbours.
+// Hand-computed: uniform plateau on a torus => neighbourAvg == 3 => mixed == 3
+//   => round(2.7) == 3 (RED) vs floor(2.7) == 2 (GREEN). Every input is
+//   test-owned — grid, intensity, rates, threshold — so no production retuning
+//   can invalidate the literal.
+// Add the sharpest single-cell case too: v = 1, where floor(0.9) == 0 but
+//   round(0.9) == 1. One line, and it states the defect exactly.
 // Assert: max(dst) < max(src) after one step, and 0 after a bounded loop.
 // Positive control: the SAME fixture with decayRate 0.0 must hold at 3 —
 // otherwise a change that simply erodes every grid would pass vacuously.
@@ -133,18 +139,27 @@ Expected: PASS, including all pre-existing tests.
 // Contract: an undisturbed toxin field returns to all-zero, re-arming the idle
 // short-circuit. This is the clause that closes E-5 — the sub-threshold band
 // (1 .. intensityThreshold-1) must be transient, not a permanent stain.
-// Fixture: stamp one cell at 255 via the existing test seam, then advance with
-// NO active toxin event so nothing re-deposits.
-// Assert: within a bounded tick budget, nonZeroToxinCellCount() == 0.
-//   Bound is a loop cap, not a tuned expectation — assert termination, never
+// Fixture: stampToxinIntensityForTest(pos, 255), then advanceToxinForTest in a
+//   loop with NO active toxin event so nothing re-deposits.
+// Assert: within a bounded loop cap, nonZeroToxinCellCountForTest() == 0.
+//   The cap is a LOOP BOUND, not a tuned expectation — assert termination, never
 //   "cleared in exactly N ticks" (that magnitude moves with decay-rate tuning).
-// Positive control: assert the field is non-empty BEFORE the loop, so a stamp
-// that silently failed cannot make this pass for the wrong reason.
+//   500 is safe: from 255 at diffusionRate 0.5 the max collapses in well under 60.
+// Positive control: assert nonZeroToxinCellCountForTest() > 0 BEFORE the loop, so
+//   a stamp that silently failed cannot make this pass for the wrong reason.
 ```
 
-Use the existing test seam for stamping and advancing — `ToxinTest` already constructs an
-`EnvironmentEngine` with a test `EnvironmentConfig`; follow the harness in that file rather than
-inventing one. Read `ToxinTest.java:230-270` first for the established pattern.
+Seams (all verified present): `stampToxinIntensityForTest(Position, int)`
+`EnvironmentEngine.java:1604`, `advanceToxinForTest(long)` `:1695`, `nonZeroToxinCellCountForTest()`
+— already asserted on at `ToxinTest.java:208, 218-232`. Note the accessor's `ForTest` suffix.
+
+**Add one property to `ToxinTest`'s `@TestPropertySource` block:**
+`paralife.simulation.events.toxin.decay-rate=0.1`. The block currently sets `diffusion-rate`,
+`diffusion-radius` and `intensity-threshold` but **not** `decay-rate`, so it silently inherits the
+production default — and EARS-2 is true for any `decayRate > 0` and false at `0`, making the
+clause's own precondition untest-owned. Pinning it locally satisfies the "test owns its inputs"
+rule. It changes no existing assertion in the file (they all stamp-and-resolve rather than diffuse);
+confirm that by running the file before and after adding the key.
 
 - [ ] **Step 6: Run it — it must pass now, and must have failed before Step 3**
 
@@ -182,7 +197,8 @@ throughout `advanceMutagen`.
 - Modify: `src/main/resources/application.yml:196-209` (the `mutagen:` block)
 - Modify: `src/main/java/com/paralife/engine/EnvironmentEngine.java:581-593` (the gossip source loop
   and the per-neighbour colonization guard)
-- Test: `src/test/java/com/paralife/engine/MutagenTest.java`
+- Create: `src/test/java/com/paralife/engine/MutagenRadiusTest.java` (see the class-split note below
+  — these gates cannot live in `MutagenTest`)
 
 **Interfaces:**
 - Consumes: `MutagenEvent(long spawnTick, Position originCell, int lifetimeTicks)` — already exists
@@ -208,40 +224,67 @@ max-radius: 20
 
 - [ ] **Step 1: Add the config component and its default, with no behaviour change yet**
 
-Add `maxRadius` to the record, the validation line, and the yaml key. Also update
-`EnvironmentConfig.Mutagen.defaults()` if that factory exists in this file — grep for `defaults()`
-in `EnvironmentConfig.java` and match whatever the sibling `Toxin`/`Lightning` records do.
+Add `maxRadius` to the record, the validation line, and the yaml key. There is **exactly one**
+positional `new Mutagen(...)` in the repo — `EnvironmentConfig.java:255`, inside `Mutagen.defaults()`
+— and **zero** in test code (tests configure via `@TestPropertySource`, and
+`EnvironmentSnapshotTest:42` / `ObserverFrameBudgetScaleTest:39` just pass `d.mutagen()` through).
+Update that one site.
 
 - [ ] **Step 2: Run the full test suite to confirm the config addition alone is inert**
 
 Run: `./gradlew test > /tmp/cfg.log 2>&1; echo "EXIT=$?"`
-Expected: PASS. Any red here is a positional-constructor site you missed — fix it before continuing.
+Expected: PASS. Because there is only the one constructor site, a *compile* failure here is
+unlikely. The failure this step really catches is a **missing yaml key**: Spring then binds
+`maxRadius` to `0`, the new compact-constructor check throws, and every `@SpringBootTest` fails at
+context load. That presents as mass `ApplicationContextException`, not an obvious config error —
+recognise it and check `application.yml` first.
 
 - [ ] **Step 3: Write the two failing tests**
 
+**Put these in a NEW class, `MutagenRadiusTest`, not in `MutagenTest`.** `@TestPropertySource` is
+class-level and there is no per-test override seam, so the three new mutagen gates need property
+sets that cannot coexist (this task wants `max-radius=3`; Task 3 wants `gossip-probability=0.0`
+while `MutagenTest.java:50` pins `1.0`). Give the new class `paralife.world.width/height=16`,
+`gossip-probability=1.0`, `strain-mutation-chance=0.0`, `max-radius=3`, and a seed — copy
+`MutagenTest`'s block and change those keys.
+
+**Leave `MutagenTest` itself untouched.** Its world is 16×16, so the maximum toroidal Chebyshev
+distance is 8 and the production default `max-radius: 20` can never bind there. No existing test
+changes behaviour.
+
 ```java
 // EARS-3 — radius cap.
-// Fixture: spawn an outbreak at a known origin via the existing test seam
-// (EnvironmentEngine.java:1656 constructs a MutagenEvent directly — see how
-// MutagenTest already drives it). Set gossip-probability to 1.0 and max-radius
-// small (e.g. 3) so propagation is deterministic and the cap is reached fast.
-// Assert: after enough ticks to cross the cap unbounded, EVERY non-zero cell is
-//   within Chebyshev max-radius of origin.
-// Positive control: a cell AT exactly max-radius is colonized — otherwise
-//   "nothing outside the cap" would also pass if gossip were broken entirely.
+// Fixture: forceSpawnMutagenForTest(0L, origin, strain, lifetime) at a known origin.
+// max-radius = 3, gossip-probability = 1.0 so propagation is deterministic.
+// Advance enough ticks that an uncapped front would pass distance 3 (>= 5 on a
+// 16x16 world, where the front would otherwise reach 8).
+// Assert: EVERY non-zero cell is within Chebyshev 3 of origin.
+// Positive control: a cell AT exactly Chebyshev 3 IS colonized — without it,
+//   "nothing outside the cap" also passes when gossip is broken entirely.
 
 // EARS-4 — no cross-outbreak ratchet.
-// Fixture: stamp a legacy strain cell far from the new origin (beyond max-radius)
-// with a colonization tick BEFORE the new outbreak's spawnTick, then start the
-// new outbreak and advance one tick with gossip-probability 1.0.
-// Assert: the legacy cell's 8 neighbours are all still clean.
-// Positive control: in the same test, a cell colonized AT/AFTER spawnTick does
-//   gossip to its neighbours — proving the source filter discriminates by tick
-//   rather than suppressing gossip wholesale.
+// THE FIXTURE MUST DEFEAT ITS OWN SIBLING GUARD. Both guards land in Step 5, so a
+// legacy cell placed OUTSIDE max-radius has every neighbour rejected by the radius
+// cap and the assertion passes green with the source filter deleted — vacuous.
+// Place the legacy cell INSIDE the cap instead:
+//   origin (8,8), max-radius 3, legacy cell (11,8) — Chebyshev 3, inside the cap.
+//   stampMutagenForTest(legacy, strain) then
+//   setMutagenLastReinforcedTickForTest(legacy, spawnTick - 1).
+// Advance EXACTLY ONE tick: the origin's own front reaches only Chebyshev 1, so
+//   any colonization at Chebyshev 2-3 can ONLY have come from the legacy cell.
+// Assert: (10,7) (10,8) (10,9) (11,7) (11,9) — legacy's neighbours, all inside
+//   the cap — are strain 0. A broken source filter colonizes them => RED.
+// Positive control: the origin's own 8 neighbours ARE colonized. This also pins
+//   the filter as >= spawnTick and not > : the origin's own timestamp EQUALS
+//   spawnTick, so a strict > filter silently kills the entire bloom.
 ```
 
-Both assertions are structural (a coordinate is or is not colonized), not statistical — no cell
-counts, shares, or densities. Read `MutagenTest.java` in full first and reuse its fixture style.
+Both assertions are structural (a named coordinate is or is not colonized), not statistical — no
+cell counts, shares, or densities.
+
+**RED-test each guard independently.** After Step 5, delete the radius cap alone and confirm EARS-3
+goes red while EARS-4 stays green; restore; delete the source filter alone and confirm the reverse.
+A guard never shown to fire on its own is theatre.
 
 - [ ] **Step 4: Run and record the real failures**
 
@@ -273,8 +316,9 @@ Expected: PASS both.
 git add src/main/java/com/paralife/engine/EnvironmentConfig.java \
         src/main/java/com/paralife/engine/EnvironmentEngine.java \
         src/main/resources/application.yml \
-        src/test/java/com/paralife/engine/MutagenTest.java
-git commit   # body: EARS-3/EARS-4 and both RED outputs
+        src/test/java/com/paralife/engine/MutagenRadiusTest.java
+git commit   # body: EARS-3/EARS-4, both RED outputs, and the two
+             #       independent guard-deletion RED-tests
 ```
 
 ---
@@ -314,34 +358,45 @@ Negligible, but say it rather than let a reviewer discover it.
 **Files:**
 - Modify: `src/main/java/com/paralife/engine/EnvironmentEngine.java:565-627` (`advanceMutagen` —
   lift the decay sweep out of the `else`)
-- Test: `src/test/java/com/paralife/engine/MutagenTest.java`
+- Create: `src/test/java/com/paralife/engine/MutagenZoneDecayTest.java` (see the class-split note
+  below — this gate cannot live in `MutagenTest`)
 
 **Interfaces:**
-- Consumes: `EnvironmentConfig.Mutagen.maxRadius()` from Task 2 exists by now but is not used here.
-  This task uses only the pre-existing `zoneDecayTicks()`.
+- Consumes: nothing from Task 2. `maxRadius()` exists by now but is deliberately unused here — the
+  gate sets `gossip-probability=0.0`, which removes the need for any spatial isolation and keeps
+  this task genuinely independent of the radius cap.
 - Produces: no signature change.
+
+**Run this task after Task 2.** Not a code dependency — both edit `advanceMutagen`, so sequencing
+avoids a pointless conflict.
 
 - [ ] **Step 1: Write the failing test**
 
+**Put this in a NEW class, `MutagenZoneDecayTest`, with `gossip-probability=0.0`.** This is not a
+style preference — under `MutagenTest`'s class-level `gossip-probability=1.0` the test *cannot* go
+green after the fix. A cell the sweep clears has `existingStrain == 0` on the next tick, so any live
+neighbour re-colonizes it with a fresh timestamp; on the 16×16 test world at p=1.0 the front covers
+everything within ~8 ticks. Setting gossip to 0.0 makes the decay sweep the only mechanism that can
+clear a cell, which is exactly the gate under test.
+
 ```java
 // EARS-5 — decay runs during an active outbreak.
-// Fixture: outbreak whose lifetimeTicks far exceeds zoneDecayTicks (e.g. 300 vs 5),
-// so the window under test sits strictly INSIDE the active period.
+// Fixture: gossip-probability = 0.0 (class-level), zone-decay-ticks = 5.
+// forceSpawnMutagenForTest(0L, origin, strain, 300) — lifetime is a PARAMETER, so
+//   it is test-owned; it must far exceed zoneDecayTicks so the whole window under
+//   test sits strictly INSIDE the active period.
+// stampMutagenForTest(target, strain) + setMutagenLastReinforcedTickForTest(target, 0L).
+// Advance past zoneDecayTicks via advanceMutagenForTest.
 //
-// ISOLATION IS LOAD-BEARING. A cleared cell has strain 0 next tick, so any live
-// neighbour re-colonizes it with a FRESH timestamp and the assertion flakes. Place
-// the target cell with no colonized cell in its Moore neighbourhood — put the
-// outbreak origin far away and stamp the target directly, then set its age with
-// setMutagenLastReinforcedTickForTest. Do NOT let gossip reach it.
-//
-// Assert: the target cell is clean, AND activeMutagenEvent() is still non-null at
-//   the moment of assertion — without that second half the test passes for the
-//   wrong reason if the outbreak quietly expired and the OLD idle-only path did
-//   the clearing.
-// Positive control: a second isolated cell whose timestamp is within the last
-//   zoneDecayTicks is still set, proving the sweep discriminates by age rather
-//   than clearing everything.
+// Assert: target is strain 0, AND activeMutagenEvent() != null at the moment of
+//   assertion — without that second half the test passes for the wrong reason if
+//   the outbreak quietly expired and the OLD idle-only path did the clearing.
+// Positive control: a second cell whose timestamp is within the last zoneDecayTicks
+//   is still set, proving the sweep discriminates by age rather than clearing all.
 ```
+
+With gossip at 0.0 the isolation problem disappears entirely, so no Moore-neighbourhood placement
+constraint is needed and the gate cannot flake.
 
 Package-private test seams that already exist on `EnvironmentEngine` — use these rather than
 inventing a harness: `forceSpawnMutagenForTest(tick, origin, strain, lifetime)` `:1651`,
@@ -377,8 +432,9 @@ pinning the idle-only behaviour deliberately, in which case update it and say so
 
 ```bash
 git add src/main/java/com/paralife/engine/EnvironmentEngine.java \
-        src/test/java/com/paralife/engine/MutagenTest.java
-git commit   # body: EARS-5, RED output, and the annulus behaviour note
+        src/test/java/com/paralife/engine/MutagenZoneDecayTest.java
+git commit   # body: EARS-5, RED output, the churning-disc behaviour note,
+             #       and the every-tick sweep perf note
 ```
 
 ---
@@ -545,7 +601,14 @@ Resulting wire fragment — Task 6 reads exactly these key names:
 // EARS-7b, ObserverFrameBuilderTest — assert the built frame's env.lightning()
 // carries the same x, y AND radius through the DTO mapping, so a builder that
 // drops the field cannot pass on the engine-side test alone.
+// USE A RADIUS THAT IS NOT THE CONFIG DEFAULT — e.g. construct the snapshot's
+// Strike with radius 7 and assert 7 comes back. Feeding it the default 4 lets a
+// mapper that ignores the carried value and substitutes config.lightning()
+// .outerRadius() pass both halves; a non-default value kills that.
 ```
+
+Note the two sides pin different things on purpose: the engine-side test proves the radius is
+*sourced* from config, the observer-side test proves it is *carried* rather than re-derived.
 
 - [ ] **Step 2: Run and record the real failures**
 
@@ -598,6 +661,11 @@ misreport the mechanic.
 **Files:**
 - Create: `src/main/resources/static/observer-lightning.js`
 - Create: `src/test/js/observer-lightning.test.js`
+- Modify: `build.gradle.kts:202` — **`requiredJsTests` must gain `"observer-lightning.test.js"`.**
+  Node exits 0 on a zero-match glob, so this list is the only thing stopping the new gate from
+  passing vacuously if the file is renamed or lost. Omitting it is exactly the failure the list was
+  written to prevent. It is easy to miss because it is in neither an obvious file nor an obvious
+  step — add it in Step 3, alongside creating the module.
 - Modify: `src/main/resources/static/observer-render.js:113-115` (the lightning draw block)
 - Modify: `src/test/js/observer-render.test.js`
 - Modify: `src/main/resources/static/observer.html` (own the trail instance across frames)
@@ -619,8 +687,9 @@ export const LIGHTNING_TRAIL_TICKS = 6;
 export const LIGHTNING_RGB = [255, 255, 187];
 
 /**
- * Age -> opacity. age 0 is the arrival frame (fully opaque), and opacity reaches
- * 0 at LIGHTNING_TRAIL_TICKS so an expiring strike never pops.
+ * Age -> opacity. trailAlpha(0) === 1 EXACTLY (load-bearing: it routes the arrival
+ * frame down the opaque `#ffb` path and keeps the four existing render gates green).
+ * Opacity reaches 0 at LIGHTNING_TRAIL_TICKS so an expiring strike never pops.
  * Contract: strictly decreasing over age, in (0, 1] for every drawn age.
  */
 export function trailAlpha(age)
@@ -666,12 +735,25 @@ export function discOffsets(radius)
 |---|---|
 | `:148-159` | layer-order test, finds the lightning op by `c.color === LIGHTNING_COLOR` |
 | `:185` | per-layer coordinate check, same colour match |
-| `:234` | layer-toggle matrix, same colour match |
+| `:234` | layer-toggle matrix (`LAYER_COLOR_MATCH.lightning`), same colour match |
 | `:294-295` | pins `LIGHTNING_COLOR === "#ffb"` |
 
-Emitting `rgba(255, 255, 187, α)` unconditionally turns three of those red. Honour the defaults and
-they stay green untouched — which is the point: they are the regression net for the layer ordering
-and the toggle gate, and rewriting them to match new output would forfeit exactly that.
+**And there is a second, worse collision.** The toxin predicate in the same file is
+`typeof c.color === "string" && c.color.startsWith("rgba(")` — at `:143` (layer-order) and `:232`
+(`LAYER_COLOR_MATCH.toxin`). Toxin is the *only* layer currently emitting `rgba(`. If lightning
+starts emitting `rgba(255, 255, 187, α)`, it also satisfies the toxin predicate, so the layer-order
+gate mis-resolves `toxin` to a lightning call and the toggle matrix's collateral checks fire
+spuriously. The danger is that an implementer "fixes" the red by loosening those predicates —
+destroying the discrimination the gates exist for.
+
+**Required resolution, so no existing test is touched:** emit the opaque literal `LIGHTNING_COLOR`
+whenever `alpha` is absent **or equals 1**, and `rgba(...)` only for genuinely aged frames. Define
+`trailAlpha(0) === 1` so the arrival frame takes the opaque path too. Existing fixtures carry no
+`alpha`, so all four gates stay green with zero edits; only the new aged-frame gate sees `rgba(`,
+and that gate is yours to scope.
+
+If you find yourself editing `observer-render.test.js`'s toxin or lightning predicates, stop — the
+contract above is wrong or unimplemented, and loosening the predicate hides the regression.
 
 - [ ] **Step 1: Write `observer-lightning.test.js` against the contracts above**
 
@@ -697,7 +779,12 @@ and the toggle gate, and rewriting them to match new output would forfeit exactl
 Run: `./gradlew jsTest > /tmp/red6.log 2>&1; echo "EXIT=$?"`
 Expected: FAIL — module not found. Paste the actual message.
 
-- [ ] **Step 3: Implement `observer-lightning.js` to the contract**
+- [ ] **Step 3: Implement `observer-lightning.js` to the contract, and register it in `build.gradle.kts`**
+
+Add `"observer-lightning.test.js"` to `requiredJsTests` (`build.gradle.kts:202`) in this same step.
+Prove the preflight works before moving on: temporarily rename the test file, run `./gradlew jsTest`,
+confirm it fails with "Missing required JS test file(s)", then restore. A preflight never shown to
+fire is theatre.
 
 - [ ] **Step 4: Run jsTest**
 
@@ -706,20 +793,34 @@ Expected: PASS.
 
 - [ ] **Step 5: Wire it into `drawWorld` and the page, with a renderer test**
 
-Add to `observer-render.test.js`: a strike with `radius: 1` and `alpha: 0.5` paints 5 cells (the
-Euclidean disc of radius 1), and paints none when `layers.lightning === false` — the layer gate is
-the positive/negative pair. Use the existing fake-context harness in that file; do not introduce a
-canvas.
+Add three gates to `observer-render.test.js`, using the existing fake-context harness (no canvas):
+
+1. A strike with `radius: 1, alpha: 0.5` paints exactly 5 cells — the Euclidean disc of radius 1.
+   **Scope the predicate.** `paintedWorld()` collects every layer's fills into one `ctx.calls`
+   array, and toxin also emits `rgba(`, so match on the full lightning prefix
+   `rgba(255, 255, 187,` rather than on `rgba(` — otherwise toxin calls inflate the count.
+2. The same strike paints nothing when `layers.lightning === false`. That is the positive/negative
+   pair for the layer gate.
+3. **EARS-9's toroidal wrap, which otherwise ships untested** — `discOffsets` is deliberately
+   wrap-free and the caller wraps, so nothing in the module test can catch an unwrapped caller.
+   Strike at `(0, 0)` with `radius: 1` on a `grid {width: 8, height: 5}`: assert fills land at cells
+   `(7, 0)` and `(0, 4)`, at their hand-computed pixel origins (`index * 6 + 1`, from
+   `cellOrigin`). An unwrapped implementation paints at a negative origin and fails this.
 
 In `observer.html`, create one `createLightningTrail()` for the page lifetime, call `record(tick,
 frame.env.lightning ?? [])` on each world frame, and put `active(tick)` on the state object passed
 to `drawWorld`. The page must still type no layer key of its own — derive from the module exports,
 per the Contract-1 rule the previous slice established.
 
-- [ ] **Step 6: Extend `ObserverPageServesTest`**
+- [ ] **Step 6: Extend `ObserverPageServesTest` in BOTH places**
 
-Assert `observer-lightning.js` is served as static content and that the page imports it. Mirror the
-three assertions already in `pageDelegatesRenderingToTheExtractedModules`.
+The file splits these two concerns across different methods — doing only one leaves half the pin:
+
+1. Add an import assertion to `pageDelegatesRenderingToTheExtractedModules`, alongside the three at
+   `:46-48` (`./observer-render.js`, `./observer-markers.js`, `./observer-legend.js`).
+2. Add a new sibling method `lightningModuleIsServedAsStaticContent`, mirroring
+   `legendModuleIsServedAsStaticContent` at `:74-78` — the served-as-static-content assertions live
+   in their own per-module methods (`:59`, `:67`, `:74`), not in the delegation test.
 
 - [ ] **Step 7: Run the full check**
 
@@ -729,9 +830,10 @@ Expected: `EXIT=0`. Read the log's `BUILD` line directly — never trust a piped
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/main/resources/static/ src/test/js/ \
+git add src/main/resources/static/ src/test/js/ build.gradle.kts \
         src/test/java/com/paralife/observer/ObserverPageServesTest.java
-git commit   # body: EARS-8/EARS-9 and the RED output
+git commit   # body: EARS-8/EARS-9, the RED output, and the
+             #       requiredJsTests preflight RED-test
 ```
 
 ---
@@ -771,10 +873,15 @@ needed no production change and why. Leave E-3, E-4, E-6, E-9 untouched — they
 The `EnvPostActionReconciler` row claims it clears cure-immunity. `EnvPostActionReconciler.java:37-44`
 calls `processEnvDeaths()` and `drainPostActionGrants()` only. Correct the row to match.
 
-- [ ] **Step 4: Verify the doc claims against the code**
+- [ ] **Step 4: Verify the doc claims against the code, and RED-test the verification itself**
 
-For each numbered claim in Step 1, grep the shipped source for the value asserted. A doc gate that
-was never shown to fire is theatre — if a grep finds nothing, the doc is wrong, not the grep.
+For each numbered claim in Step 1, grep the shipped source for the value asserted.
+
+Then actually apply the rule rather than just citing it. Pick one claim — the `#333` grid colour is
+the easiest — and **grep for a deliberately wrong string first** (`#ddd` in
+`observer-markers.js`), confirm the grep returns empty, and only then run the real grep and confirm
+it hits. Without that step you have a gate that has never been shown to fire, which is precisely
+what `CLAUDE.md` §close-out gates forbids. Record both commands and both outputs.
 
 - [ ] **Step 5: Commit**
 
@@ -800,8 +907,17 @@ exclusion-not-repulsion — stay exactly as they are.
 seam (`EnvironmentSnapshot.Strike`, `ObserverFrame.Strike`) and its three JSON keys are what Task 6
 reads. `maxRadius` (record) / `max-radius` (yaml) is the single new config name. `LIGHTNING_TRAIL_TICKS`,
 `trailAlpha`, `createLightningTrail`, `discOffsets` are used with those exact spellings in Task 6's
-contract block, its test gates, and the renderer wiring.
+contract block, its test gates, and the renderer wiring. New test classes are `MutagenRadiusTest`
+(Task 2) and `MutagenZoneDecayTest` (Task 3); `MutagenTest` itself is not modified by any task.
 
-**Ordering.** Tasks 1–4 are mutually independent. Task 6 depends on Task 5's wire shape. Task 7
-depends on 5 and 6. Tasks 2 and 3 touch the same method and should run in that order to avoid a
-pointless conflict.
+**Ordering.** Tasks 1–4 are mutually independent in code. Task 6 depends on Task 5's wire shape.
+Task 7 depends on 5 and 6. Tasks 2 and 3 both edit `advanceMutagen`, so run 2 before 3 to avoid a
+pointless conflict — that is a merge concern, not a behavioural dependency: Task 3's gate sets
+`gossip-probability=0.0` precisely so it does not lean on Task 2's radius cap for isolation.
+
+**Two gates that could have shipped vacuous, and how they were fixed.** Both were caught in plan
+review, before any code existed, and both are worth re-checking at implementation time:
+- EARS-4's original fixture placed the legacy cell *outside* `max-radius`, so the radius cap alone
+  satisfied it and the source filter could be deleted with the test still green.
+- EARS-5's original fixture could never go green under `MutagenTest`'s class-level
+  `gossip-probability=1.0`, because cleared cells are re-colonized the next tick.
