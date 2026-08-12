@@ -11,9 +11,12 @@ package com.paralife.engine;
  *
  * <p>No in-codebase analog — follows RESEARCH.md Pattern 3 and the
  * formula <code>next = (1 - diffusionRate) * self + diffusionRate * neighbourAvg</code>
- * then <code>next = next * (1 - decayRate)</code>, with a post-decay threshold
+ * then <code>next = floor(next * (1 - decayRate))</code>, with a post-decay threshold
  * clear that zeroes any destination cell below {@code threshold} to prevent
- * long-tail spread.
+ * long-tail spread. Flooring (rather than rounding) the decay step guarantees the
+ * grid maximum strictly descends every tick whenever {@code decayRate > 0}; rounding
+ * has integer fixed points at low intensities (e.g. {@code round(0.9 * v) == v} for
+ * {@code v} in 1..5), which stalls decay and leaves a permanent low-intensity stain.
  */
 public final class CellularAutomaton {
 
@@ -58,7 +61,7 @@ public final class CellularAutomaton {
                         ? neighbourSum / (double) neighbourCount
                         : 0.0;
                 double mixed = (1.0 - diffusionRate) * self + diffusionRate * neighbourAvg;
-                int after = (int) Math.round(mixed * (1.0 - decayRate));
+                int after = (int) Math.floor(mixed * (1.0 - decayRate));
                 if (after < threshold) after = 0;
                 if (after > 255) after = 255;
                 if (after < 0) after = 0;

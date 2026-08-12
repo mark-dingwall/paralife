@@ -1,9 +1,9 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Tests for {@link CellularAutomaton#diffuseStep}.
@@ -145,6 +145,64 @@ class CellularAutomatonTest {
             }
         }
         assertThat(returned).as("diffuseStep return value matches observed non-zero count").isEqualTo(observed);
+    }
+
+    // ── EARS-1: strict descent of the grid maximum whenever decayRate > 0 ──
+
+    @Test
+    void diffuseStepStrictlyDecaysUniformPlateauUnderDecayRate() {
+        // Fixture: uniform 5x5 plateau at intensity 3 — the exact band Math.round pins
+        // (round(0.9*v) == v for v in 1..5). diffusionRate 0.5 keeps it locally uniform
+        // on a torus, so diffusion cannot mask the decay by importing higher neighbours.
+        // Hand-computed: uniform plateau on a torus => neighbourAvg == 3 => mixed == 3
+        //   => round(2.7) == 3 (RED) vs floor(2.7) == 2 (GREEN).
+        int w = 5, h = 5;
+        byte[][] src = new byte[w][h];
+        byte[][] dst = new byte[w][h];
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                src[x][y] = (byte) 3;
+            }
+        }
+        CellularAutomaton.diffuseStep(src, dst, w, h, 0.5, 0.1, 0, 1);
+        int max = 0;
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                max = Math.max(max, dst[x][y] & 0xFF);
+            }
+        }
+        assertThat(max).as("uniform plateau at 3 must strictly descend under decayRate 0.1").isLessThan(3);
+    }
+
+    @Test
+    void diffuseStepStrictlyDecaysSingleCellAtIntensityOne() {
+        // Sharpest single-cell case: v = 1, where floor(0.9) == 0 but round(0.9) == 1.
+        int w = 3, h = 3;
+        byte[][] src = new byte[w][h];
+        byte[][] dst = new byte[w][h];
+        src[1][1] = (byte) 1;
+        CellularAutomaton.diffuseStep(src, dst, w, h, 0.0, 0.1, 0, 1);
+        assertThat(dst[1][1] & 0xFF).as("intensity 1 must decay to 0 under decayRate 0.1, self-only").isEqualTo(0);
+    }
+
+    @Test
+    void diffuseStepPositiveControlNoDecayHoldsPlateauAtSource() {
+        // Positive control: the SAME fixture with decayRate 0.0 must hold at 3 —
+        // otherwise a change that simply erodes every grid would pass vacuously.
+        int w = 5, h = 5;
+        byte[][] src = new byte[w][h];
+        byte[][] dst = new byte[w][h];
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                src[x][y] = (byte) 3;
+            }
+        }
+        CellularAutomaton.diffuseStep(src, dst, w, h, 0.5, 0.0, 0, 1);
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                assertThat(dst[x][y] & 0xFF).as("decayRate 0.0 must not erode the plateau").isEqualTo(3);
+            }
+        }
     }
 
     @Test
