@@ -560,7 +560,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
 
     /**
      * Advance mutagen: double-buffered gossip while active; zone decay
-     * (cell-level aging) while null.
+     * (cell-level aging) runs every tick regardless of outbreak state.
      */
     void advanceMutagen(long tickNumber) {
         Mutagen cfg = config.mutagen();
@@ -623,18 +623,26 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             for (int x = 0; x < w; x++) {
                 System.arraycopy(mutagenGridNext[x], 0, mutagenGrid[x], 0, h);
             }
-        } else {
-            // No active event — zone decay phase. Clear any strain cell that has
-            // not been reinforced within zoneDecayTicks.
-            int decayTicks = cfg.zoneDecayTicks();
-            for (int x = 0; x < w; x++) {
-                for (int y = 0; y < h; y++) {
-                    int strain = mutagenGrid[x][y] & 0xFF;
-                    if (strain == 0) continue;
-                    long lastReinforced = mutagenLastReinforcedTick[x][y];
-                    if (tickNumber - lastReinforced >= decayTicks) {
-                        mutagenGrid[x][y] = 0;
-                    }
+        }
+
+        // EARS-5: zone decay runs on the same schedule whether or not an
+        // outbreak is active — a 300-tick outbreak leaves every cell far
+        // older than zoneDecayTicks by the time it ends, so gating decay on
+        // activeMutagen == null cleared the entire field in a single idle
+        // tick. Must run AFTER the swap above (and outside the if/else):
+        // the active branch's gossip writes land in mutagenGridNext and only
+        // reach mutagenGrid at that arraycopy, so sweeping before it would
+        // read a stale grid. Runs every tick now instead of only on idle
+        // ticks — an extra O(w·h) pass (~65k reads/tick at 256×256) on top
+        // of the existing gossip scan; negligible.
+        int decayTicks = cfg.zoneDecayTicks();
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                int strain = mutagenGrid[x][y] & 0xFF;
+                if (strain == 0) continue;
+                long lastReinforced = mutagenLastReinforcedTick[x][y];
+                if (tickNumber - lastReinforced >= decayTicks) {
+                    mutagenGrid[x][y] = 0;
                 }
             }
         }
