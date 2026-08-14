@@ -46,6 +46,7 @@ class ObserverPageServesTest {
         assertThat(body).as("imports the render module").contains("./observer-render.js");
         assertThat(body).as("imports the marker module").contains("./observer-markers.js");
         assertThat(body).as("imports the legend module").contains("./observer-legend.js");
+        assertThat(body).as("imports the lightning trail module").contains("./observer-lightning.js");
         assertThat(body).as("world frames go through the extracted painter").contains("drawWorld(");
         assertThat(body).as("R11: the render call is timed with a monotonic clock")
                 .contains("performance.now()");
@@ -76,5 +77,13 @@ class ObserverPageServesTest {
         assertThat(resp.getStatusCode().is2xxSuccessful())
                 .as("the page imports this module by URL — a 404 breaks the page silently").isTrue();
         assertThat(resp.getBody()).as("exports the legend rows").contains("LEGEND_ROWS");
+    }
+
+    @Test
+    void lightningModuleIsServedAsStaticContent() {
+        ResponseEntity<String> resp = rest.getForEntity("/observer-lightning.js", String.class);
+        assertThat(resp.getStatusCode().is2xxSuccessful())
+                .as("the page imports this module by URL — a 404 breaks the page silently").isTrue();
+        assertThat(resp.getBody()).as("exports the trail factory").contains("createLightningTrail");
     }
 }

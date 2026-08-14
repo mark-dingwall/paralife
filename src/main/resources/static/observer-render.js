@@ -13,6 +13,7 @@ import {
   ROCK_COLOR,
   markerOps,
 } from "./observer-markers.js";
+import { LIGHTNING_RGB, discOffsets } from "./observer-lightning.js";
 
 export { ROCK_COLOR };
 
@@ -110,7 +111,24 @@ export function drawWorld(ctx, state) {
     if (visible(layers, key)) paintMarker(ops, e, cellOrigin(e.x), cellOrigin(e.y));
   }
 
+  // state.lightningTrail (if the page supplies one) carries {x, y, radius, alpha}
+  // for every strike still in its trail window. Falls back to the raw
+  // state.env.lightning so the module stays renderable from a bare frame.
+  //
+  // BACK-COMPAT: an entry with no `alpha` (or alpha === 1, e.g. trailAlpha(0))
+  // paints the opaque LIGHTNING_COLOR literal; only a genuinely aged entry paints
+  // rgba(...). An entry with no `radius` paints a single cell.
   if (visible(layers, "lightning")) {
-    for (const s of env.lightning ?? []) drawCellFill(ops, s.x, s.y, LIGHTNING_COLOR);
+    for (const s of state.lightningTrail ?? env.lightning ?? []) {
+      const color =
+        s.alpha === undefined || s.alpha === 1
+          ? LIGHTNING_COLOR
+          : `rgba(${LIGHTNING_RGB[0]}, ${LIGHTNING_RGB[1]}, ${LIGHTNING_RGB[2]}, ${s.alpha})`;
+      for (const [dx, dy] of discOffsets(s.radius ?? 0)) {
+        const cx = ((s.x + dx) % width + width) % width;
+        const cy = ((s.y + dy) % height + height) % height;
+        drawCellFill(ops, cx, cy, color);
+      }
+    }
   }
 }

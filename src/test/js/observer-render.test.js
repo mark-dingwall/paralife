@@ -22,6 +22,8 @@ import {
   NUTRIENT_COLOR,
 } from "../../main/resources/static/observer-markers.js";
 
+import { LIGHTNING_RGB } from "../../main/resources/static/observer-lightning.js";
+
 /**
  * Minimal recording stand-in for a canvas 2D context. It records every drawing
  * call in order together with the style in force at the time, which is what makes
@@ -325,4 +327,84 @@ test("the shared painter dispatches outline and poly ops at the origin it is giv
   assert.equal(polys.length, 2, "a bonded pair is two triangles");
   assert.deepEqual(polys[0].points, [[13, 7], [18, 12], [13, 12]]);
   assert.equal(polys[0].color, SPECIES_COLOR.CATALYST);
+});
+
+// ── E-8b: lightning trail rendering ──────────────────────────────────────
+//
+// Own bare fixtures, not paintedWorld(): paintedWorld() has no toxin field and
+// an alpha-bearing lightning entry emits rgba(...), which would collide with
+// the toxin predicate `startsWith("rgba(")` used elsewhere in this file. The
+// prefix is derived from LIGHTNING_RGB so the two cannot drift.
+const rgbaPrefix = `rgba(${LIGHTNING_RGB[0]}, ${LIGHTNING_RGB[1]}, ${LIGHTNING_RGB[2]},`;
+
+test("a strike disc paints exactly its Euclidean cell count", () => {
+  const ctx = recordingContext();
+  drawWorld(ctx, {
+    grid: { width: 8, height: 8 },
+    rocks: [],
+    entities: [],
+    env: {},
+    lightningTrail: [{ x: 4, y: 4, radius: 1, alpha: 0.5 }],
+  });
+  const lightningFills = ctx.calls.filter(
+    (c) => c.fn === "fillRect" && typeof c.color === "string" && c.color.startsWith(rgbaPrefix),
+  );
+  assert.equal(lightningFills.length, 5, "radius-1 Euclidean disc is 5 cells");
+});
+
+test("hiding the lightning layer suppresses the strike disc", () => {
+  const ctx = recordingContext();
+  drawWorld(ctx, {
+    grid: { width: 8, height: 8 },
+    rocks: [],
+    entities: [],
+    env: {},
+    lightningTrail: [{ x: 4, y: 4, radius: 1, alpha: 0.5 }],
+    layers: { lightning: false },
+  });
+  assert.ok(
+    !ctx.calls.some((c) => typeof c.color === "string" && c.color.startsWith(rgbaPrefix)),
+    "lightning still painted when hidden",
+  );
+});
+
+// EARS-9's toroidal wrap, which nothing in observer-lightning.test.js can catch:
+// discOffsets is deliberately wrap-free and the caller wraps. alpha:0.5 is
+// deliberate — without it the entry routes to the opaque literal and this gate
+// would pass on an empty rgba( set, proving nothing.
+test("a strike disc wraps toroidally across grid edges", () => {
+  const ctx = recordingContext();
+  drawWorld(ctx, {
+    grid: { width: 8, height: 5 },
+    rocks: [],
+    entities: [],
+    env: {},
+    lightningTrail: [{ x: 0, y: 0, radius: 1, alpha: 0.5 }],
+  });
+  const lightningFills = ctx.calls.filter(
+    (c) => c.fn === "fillRect" && typeof c.color === "string" && c.color.startsWith(rgbaPrefix),
+  );
+  const at = (x, y) => lightningFills.find((c) => c.x === x && c.y === y);
+
+  assert.ok(at(43, 1), "west wrap: cell (7,0) must fill at its own pixel origin");
+  assert.ok(at(1, 25), "north wrap: cell (0,4) must fill at its own pixel origin");
+});
+
+// The alpha === 1 => opaque half of the back-compat contract. Existing fixtures
+// only exercise absent alpha, and the gates above use 0.5 — an implementation
+// reading "absent ⇒ opaque, else rgba" would pass every other gate while
+// violating this one.
+test("alpha === 1 paints the opaque lightning colour, not rgba", () => {
+  const ctx = recordingContext();
+  drawWorld(ctx, {
+    grid: { width: 4, height: 4 },
+    rocks: [],
+    entities: [],
+    env: {},
+    lightningTrail: [{ x: 1, y: 1, radius: 0, alpha: 1 }],
+  });
+  assert.ok(
+    ctx.calls.some((c) => c.color === LIGHTNING_COLOR),
+    "alpha:1 must still paint the opaque literal",
+  );
 });
