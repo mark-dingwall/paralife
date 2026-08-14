@@ -83,10 +83,14 @@ class EnvironmentSnapshotTest {
         EnvironmentEngine env = newEngine(16);
         env.applyLightningAtForTest(7, 8);
         env.applyLightningAtForTest(9, 10);
+        int radius = EnvironmentConfig.defaults().lightning().outerRadius();
 
         assertThat(env.snapshot().lightning())
-                .as("each applied strike CENTER appears exactly once (append-once, not per-affected-cell)")
-                .containsExactly(new Position(7, 8), new Position(9, 10));
+                .as("each applied strike CENTER appears exactly once (append-once, not per-affected-cell), "
+                        + "radius sourced from config")
+                .containsExactly(
+                        new EnvironmentSnapshot.Strike(7, 8, radius),
+                        new EnvironmentSnapshot.Strike(9, 10, radius));
 
         env.onTick(new TickEvent(1)); // clears the per-tick list at onTick start (before the enabled gate)
 
@@ -105,19 +109,20 @@ class EnvironmentSnapshotTest {
                 new ArrayList<>(List.of(new EnvironmentSnapshot.EnvCell(1, 1, 10)));
         List<EnvironmentSnapshot.EnvCell> mutagen =
                 new ArrayList<>(List.of(new EnvironmentSnapshot.EnvCell(2, 2, 20)));
-        List<Position> lightning = new ArrayList<>(List.of(new Position(3, 3)));
+        List<EnvironmentSnapshot.Strike> lightning =
+                new ArrayList<>(List.of(new EnvironmentSnapshot.Strike(3, 3, 4)));
         Set<String> infected = new HashSet<>(Set.of("e1"));
 
         EnvironmentSnapshot snap = new EnvironmentSnapshot(toxin, mutagen, lightning, infected);
 
         toxin.add(new EnvironmentSnapshot.EnvCell(9, 9, 99));
         mutagen.add(new EnvironmentSnapshot.EnvCell(9, 9, 99));
-        lightning.add(new Position(9, 9));
+        lightning.add(new EnvironmentSnapshot.Strike(9, 9, 4));
         infected.add("intruder");
 
         assertThat(snap.toxin()).containsExactly(new EnvironmentSnapshot.EnvCell(1, 1, 10));
         assertThat(snap.mutagen()).containsExactly(new EnvironmentSnapshot.EnvCell(2, 2, 20));
-        assertThat(snap.lightning()).containsExactly(new Position(3, 3));
+        assertThat(snap.lightning()).containsExactly(new EnvironmentSnapshot.Strike(3, 3, 4));
         assertThat(snap.infectedIds()).containsExactly("e1");
     }
 

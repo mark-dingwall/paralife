@@ -1101,9 +1101,16 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 if (ms > 0) mutagen.add(new EnvCell(x, y, ms));
             }
         }
+        // Attach the config-global outer radius to each strike centre so the observer
+        // can draw the whole affected disc, not just the centre cell.
+        int strikeRadius = config.lightning().outerRadius();
+        List<EnvironmentSnapshot.Strike> lightning = new ArrayList<>(lightningStrikesThisTick.size());
+        for (Position p : lightningStrikesThisTick) {
+            lightning.add(new EnvironmentSnapshot.Strike(p.x(), p.y(), strikeRadius));
+        }
         // Defensive copying lives at the record's single authoritative boundary.
         return new EnvironmentSnapshot(
-                toxin, mutagen, lightningStrikesThisTick,
+                toxin, mutagen, lightning,
                 envCleanupHooksBean.getInfections().keySet());
     }
 

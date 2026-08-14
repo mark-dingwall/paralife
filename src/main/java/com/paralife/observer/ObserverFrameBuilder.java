@@ -93,7 +93,7 @@ public class ObserverFrameBuilder {
                 env.mutagen().stream()
                         .map(c -> new ObserverFrame.MutagenCell(c.x(), c.y(), c.value())).toList(),
                 env.lightning().stream()
-                        .map(p -> new ObserverFrame.Coord(p.x(), p.y())).toList());
+                        .map(s -> new ObserverFrame.Strike(s.x(), s.y(), s.radius())).toList());
 
         Map<String, Long> scoreboard = new LinkedHashMap<>();
         for (ParticleType t : ParticleType.values()) {
