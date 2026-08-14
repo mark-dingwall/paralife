@@ -36,6 +36,13 @@ export function createLightningTrail() {
       for (const s of entries) {
         strikes.set(`${tick}:${s.x}:${s.y}`, { x: s.x, y: s.y, radius: s.radius, tick });
       }
+      // Evict entries past their trail window so storage stays bounded to it rather
+      // than growing with every strike ever seen. record() fires every tick (even
+      // with no strikes), so this keeps eviction current. Deleting during Map
+      // iteration is safe in JS.
+      for (const [key, s] of strikes) {
+        if (tick - s.tick >= LIGHTNING_TRAIL_TICKS) strikes.delete(key);
+      }
     },
     active(tick) {
       const result = [];

@@ -69,6 +69,22 @@ test("two distinct strikes recorded at the same tick both survive", () => {
   assert.equal(trail.active(7).length, 2, "distinct (tick, x, y) strikes must not collapse");
 });
 
+// Expired strikes are EVICTED from storage, not merely filtered out of active()'s
+// result — otherwise the Map grows without bound on a long-running observer page
+// and active() does O(all-strikes-ever) work every frame. Observable: a still-stored
+// strike resurfaces when active() is queried within its original window; an evicted
+// one cannot. record() fires every tick (even with no strikes), so it can prune.
+test("expired strikes are evicted, so the trail does not accumulate forever", () => {
+  const trail = createLightningTrail();
+  trail.record(0, [{ x: 2, y: 2, radius: 1 }]);
+  for (let t = 1; t <= LIGHTNING_TRAIL_TICKS + 3; t++) trail.record(t, []);
+  assert.equal(
+    trail.active(3).length,
+    0,
+    "an expired strike is still stored — active() only filters, storage leaks",
+  );
+});
+
 // ── EARS-9: Euclidean disc geometry ──────────────────────────────────────
 
 test("discOffsets(0) is exactly the origin", () => {
