@@ -610,7 +610,7 @@ Static terrain only (grid dims + rock coordinates). Never retransmitted.
   "schemaVersion": 1,
   "tick": 1042,
   "entities": [ ],
-  "env": { "toxin": [], "mutagen": [], "lightning": [] },
+  "env": { "toxin": [], "mutagen": [], "lightning": [ { "x": 12, "y": 40, "radius": 4 } ] },
   "scoreboard": { "CATALYST": 12, "MEMBRANE": 9, "SPORE": 15 },
   "populations": { "CATALYST": 40, "MEMBRANE": 38, "SPORE": 21 }
 }
@@ -656,7 +656,10 @@ bot-facing `entityStatus` MUTATING bit, §8.1.3), and **omitted entirely** when 
 - `toxin: [{x, y, intensity}]` — `intensity` is a **magnitude** (1–255).
 - `mutagen: [{x, y, strain}]` — `strain` is a **categorical id** (1–255), NOT a magnitude — render
   it as a distinct category, not an intensity gradient.
-- `lightning: [{x, y}]` — strike coordinates applied on this tick only.
+- `lightning: [{x, y, radius}]` — strike centres applied on this tick only. `radius` is the
+  **Euclidean** outer radius of the damaged disc (every cell with `sqrt(dx²+dy²) ≤ radius` was hit),
+  so the renderer draws the true affected area rather than the centre alone. Additive key, ignored
+  by existing consumers — `schemaVersion` stays `1`.
 
 #### Rendering contract (`observer.html` + `observer-markers.js` + `observer-render.js`)
 
@@ -664,9 +667,13 @@ The wire frame above is the data; this is the durable contract for how it is dra
 and world painting are pure ES modules gated by `./gradlew jsTest` (`observer-markers.test.js`,
 `observer-render.test.js`); the page itself is static-wiring-gated by `ObserverPageServesTest`.
 
-**Pitch.** 6px per cell — a 5×5 content square inside 1px `#ddd` grid lines on `#000`. The default
+**Pitch.** 6px per cell — a 5×5 content square inside 1px `#333` grid lines on `#000`. The default
 256×256 world therefore backs a **1537×1537** canvas (`256 × 6 + 1`). Width and height are sized
-independently from the bootstrap dimensions; neither is derived from the other.
+independently from the bootstrap dimensions; neither is derived from the other. The grid layer
+starts **hidden** (`defaultOff` in `LEGEND_ROWS`); every other layer starts visible.
+
+**Layer toggles.** A legend/key panel (`observer-legend.js`, `LEGEND_ROWS`) renders one checkbox per
+layer; unchecking hides that layer. A repaint runs on both a fresh frame and a toggle click.
 
 **Markers** (all coordinates cell-local, within the 5px content square):
 
@@ -685,6 +692,12 @@ back to `#888`.
 **Layer order** is exactly: background → grid → rocks → toxin → mutagen → entities → lightning.
 Rocks sit **below** the environment field, so toxin or mutagen on a rock cell stays visible (rocks
 cover roughly half the default grid, and painting them last hid the field there).
+
+**Lightning trail.** A strike is held for `LIGHTNING_TRAIL_TICKS` (6) frames counting its arrival
+frame, drawn each frame as the Euclidean disc of its `radius` (toroidally wrapped) at strictly
+decreasing opacity — the arrival frame is opaque `#ffb`, aged frames are `rgba(255,255,187,α)` — and
+dropped from `T + LIGHTNING_TRAIL_TICKS` onward. The trail lives in a page-owned closure
+(`createLightningTrail`, `observer-lightning.js`); `drawWorld` stays a pure function of its arguments.
 
 **Environment semantics** follow the wire: toxin is a magnitude — one hue, opacity rising with
 `intensity`; mutagen is categorical — hue from `strain`, opacity fixed. A mutagen heat ramp would
