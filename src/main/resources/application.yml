@@ -207,6 +207,9 @@ paralife:
         gossip-probability: 0.3
         zone-decay-ticks: 50
         outbreak-lifetime-ticks: 300
+        # 20 => a 41x41 Chebyshev patch, ~2.5% of the default 256x256 world.
+        # This is the knob that stops "bloom covers every cell".
+        max-radius: 20
       compost:
         full-strength: 30
         half-strength: 15

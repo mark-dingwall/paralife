@@ -66,9 +66,9 @@ public final class ObserverFrame {
 
     public record MutagenCell(int x, int y, int strain) {}
 
-    public record Coord(int x, int y) {}
+    public record Strike(int x, int y, int radius) {}
 
-    public record EnvDto(List<ToxinCell> toxin, List<MutagenCell> mutagen, List<Coord> lightning) {}
+    public record EnvDto(List<ToxinCell> toxin, List<MutagenCell> mutagen, List<Strike> lightning) {}
 
     /** Per-tick dynamic frame. */
     public record WorldFrame(

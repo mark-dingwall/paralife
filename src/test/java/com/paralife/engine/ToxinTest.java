@@ -1,5 +1,7 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.paralife.codec.Frame;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity.BondedPair;
@@ -9,18 +11,15 @@ import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Entity.Role;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
-
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Plan 14-02 toxin-spread verification.
@@ -49,6 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         "paralife.simulation.events.toxin.splash-damage-fraction=0.2",
         "paralife.simulation.events.toxin.diffusion-rate=0.5",
         "paralife.simulation.events.toxin.diffusion-radius=1",
+        "paralife.simulation.events.toxin.decay-rate=0.1",
         "paralife.bonding.bonding-probability=0.0",
         "paralife.composite.dissolution-chance=0.0"
 })
@@ -206,6 +206,43 @@ class ToxinTest {
         env.stampToxinIntensityForTest(new Position(10, 10), 255);
         env.advanceToxinForTest(1L);
         assertThat(env.nonZeroToxinCellCountForTest()).isGreaterThan(0);
+    }
+
+    // ── EARS-2: undisturbed toxin field decays to all-zero ──────────
+
+    @Test
+    void undisturbedToxinFieldReachesAllZeroWithinBoundedTicks() {
+        // Closes E-5: the sub-threshold band (1 .. intensityThreshold-1) must be
+        // transient, not a permanent stain. No active toxin event, so nothing
+        // re-deposits — the field must decay to nothing on its own.
+        env.stampToxinIntensityForTest(new Position(20, 20), 255);
+
+        // Positive control 1: the stamp took — a silently-failed stamp cannot
+        // make this pass for the wrong reason.
+        assertThat(env.nonZeroToxinCellCountForTest())
+                .as("stamp must produce a non-empty field before the loop")
+                .isGreaterThan(0);
+
+        env.advanceToxinForTest(1L);
+
+        // Positive control 2 — the one that matters: the field is STILL
+        // non-empty after the FIRST tick. Without it, "zero the whole grid
+        // whenever activeToxin == null" would pass EARS-2 outright while being
+        // no fix at all. Safe per the empirical table: floor needs 7 ticks to
+        // clear a 64x64 grid from a 255 stamp, so tick 1 is comfortably non-empty.
+        assertThat(env.nonZeroToxinCellCountForTest())
+                .as("field must still be non-empty after just one tick")
+                .isGreaterThan(0);
+
+        // Loop bound, not a tuned expectation — assert termination only.
+        // 500 is safe: from 255 at diffusionRate 0.5 the max collapses well under 60 ticks.
+        for (long tick = 2L; tick <= 500L && env.nonZeroToxinCellCountForTest() > 0; tick++) {
+            env.advanceToxinForTest(tick);
+        }
+
+        assertThat(env.nonZeroToxinCellCountForTest())
+                .as("undisturbed toxin field must reach all-zero within a bounded number of ticks")
+                .isEqualTo(0);
     }
 
     // ── nonZero counter fast-path ──────────────────────────────────

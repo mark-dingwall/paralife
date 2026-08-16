@@ -560,7 +560,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
 
     /**
      * Advance mutagen: double-buffered gossip while active; zone decay
-     * (cell-level aging) while null.
+     * (cell-level aging) runs every tick regardless of outbreak state.
      */
     void advanceMutagen(long tickNumber) {
         Mutagen cfg = config.mutagen();
@@ -582,6 +582,10 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 for (int y = 0; y < h; y++) {
                     int strain = mutagenGrid[x][y] & 0xFF;
                     if (strain == 0) continue;
+                    // EARS-4: only gossip from cells colonized at or after the active
+                    // outbreak's spawnTick — stops an earlier outbreak's surviving
+                    // strain cells from re-seeding the new one (cross-outbreak ratchet).
+                    if (mutagenLastReinforcedTick[x][y] < activeMutagen.spawnTick()) continue;
                     // Gossip to 8 Moore neighbors per-neighbor with configured probability.
                     for (int dx = -1; dx <= 1; dx++) {
                         for (int dy = -1; dy <= 1; dy++) {
@@ -599,6 +603,16 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                                 if (mutated <= 0) mutated = 1;
                                 if (mutated > 255) mutated = 255;
                             }
+                            // EARS-3: radius cap, checked AFTER both RNG draws above.
+                            // Hoisting this above the probability/mutation rolls would
+                            // save a wasted draw for rejected neighbors, but it would
+                            // also remove draws from the shared rng stream, shifting
+                            // every subsequent draw and moving the spawn ticks of
+                            // toxin, mutagen and lightning. Leave the waste in place.
+                            Position origin = activeMutagen.originCell();
+                            int distX = Math.min(Math.abs(nx - origin.x()), w - Math.abs(nx - origin.x()));
+                            int distY = Math.min(Math.abs(ny - origin.y()), h - Math.abs(ny - origin.y()));
+                            if (Math.max(distX, distY) > cfg.maxRadius()) continue;
                             mutagenGridNext[nx][ny] = (byte) mutated;
                             mutagenLastReinforcedTick[nx][ny] = tickNumber;
                         }
@@ -609,18 +623,26 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             for (int x = 0; x < w; x++) {
                 System.arraycopy(mutagenGridNext[x], 0, mutagenGrid[x], 0, h);
             }
-        } else {
-            // No active event — zone decay phase. Clear any strain cell that has
-            // not been reinforced within zoneDecayTicks.
-            int decayTicks = cfg.zoneDecayTicks();
-            for (int x = 0; x < w; x++) {
-                for (int y = 0; y < h; y++) {
-                    int strain = mutagenGrid[x][y] & 0xFF;
-                    if (strain == 0) continue;
-                    long lastReinforced = mutagenLastReinforcedTick[x][y];
-                    if (tickNumber - lastReinforced >= decayTicks) {
-                        mutagenGrid[x][y] = 0;
-                    }
+        }
+
+        // EARS-5: zone decay runs on the same schedule whether or not an
+        // outbreak is active — a 300-tick outbreak leaves every cell far
+        // older than zoneDecayTicks by the time it ends, so gating decay on
+        // activeMutagen == null cleared the entire field in a single idle
+        // tick. Must run AFTER the swap above (and outside the if/else):
+        // the active branch's gossip writes land in mutagenGridNext and only
+        // reach mutagenGrid at that arraycopy, so sweeping before it would
+        // read a stale grid. Runs every tick now instead of only on idle
+        // ticks — an extra O(w·h) pass (~65k reads/tick at 256×256) on top
+        // of the existing gossip scan; negligible.
+        int decayTicks = cfg.zoneDecayTicks();
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                int strain = mutagenGrid[x][y] & 0xFF;
+                if (strain == 0) continue;
+                long lastReinforced = mutagenLastReinforcedTick[x][y];
+                if (tickNumber - lastReinforced >= decayTicks) {
+                    mutagenGrid[x][y] = 0;
                 }
             }
         }
@@ -1079,9 +1101,16 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 if (ms > 0) mutagen.add(new EnvCell(x, y, ms));
             }
         }
+        // Attach the config-global outer radius to each strike centre so the observer
+        // can draw the whole affected disc, not just the centre cell.
+        int strikeRadius = config.lightning().outerRadius();
+        List<EnvironmentSnapshot.Strike> lightning = new ArrayList<>(lightningStrikesThisTick.size());
+        for (Position p : lightningStrikesThisTick) {
+            lightning.add(new EnvironmentSnapshot.Strike(p.x(), p.y(), strikeRadius));
+        }
         // Defensive copying lives at the record's single authoritative boundary.
         return new EnvironmentSnapshot(
-                toxin, mutagen, lightningStrikesThisTick,
+                toxin, mutagen, lightning,
                 envCleanupHooksBean.getInfections().keySet());
     }
 

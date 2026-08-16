@@ -112,7 +112,7 @@ High-level map. Deeper subsystem rationale (outbound concurrency / backpressure 
 3. `EnvironmentEngine` `@Order(TICK_ORDER)` — Toxin/mutagen/lightning/compost; rebuilds status caches (TICK_ORDER=14)
 4. `CompositeEnergyDistributor` `@Order(15)` — Composite passive energy drain
 5. `ActionResolver` `@Order(20)` — Drain pending bot actions, resolve verbs `M/E/A/R/V/L` (move / eat / attack / reproduce / composite-vote / alarm)
-6. `EnvPostActionReconciler` `@Order(TICK_ORDER)` — Apply post-action buff grants, clear cure-immunity (TICK_ORDER=25)
+6. `EnvPostActionReconciler` `@Order(TICK_ORDER)` — Process env deaths, then drain/apply post-action buff grants (TICK_ORDER=25)
 7. `TickBroadcaster` `@Order(50)` — Per-bot tick frame (5x5 vision, wire bitmask, perception)
 8. `ObserverBroadcaster` `@Order(60)` — Bounded snapshot + serialize-once + non-blocking offer to observer mailboxes (off-thread delivery via `ObserverOutboundSender` drain VTs)
 9. `WebSocketKeepaliveService` `@Order(200)` — Keepalive PINGs

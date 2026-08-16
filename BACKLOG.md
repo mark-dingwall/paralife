@@ -536,6 +536,12 @@ but guts toxin lethality and still rides the rounding boundary.
 is an EARS-shaped invariant and should be pinned. The resulting *coverage share* is emergence
 and must not be.
 
+**Resolved** (`5b059e0`, EARS-1/EARS-2). `CellularAutomaton.diffuseStep` now floors the decay
+(`Math.floor`, not `Math.round`), so the grid maximum strictly descends every tick and an
+undisturbed field reaches all-zero within a bounded number of ticks (the 49-cell stain clears by
+tick 7). Floor alone suffices — no `self - 1` fallback — because `floor(mixed·(1−d)) < M` for any
+`d > 0`, `M ≥ 1` (proof in the frozen plan, Task 1).
+
 ### E-2 · Mutagen blooms are unbounded and ratchet across outbreaks
 
 `EnvironmentEngine.advanceMutagen` (`:565-627`). Two independent defects:
@@ -566,6 +572,13 @@ bloom without touching the cross-outbreak accumulation.
 
 Not statically determinable: whether the observed session actually crossed the 300-tick lifetime
 plus 50 quiet ticks needed for full clearance. The ratchet holds either way.
+
+**Resolved** (`77f4e99` + `fa17c26`). Defect 1 (unbounded radius): gossip is now capped at a new
+`max-radius` by toroidal Chebyshev distance from the outbreak origin (`77f4e99`, EARS-3). Defect 2
+(cross-outbreak ratchet): the gossip loop sources only cells colonized at or after the active
+outbreak's `spawnTick` (`77f4e99`, EARS-4). Defect 3 (whole-field one-tick clear): zone decay now
+runs every tick rather than only when idle, so blooms age out rolling rather than vanishing together
+(`fa17c26`, EARS-5). Intensity-attenuation redraw was **not** taken (out of scope — see E-3).
 
 ### E-3 · Mutagen bloom shape is a near-solid diamond, not a ragged front
 
@@ -627,6 +640,14 @@ deciders, in firing order — fixing any one alone changes nothing:
 Decide intent before coding: (2) may well be deliberate ("desperate bots take risks"). (1) is a
 plain defect once E-1 is fixed.
 
+**Resolved** (`5b059e0`, EARS-2) — **no production change of its own**. Decider (1), the only
+in-scope defect, existed *because* of E-1's residual stain: the `TOXIN_PRESENT` bit was correctly
+gated on `intensity >= threshold`, but E-1 left a permanent intensity-1 band below it. With E-1
+fixed the field decays to 0, so no sub-threshold band lingers and the bit is absent for the right
+reason. EARS-2 pins that the band is transient. Deciders (2) the 30%-energy avoidance gate and
+(3) exclusion-not-repulsion were left exactly as they are by user decision — deliberate behaviour,
+not defects.
+
 ### E-6 · Bonding and composites are statistically unreachable at current defaults
 
 Observed: no bonded pairs or composites in two long sessions. Both are passive engine scans
@@ -664,6 +685,11 @@ left equivalent to rest deliberately. But brain and resolver now disagree, which
 Cheapest honest fix is to stop emitting `A` in the brain; the interesting one is to make it do
 something.
 
+**Resolved** (`3dd1aee`, EARS-6). The `HeuristicBrain` chase branch now emits `M` toward adjacent
+prey, never solo `A`. Chosen scope was the cheap honest fix (stop emitting `A`); making `A` a real
+bonus attack was rejected as a balance change layered on the untested E-9 hypothesis.
+`ActionResolver`'s `case 'A'` is unchanged — it stays correct for the composite path.
+
 ### E-8 · Lightning fires as configured but is unobservable
 
 Not a spawn bug — confirmed empirically, not inferred. A bare `bootRun` logged 5 strikes in the
@@ -688,6 +714,12 @@ rendered mark is 1/81 of the area actually damaged.
 Two independent fixes: hold the strike in the observer frame for N ticks (or fade it client-side),
 and put the radius on the wire so the affected disc is drawn. Renderer-side persistence alone is
 enough to make it visible.
+
+**Resolved** (`2d6fa01` + `a858dc4`) — both fixes taken (user chose persistence + radius on wire).
+E-8a (`2d6fa01`, EARS-7): each strike now carries its Euclidean outer radius on the wire alongside
+the centre. E-8b (`a858dc4`, EARS-8/EARS-9): the renderer holds each strike for
+`LIGHTNING_TRAIL_TICKS` (6) frames at strictly decreasing opacity and draws it as its true toroidal
+Euclidean disc rather than a single centre cell.
 
 ### E-9 · Extinction ordering: Catalyst first, then Spore; Membrane persists
 

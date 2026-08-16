@@ -102,7 +102,8 @@ class ObserverFrameBuilderTest {
         EnvironmentSnapshot env = new EnvironmentSnapshot(
                 List.of(new EnvironmentSnapshot.EnvCell(1, 2, 180)), // toxin intensity magnitude
                 List.of(new EnvironmentSnapshot.EnvCell(3, 4, 42)),  // mutagen strain id
-                List.of(new Position(5, 6), new Position(7, 8)),     // this-tick lightning
+                List.of(new EnvironmentSnapshot.Strike(5, 6, 7),
+                        new EnvironmentSnapshot.Strike(7, 8, 7)),    // this-tick lightning, radius != config default (4)
                 Set.of());
 
         ObserverFrame.WorldFrame f = builder.buildWorld(9L, grid.snapshot(), env, Set.of(), noSpawns());
@@ -113,7 +114,8 @@ class ObserverFrameBuilderTest {
                 .as("mutagen DTO carries strain id, not intensity")
                 .containsExactly(new ObserverFrame.MutagenCell(3, 4, 42));
         assertThat(f.env().lightning())
-                .containsExactly(new ObserverFrame.Coord(5, 6), new ObserverFrame.Coord(7, 8));
+                .as("carried through, not re-derived from config")
+                .containsExactly(new ObserverFrame.Strike(5, 6, 7), new ObserverFrame.Strike(7, 8, 7));
     }
 
     @Test

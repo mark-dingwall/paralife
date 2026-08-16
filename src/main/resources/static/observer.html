@@ -48,6 +48,7 @@
     import { SPECIES_COLOR, BACKGROUND_COLOR, CONTENT_SIZE, CELL_PITCH } from "./observer-markers.js";
     import { drawWorld, canvasWidth, canvasHeight, LAYER_KEYS, paintOps, paintMarker, cellOrigin } from "./observer-render.js";
     import { LEGEND_ROWS } from "./observer-legend.js";
+    import { createLightningTrail } from "./observer-lightning.js";
 
     // ── config ──────────────────────────────────────────────────────────
     const SERIES_COLOR  = SPECIES_COLOR;
@@ -61,6 +62,9 @@
     let dims = { width: 256, height: 256 };
     let rocks = [];
     let lastFrame = null;
+    // One trail instance for the page lifetime — created here so its closure
+    // outlives any single frame, then recorded from onWorld and read from render().
+    const lightningTrail = createLightningTrail();
     const history = { CATALYST: [], MEMBRANE: [], SPORE: [] };
     const HISTORY_MAX = 512;
 
@@ -107,6 +111,9 @@
         rocks,
         entities: lastFrame?.entities ?? [],
         env: lastFrame?.env ?? {},
+        // `?? 0`: before the first frame, lastFrame is undefined and
+        // active(undefined) would yield NaN ages, so nothing would draw or expire.
+        lightningTrail: lightningTrail.active(lastFrame?.tick ?? 0),
         layers,
       });
       const renderMs = Math.round(performance.now() - t0);
@@ -115,6 +122,9 @@
 
     function onWorld(f) {
       lastFrame = f;
+      // Recorded here, never in render(): render() also runs on layer-toggle
+      // clicks, which must not re-record the same tick's strikes.
+      lightningTrail.record(f.tick, f.env?.lightning ?? []);
       render();
       updatePanels(f);
       pushHistory(f.populations);

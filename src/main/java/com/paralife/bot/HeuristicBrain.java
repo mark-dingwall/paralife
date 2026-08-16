@@ -7,14 +7,13 @@ import com.paralife.codec.Frame;
 import com.paralife.codec.KindData;
 import com.paralife.engine.Direction;
 import com.paralife.world.Entity.ParticleType;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Random;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Pure-function priority-based heuristic brain. Keyed off {@link BotState} +
@@ -193,11 +192,9 @@ public class HeuristicBrain {
                     .max((a, b) -> Integer.compare(a.priority, b.priority))
                     .map(t -> t.direction).orElse(null);
             if (chaseDir != null) {
-                // Verb A (attack) when prey is immediately adjacent (distance 1);
-                // otherwise M (move closer).
-                boolean adj = closePrey.stream().anyMatch(t -> t.distance == 1 && t.direction == chaseDir);
-                char verb = adj ? 'A' : 'M';
-                return new Frame.ActionFrame(verb,
+                // Always M: combat is a passive adjacency scan, so a solo 'A' resolves
+                // to rest (ActionResolver case 'A') and costs the bot its action.
+                return new Frame.ActionFrame('M',
                         Optional.of(String.valueOf(Direction.numpadOf(chaseDir))));
             }
         }

@@ -1,5 +1,7 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.paralife.engine.BuffRegistry.ActiveBuff;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
@@ -8,17 +10,14 @@ import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.WorldGrid;
+import java.util.List;
+import java.util.Random;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
-
-import java.util.List;
-import java.util.Random;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Plan 14-06 Task 3b (cycle-9 action D — Codex HIGH from cycle 8): the
@@ -61,7 +60,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 @TestPropertySource(properties = {
         // Seed for env engine RNG — deterministic Poisson/gossip/path selection.
-        "paralife.simulation.events.seed=42",
+        // Re-picked from 42 to 1 (E-2a/b, task-2): the mutagen cross-outbreak
+        // gossip-source filter removes RNG draws whenever a legacy cell is
+        // skipped, shifting the shared draw sequence enough that seed 42 no
+        // longer lands a toxin/lightning hit on this test's sparse seeded
+        // population within 300 ticks. All assertions below are unchanged.
+        "paralife.simulation.events.seed=1",
         "paralife.simulation.events.enabled=true",
         // Full-year cycle within 300 ticks — all four seasons engaged.
         "paralife.simulation.seasons.year-length-ticks=300",
