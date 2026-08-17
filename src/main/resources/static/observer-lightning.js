@@ -21,7 +21,7 @@ export function trailAlpha(age) {
 /**
  * Closure over the strikes still in their trail window.
  *   record(tick, strikes)  strikes are [{x, y, radius}] from env.lightning
- *   active(tick)           -> [{x, y, radius, alpha}], newest first, expired dropped
+ *   active(tick)           -> [{x, y, radius, alpha}], oldest first (paint order), expired dropped
  *
  * Dedupe key is (tick, x, y) — NOT tick alone. Frames are latest-wins and a slow
  * observer may re-render the same tick, so re-recording must be idempotent; but
@@ -52,7 +52,9 @@ export function createLightningTrail() {
           result.push({ x: s.x, y: s.y, radius: s.radius, alpha: trailAlpha(age) });
         }
       }
-      result.sort((a, b) => b.alpha - a.alpha);
+      // Oldest (faintest) first so the renderer, painting in array order, draws the
+      // newest strike LAST — on top — where overlapping discs share cells.
+      result.sort((a, b) => a.alpha - b.alpha);
       return result;
     },
   };

@@ -1531,6 +1531,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             // published at end of buildStatusCaches().
             cellStatusStaging.clear();
             entityStatusStaging.clear();
+            lightningStrikesThisTick.clear(); // mirror onTick: reset the per-tick strike list
             buffRegistry.expireBuffs(tickNumber);
             expireFleeing(tickNumber);
 

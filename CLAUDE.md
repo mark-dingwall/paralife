@@ -51,7 +51,7 @@ The loop, graduated off GSD (drop the machinery, keep the habits). These are **a
 - **Jetty 12** — the embedded servlet/WebSocket container (`starter-tomcat` is **explicitly excluded**); permessage-deflate via `JettyDeflateCustomizer`; `jetty-websocket-jetty-client` used by the load harness
 - **Gradle Kotlin DSL** — Build system with wrapper (`./gradlew`); Spotless formatting gate (`ratchetFrom("origin/main")`)
 - **JUnit 5** — ~1000 test methods (unit + integration), `forkEvery=0` shared-JVM (leak-sensitive by design)
-- **Node 22** — **a hard build prerequisite**: the observer's two renderer modules are covered by `jsTest` (Node's built-in test runner, zero npm dependencies), and `check` depends on it, so `./gradlew build` fails without `node` on PATH
+- **Node 22** — **a hard build prerequisite**: the observer's four renderer modules are covered by `jsTest` (Node's built-in test runner, zero npm dependencies), and `check` depends on it, so `./gradlew build` fails without `node` on PATH
 - **JaCoCo** — Coverage reporting (XML + HTML)
 - **picocli** — CLI parsing for `LoadHarness` (the in-process `BotRunner` CLI parses its args by hand)
 - **Compact-text wire codec** (`com.paralife.codec`) — hand-rolled protocol on the hot path; Jackson (transitive via Spring) is used only for actuator/JSON, not perception frames

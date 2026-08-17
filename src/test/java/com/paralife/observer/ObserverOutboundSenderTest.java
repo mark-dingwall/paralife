@@ -176,6 +176,30 @@ class ObserverOutboundSenderTest {
     }
 
     @Test
+    void drainSelfHealsWhenSessionClosedWithoutAContainerCallback() throws Exception {
+        // #2: the drain-owned self-heal is the observer's ONLY backup reaper when a container close
+        // callback never fires (unlike the bot sender there is no admission FSM / grace sweep). A
+        // session found already-closed must still route through terminal cleanup — skipping the
+        // doomed send with `if(!isOpen()) continue` would park the drain on take() and strand the
+        // permit + broadcaster registration forever. (RED with that guard present.)
+        ObserverOutboundSender sender = new ObserverOutboundSender();
+        WebSocketSession s = mock(WebSocketSession.class);
+        when(s.getId()).thenReturn("obs-closed");
+        when(s.isOpen()).thenReturn(false); // closed, but no onClose/onError fired
+        doThrow(new IOException("closed")).when(s).sendMessage(org.mockito.ArgumentMatchers.any());
+        CountDownLatch cleaned = new CountDownLatch(1);
+
+        sender.attach(s, cleaned::countDown);
+        Thread drain = sender.threadForTest("obs-closed");
+        sender.offer("obs-closed", "f1");
+
+        assertThat(cleaned.await(2, TimeUnit.SECONDS))
+                .as("a closed-without-callback session still self-heals via terminal cleanup").isTrue();
+        drain.join(2000);
+        assertThat(drain.isAlive()).isFalse();
+    }
+
+    @Test
     void plainDetachDoesNotInvokeTheTerminalFailureCallback() throws Exception {
         // control isolating the terminal-failure path: an external detach (handler close / shutdown)
         // is NOT a drain-initiated failure — the caller already owns cleanup — so the callback must

@@ -64,7 +64,10 @@ public class ObserverOutboundSender {
         try {
             while (!Thread.currentThread().isInterrupted()) {
                 String payload = slot.take();
-                if (!session.isOpen()) continue;
+                // No `if(!isOpen()) continue` fast-skip: a send on a closed session throwing IS the
+                // liveness signal that routes to the drain-owned cleanup below. Skipping it would
+                // strand a closed-without-callback session forever (the observer has no FSM/grace
+                // sweep to reap it — the drain's self-heal is the only backup).
                 try {
                     synchronized (session) {
                         session.sendMessage(new TextMessage(payload));

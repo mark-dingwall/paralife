@@ -790,3 +790,49 @@ Multi-model review of the observer branch. Dispositions:
 - **Kept + documented — rock coverage 49%→9%** (scope-creep). Genuinely outside the named
   env/bot-defect scope but observer-motivated (49% rock leaves little life to watch). One-PR
   decision (D: user, 2026-08-17); named in the PR scope-diff rather than split.
+
+### Round 2 (2026-08-17) — second multi-model review
+
+Fixed: **#7** `onTickEnvOnlyForTest` now mirrors `onTick`'s `lightningStrikesThisTick.clear()`
+(test-path strike accumulation); **#11** deleted the now-vacuous
+`ObserverEndpointIntegrationTest.malformedUpgradesDoNotLeakObserverPermits` (the permit-on-handshake
+design it guarded no longer exists after Round 1; RED-test proved it unfailable); **#14** CLAUDE.md
+"two→four renderer modules"; **#2** removed `ObserverOutboundSender`'s `if(!isOpen()) continue` drain
+guard (it short-circuited the observer's ONLY backup reaper — the drain-owned self-heal — for the
+closed-without-callback case; the bot sender keeps the guard because its FSM+grace-sweep reap it);
+**#10** flipped the lightning-trail sort to oldest-first so the newest strike paints on top.
+
+Settled — **do not re-litigate** (verified against the code, kept deliberately):
+
+- **#4 buffed predator "hops over" adjacent prey — NOT a bug.** A `MOVEMENT_PLUS_1` `'M'` over a
+  distance-1 prey lands on the far side, still Chebyshev-1 from it; passive RPS combat
+  (`SimulationEngine`, every tick, no attack verb) keeps fighting. Worst case is a harmless jitter
+  across the prey while it dies. Emitting `'A'` to "hold" would contradict the deliberate E-7 test
+  `HeuristicBrainChaseTest` (pins `'M'`, never `'A'`) for no gain. Distinct from the Round-1
+  distance-1 item but same verdict: bot strategy = emergence.
+- **#12 `CellularAutomaton` sourceMax prescan — NOT dead code.** It is the E-1 quantized-decay
+  guarantee: it forces the grid max to drop ≥1 per step even when `1.0 - decayRate` is a no-op in
+  IEEE-754, so no toxin/mutagen field can stain permanently under *any* positive rate the
+  constitution's planned tuning might set. Correctly a no-op at *shipped* rates (reviewer's read),
+  but removing it reinstates E-1 under low-decay tuning. A cheaper incremental-max (thread the prior
+  step's max through the return, drop the prescan) is a valid **optimization backlog item**, not a
+  correctness fix — the pass is bounded and only runs with an active field.
+- **#13 `ObserverOutboundSender` vs `admission.OutboundSender` "duplication" — kept separate.** The
+  two differ materially (resume/STALLED FSM + queue backpressure + metrics vs latest-wins capacity-1
+  + drain-owned cleanup). A shared base couples two independently-evolving components for ~40 lines
+  of teardown — the speculative abstraction the constitution's "no unused abstractions" rule warns
+  against.
+- **#3 pre-upgrade cap "not authoritative" — by design.** `beforeHandshake`'s `availablePermits()`
+  read is a documented best-effort fast-reject; `acquireForSession` (Semaphore, at establish) is the
+  race-free authority and closes over-cap losers. Live cap is never exceeded. This *is* the Round-1
+  permit-leak fix's design.
+- **#1 register-after-attach phantom — can't fire.** Spring serializes a session's lifecycle
+  callbacks, and the drain is parked on an empty mailbox until after `register`, so no concurrent
+  `cleanup` can interleave the attach→register window. The realistic inline bootstrap-send failure
+  is already caught → `cleanup` + rethrow.
+
+Discarded (low-value, no backlog entry): **#5** hollow/strobing bloom (bloom *shape* = emergence,
+E-3 explicitly MVP-partial); **#6** "no flood ceiling" (`growTicks` *is* the ceiling — bloom bounded
+to a Moore-ball of radius `growTicks`); **#8** unescaped `innerHTML` (all values server-generated
+enum names + int counts — no injection source; YAGNI); **#9** `growTicksMax` overflow (pathological
+config only — "no handling for impossible cases").
