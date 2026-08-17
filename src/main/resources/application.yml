@@ -209,8 +209,10 @@ paralife:
         outbreak-lifetime-ticks: 300
         # The bloom gossips outward for a random grow-ticks-min..max ticks, then the
         # front freezes. This is the natural size cap (replaced the old max-radius
-        # square): at gossip-probability 0.3 the front advances ~0.3 cells/tick, so
-        # 30..60 ticks => a ragged blob ~9..18 cells across.
+        # square). Gossip is per-neighbour-independent, so an edge cell with k infected
+        # Moore neighbours is colonized at 1-(1-0.3)^k per tick — >=0.3, faster where
+        # the front is solid — giving a ragged blob at least ~9..18 cells across over
+        # 30..60 ticks.
         grow-ticks-min: 30
         grow-ticks-max: 60
       compost:
