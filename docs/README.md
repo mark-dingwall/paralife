@@ -24,6 +24,7 @@ The canonical, source-referenced specifications. Code javadoc cites these by nam
 | Doc | Capability |
 |-----|------------|
 | `SCHEMA.md` | Compact-text wire protocol — frame/block grammars, bitmask layout, round-trip vectors. **Byte-exact contract.** |
+| `ENVIRONMENT.md` | Environment-layer mechanics, including quantized toxin diffusion decay. |
 | `ADMISSION.md` | Admission control, backpressure, resume-token FSM, STALLED lifecycle |
 | `HARNESS.md` | External load harness, harness-identity attribution, WS:entity 1:1 connection model + design ceilings |
 | `RUNTIME.md` | Per-connection runtime tuning (`paralife.runtime.*`), per-scale-tier JVM presets |
@@ -35,5 +36,6 @@ The canonical, source-referenced specifications. Code javadoc cites these by nam
 | `ARCHITECTURE.md` | Deep subsystem rationale (outbound concurrency / backpressure FSM, connection model, runtime tuning) — the detail factored out of CLAUDE.md §Architecture |
 | `history/gsd-graduation.md` | Dated decision record: why we graduated off GSD, the reject fence, open questions (archival, non-normative) |
 | `history/leak-audit-2026-06-09.md` | Dated one-off resource-leak investigation (archival reference) |
+| `history/reviews/2026-07-31-observer-render-slice-a.md` | Archived multi-model review of the observer renderer’s first slice, including its later closeout record. |
 | `BENCHMARKS.md` | Dated Phase 21 scale-benchmark evidence (100/500/1000-bot tiers) + the M4/M5/22.1 boundary statement; curated report fixtures under `benchmarks/` |
 | `STYLE.md` | Standing editorial rules (G1–G10) for docs/. |

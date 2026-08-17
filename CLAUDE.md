@@ -51,6 +51,7 @@ The loop, graduated off GSD (drop the machinery, keep the habits). These are **a
 - **Jetty 12** — the embedded servlet/WebSocket container (`starter-tomcat` is **explicitly excluded**); permessage-deflate via `JettyDeflateCustomizer`; `jetty-websocket-jetty-client` used by the load harness
 - **Gradle Kotlin DSL** — Build system with wrapper (`./gradlew`); Spotless formatting gate (`ratchetFrom("origin/main")`)
 - **JUnit 5** — ~1000 test methods (unit + integration), `forkEvery=0` shared-JVM (leak-sensitive by design)
+- **Node 22** — **a hard build prerequisite**: the observer's four renderer modules are covered by `jsTest` (Node's built-in test runner, zero npm dependencies), and `check` depends on it, so `./gradlew build` fails without `node` on PATH
 - **JaCoCo** — Coverage reporting (XML + HTML)
 - **picocli** — CLI parsing for `LoadHarness` (the in-process `BotRunner` CLI parses its args by hand)
 - **Compact-text wire codec** (`com.paralife.codec`) — hand-rolled protocol on the hot path; Jackson (transitive via Spring) is used only for actuator/JSON, not perception frames
@@ -58,7 +59,7 @@ The loop, graduated off GSD (drop the machinery, keep the habits). These are **a
 
 ## Conventions
 
-**Package structure:** `com.paralife.{world,engine,websocket,codec,admission,bot,harness,metrics,runtime,diagnostics}` — flat single-level per layer. `diagnostics` holds `DeathDiagnostics` (flag-gated death-cause + lifespan census), **OFF by default** (`@ConditionalOnProperty paralife.diagnostics.death-trace.enabled=true`, no yaml key); a no-op unless enabled, wired into the tick pipeline (SimulationEngine / EnvironmentEngine / DeathFinalizer / LiveEntityRegistry).
+**Package structure:** `com.paralife.{world,engine,websocket,codec,admission,bot,harness,metrics,runtime,diagnostics,observer}` — flat single-level per layer. `diagnostics` holds `DeathDiagnostics` (flag-gated death-cause + lifespan census), **OFF by default** (`@ConditionalOnProperty paralife.diagnostics.death-trace.enabled=true`, no yaml key); a no-op unless enabled, wired into the tick pipeline (SimulationEngine / EnvironmentEngine / DeathFinalizer / LiveEntityRegistry). `observer` holds the read-only visualiser endpoint, broadcaster, off-thread sender, frame DTOs; **OFF by default** via `paralife.observer.enabled`.
 
 **Data modeling:** Immutable records throughout. Sealed interface for polymorphism (`Entity` permits `Particle`, `Rock`, `Nutrient`, `BondedPair`, `CompositeMember`; `Particle` carries the `ParticleType` species enum CATALYST/MEMBRANE/SPORE, `CompositeMember` a `Role` enum). Mutations produce new instances (`Cell.withOccupant()`, `Entity.Particle.withEnergy()`). Wire frames are modelled by the `com.paralife.codec` record family (`Frame`, `CellEntry`, `Event`, `StateChange`).
 
@@ -81,6 +82,7 @@ The loop, graduated off GSD (drop the machinery, keep the habits). These are **a
 **Build commands:**
 ```bash
 ./gradlew test              # Run all tests
+./gradlew jsTest            # Observer renderer JS tests (needs Node 22; bound to `check`)
 ./gradlew spotlessCheck     # Lint (formatting gate)
 ./gradlew bootRun           # Start server on :8080
 ./gradlew jacocoTestReport  # Generate coverage report
@@ -110,10 +112,11 @@ High-level map. Deeper subsystem rationale (outbound concurrency / backpressure 
 3. `EnvironmentEngine` `@Order(TICK_ORDER)` — Toxin/mutagen/lightning/compost; rebuilds status caches (TICK_ORDER=14)
 4. `CompositeEnergyDistributor` `@Order(15)` — Composite passive energy drain
 5. `ActionResolver` `@Order(20)` — Drain pending bot actions, resolve verbs `M/E/A/R/V/L` (move / eat / attack / reproduce / composite-vote / alarm)
-6. `EnvPostActionReconciler` `@Order(TICK_ORDER)` — Apply post-action buff grants, clear cure-immunity (TICK_ORDER=25)
+6. `EnvPostActionReconciler` `@Order(TICK_ORDER)` — Process env deaths, then drain/apply post-action buff grants (TICK_ORDER=25)
 7. `TickBroadcaster` `@Order(50)` — Per-bot tick frame (5x5 vision, wire bitmask, perception)
-8. `WebSocketKeepaliveService` `@Order(200)` — Keepalive PINGs
-9. `TickHealthMonitor` `@Order(Integer.MAX_VALUE)` — Sample tick wall-time into ring buffer
+8. `ObserverBroadcaster` `@Order(60)` — Bounded snapshot + serialize-once + non-blocking offer to observer mailboxes (off-thread delivery via `ObserverOutboundSender` drain VTs)
+9. `WebSocketKeepaliveService` `@Order(200)` — Keepalive PINGs
+10. `TickHealthMonitor` `@Order(Integer.MAX_VALUE)` — Sample tick wall-time into ring buffer
 
 **Env state projection — three layers** (Phase 14, decisions D-38/D-39/D-40/D-41):
 

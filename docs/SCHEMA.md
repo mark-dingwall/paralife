@@ -578,3 +578,136 @@ pinned by §0 R18**.
 > Known follow-ups are tracked in BACKLOG.md.
 
 ---
+
+## 14. Observer Frame (`/ws/observer`)
+
+A separate, JSON-based read-only protocol for the M5-A observer visualiser — distinct from the
+compact-text codec in §0–§13 above (no relation to `PerceptionCodec`; Jackson-serialized, full-word
+camelCase keys, `com.paralife.observer.ObserverFrame`). Every frame carries `schemaVersion=1`.
+Pinned by `ObserverEndpointIntegrationTest` (real handshake + Jackson parse) and
+`ObserverFrameBuilderTest`.
+
+Two frame types, distinguished by `type`.
+
+### `bootstrap` — sent once per connection, before any `world` frame
+
+```json
+{
+  "type": "bootstrap",
+  "schemaVersion": 1,
+  "grid": { "width": 64, "height": 64 },
+  "rocks": [ { "x": 3, "y": 7 } ]
+}
+```
+
+Static terrain only (grid dims + rock coordinates). Never retransmitted.
+
+### `world` — sent every tick, latest-wins (a slow observer skips ticks, never sees a queue backlog)
+
+```json
+{
+  "type": "world",
+  "schemaVersion": 1,
+  "tick": 1042,
+  "entities": [ ],
+  "env": { "toxin": [], "mutagen": [], "lightning": [ { "x": 12, "y": 40, "radius": 4 } ] },
+  "scoreboard": { "CATALYST": 12, "MEMBRANE": 9, "SPORE": 15 },
+  "populations": { "CATALYST": 40, "MEMBRANE": 38, "SPORE": 21 }
+}
+```
+
+- `scoreboard` — cumulative committed spawns per species since process start (`SpeciesSpawnCounter`,
+  process-lifetime, never reset).
+- `populations` — current occupancy census per species, this tick — **no liveness filter** (see
+  census rule below).
+
+#### Census rule
+
+Same rule as `PopulationHistory`: `particle` → +1 its species; `bondedPair` → +1 **both**
+`primarySpecies` AND `secondarySpecies`; `compositeMember` → +1 its species — **no liveness
+filter** (a zero-energy member awaiting next-tick cleanup still counts). Rock and nutrient are
+excluded from the census (rocks are bootstrap-only and never appear in `entities`; nutrients appear
+in `entities` but carry no species).
+
+#### `entities[]` — one entry per dynamic occupant, shape varies by `kind`
+
+Nullable fields are omitted from JSON (Jackson `NON_NULL`) — each `kind` uses a different field
+subset beyond the always-present `x`, `y`, `kind`:
+
+| `kind` | Fields present |
+|---|---|
+| `particle` | `species`, `energy`, `brained`, `mutated`?, `buffed`? |
+| `nutrient` | `energy` (nutrient level) |
+| `bondedPair` | `primarySpecies`, `secondarySpecies`, `energy`, `brained`, `mutated`?, `buffed`? |
+| `compositeMember` | `species`, `compositeId`, `role`, `energy`, `brained`, `mutated`?, `buffed`? |
+
+`species` / `primarySpecies` / `secondarySpecies` ∈ `{CATALYST, MEMBRANE, SPORE}`. `role` ∈
+`{LOCOMOTOR, FEEDER, ATTACKER, DEFENDER, REPRODUCER, SENSOR}`. `brained` marks an entity currently
+owned by a connected bot (vs. server-idle/unowned).
+
+`mutated` is **true-only and optional**: present as the literal `true` exactly when the entity had
+an active infection at capture time (the same `EnvCleanupHooksBean` infection map that drives the
+bot-facing `entityStatus` MUTATING bit, §8.1.3), and **omitted entirely** when clean — never sent as
+`false`. Nutrients never carry it. Bot and observer projections sample that shared map at different
+pipeline stages, so a post-action cure can make them differ for one tick. The field is additive and
+ignored by existing consumers, so `schemaVersion` remains `1`.
+
+`buffed` follows the same true-only rule: present as `true` when the entity has any active survivor
+buff at capture time (sourced from `BuffRegistry`, the same non-empty predicate as the bot-facing
+`entityStatus` BUFFED bit, §8.1.3), omitted when it has none. Also additive; `schemaVersion` stays `1`.
+
+#### `env` — per-cell env layers, non-zero cells only
+
+- `toxin: [{x, y, intensity}]` — `intensity` is a **magnitude** (1–255).
+- `mutagen: [{x, y, strain}]` — `strain` is a **categorical id** (1–255), NOT a magnitude — render
+  it as a distinct category, not an intensity gradient.
+- `lightning: [{x, y, radius}]` — strike centres applied on this tick only. `radius` is the
+  **Euclidean** outer radius of the affected disc. Cells inside the configured inner radius take
+  damage; the remaining outer annulus receives fertility only (the inner radius is not carried on
+  the wire). The renderer therefore draws the full affected area rather than only the centre.
+  Additive key, ignored by existing consumers — `schemaVersion` stays `1`.
+
+#### Rendering contract (`observer.html` + `observer-markers.js` + `observer-render.js`)
+
+The wire frame above is the data; this is the durable contract for how it is drawn. Marker geometry
+and world painting are pure ES modules gated by `./gradlew jsTest` (`observer-markers.test.js`,
+`observer-render.test.js`); the page itself is static-wiring-gated by `ObserverPageServesTest`.
+
+**Pitch.** 6px per cell — a 5×5 content square inside 1px `#333` grid lines on `#000`. The default
+256×256 world therefore backs a **1537×1537** canvas (`256 × 6 + 1`). Width and height are sized
+independently from the bootstrap dimensions; neither is derived from the other. The grid layer
+starts **hidden** (`defaultOff` in `LEGEND_ROWS`); every other layer starts visible.
+
+**Layer toggles.** A legend/key panel (`observer-legend.js`, `LEGEND_ROWS`) renders one checkbox per
+layer; unchecking hides that layer. A repaint runs on both a fresh frame and a toggle click.
+
+**Markers** (all coordinates cell-local, within the 5px content square):
+
+| Occupant | Marker |
+|---|---|
+| `nutrient` | centred 3×3 `#7a5` fill |
+| `particle`, brained | full 5×5 species-colour fill |
+| `particle`, unbrained | 5×5 hollow species-colour shell — "the shell is there, nothing is running it" |
+| `bondedPair` | two triangles split on the main diagonal; the **primary owns the diagonal** and is one pixel larger |
+| `compositeMember` | full species fill plus a strictly smaller 2×2 cue whose hue derives from `compositeId` (stable per organism) |
+| any, `mutated` | inset 3×3 hollow `#ff0` cue, drawn over the marker so it coexists with the hollow shell |
+| any, `buffed` | full-cell hollow `#0FF` shell drawn over the marker — the outer ring, coexists with the inset mutation cue |
+
+Species colours are exact: Catalyst `#e34`, Membrane `#3d8`, Spore `#59f`. An unknown species falls
+back to `#888`; rock is `#555`; an arrival-frame lightning strike is `#ffb`.
+
+**Layer order** is exactly: background → grid → rocks → toxin → mutagen → entities → lightning.
+Rocks sit **below** the environment field, so toxin or mutagen on a rock cell stays visible (rocks
+cover roughly half the default grid, and painting them last hid the field there).
+
+**Lightning trail.** A strike is held for `LIGHTNING_TRAIL_TICKS` (6) frames counting its arrival
+frame, drawn each frame as the Euclidean disc of its `radius` (toroidally wrapped) at strictly
+decreasing opacity — the arrival frame is opaque `#ffb`, aged frames are `rgba(255,255,187,α)` — and
+dropped from `T + LIGHTNING_TRAIL_TICKS` onward. The trail lives in a page-owned closure
+(`createLightningTrail`, `observer-lightning.js`); `drawWorld` stays a pure function of its arguments.
+
+**Environment semantics** follow the wire: toxin is a magnitude — one hue, opacity rising with
+`intensity`; mutagen is categorical — hue from `strain`, opacity fixed. A mutagen heat ramp would
+misrepresent a strain id as a level.
+
+---

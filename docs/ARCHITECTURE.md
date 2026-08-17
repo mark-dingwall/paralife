@@ -57,8 +57,11 @@ Full token taxonomy, STALLED FSM, and resume-token lifecycle: `docs/ADMISSION.md
 
 ## Connection model (Phase 18, D-05 / D-21)
 
-**WS:entity 1:1** — one WebSocket connection per entity, always. Every entity on the grid has
-exactly one WebSocket session; every WebSocket session owns exactly one entity during the Alive phase.
+**WS:entity 1:1** — one WebSocket connection per entity, always, **on the bot path (`/ws/world`)**.
+Every entity on the grid has exactly one bot WebSocket session; every bot WebSocket session owns
+exactly one entity during the Alive phase. The read-only observer route (`/ws/observer`) is the
+deliberate exception: it owns **no** entity and bypasses admission entirely (see the observer
+subsection below).
 
 See `docs/HARNESS.md` §1 for full rationale, exception policy, and the 5 000-connections-per-JVM
 design ceiling (D-02).
@@ -89,3 +92,23 @@ D-20 keeps `paralife.admission.backpressure.outbound-queue-size` in
 `AdmissionConfig` rather than moving it under `paralife.runtime.app.*`; namespace
 consolidation is Phase 999.4. Codec hot-path opts (D-10, layer 4 of the tuning
 surface) are JFR-driven and never cross the wire — `docs/SCHEMA.md` stays bit-exact.
+
+## Observer visualiser (M5-A)
+
+`com.paralife.observer` (`ObserverConfig`, `ObserverFrame` DTOs, `ObserverFrameBuilder`,
+`ObserverOutboundSender`, `ObserverBroadcaster`, `ObserverSessionGate`, `ObserverWebSocketHandler`)
+implements the read-only `/ws/observer` visualiser endpoint — ships `enabled=false`, no admission
+FSM, no vision-scoping, no resume/stall; see `docs/SCHEMA.md` §14 for the JSON frame contract.
+
+Its tick-pipeline hook is `ObserverBroadcaster` `@Order(60)` — after `TickBroadcaster` `@Order(50)`:
+bounded snapshot + serialize-once + non-blocking `offer` to each observer's latest-wins mailbox.
+Actual delivery is off-thread, via a per-observer drain virtual thread in `ObserverOutboundSender`
+(the C2 analog of `OutboundSender` from §Outbound concurrency above, but NOT routed through the bot
+STALLED/resume FSM — a slow observer just misses frames, it is never granted a resume token).
+
+**Why off-thread (C2):** `TickEvent` is published *synchronously* on the tick thread
+(`TickEngine.java:114`) — every `@EventListener` fires in-line before the tick can advance. A
+`session.sendMessage` call that blocked here would stall the entire simulation on one slow browser
+tab. `ObserverBroadcaster` therefore does only bounded, non-blocking work on the tick thread
+(snapshot, build, serialize, `offer`); the actual Jetty write happens on the drain VT, guarded by
+`synchronized(session)` per the same session-monitor contract as the bot outbound path.

@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Paralife — Observer</title>
+  <style>
+    body { margin: 0; background: #0b0b0f; color: #ddd; font: 13px monospace; }
+    #wrap { display: flex; gap: 12px; padding: 12px; }
+    #left { display: flex; flex-direction: column; gap: 8px; }
+    /* block + no CSS sizing: the world canvas backing store is drawn 1:1, so the
+       1px grid lines stay crisp instead of being resampled by the compositor.
+       Legend swatches are the deliberate exception — they are integer-upscaled
+       by CSS (see `#knobs canvas` below), which image-rendering: pixelated
+       keeps exact rather than blurring. */
+    canvas { display: block; background: #000; image-rendering: pixelated; }
+    #side { display: flex; flex-direction: column; gap: 12px; min-width: 220px; }
+    .panel { border: 1px solid #333; padding: 8px; }
+    .panel h3 { margin: 0 0 6px; font-size: 12px; color: #9ad; }
+    #knobs { flex: 1; min-height: 0; overflow-y: auto; }
+    #knobs canvas { width: 24px; height: 24px; }
+    .legend-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+    .legend-row .spacer { display: inline-block; width: 24px; height: 24px; }
+    .legend-row .note { color: #777; }
+    .off { opacity: 0.4; }
+    #status { color: #7c7; }
+    table { border-collapse: collapse; } td { padding: 1px 6px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="left">
+      <div id="status">connecting…</div>
+      <div id="render-stats"></div>
+      <canvas id="grid" width="1537" height="1537"></canvas>
+      <canvas id="series" width="512" height="120"></canvas>
+    </div>
+    <div id="side">
+      <div class="panel"><h3>Scoreboard (cumulative spawns)</h3><div id="scoreboard"></div></div>
+      <div class="panel"><h3>Populations</h3><div id="populations"></div></div>
+      <div class="panel" id="knobs"><h3>Key / Layers</h3><div id="legend"></div></div>
+    </div>
+  </div>
+  <script type="module">
+    // Rendering lives in three pure modules: marker geometry (observer-markers.js),
+    // world painting (observer-render.js), and legend row data (observer-legend.js),
+    // all covered by `./gradlew jsTest`. This page owns only the connection, the
+    // panels, the layer-toggle state, and the time series.
+    import { SPECIES_COLOR, BACKGROUND_COLOR, CONTENT_SIZE, CELL_PITCH } from "./observer-markers.js";
+    import { drawWorld, canvasWidth, canvasHeight, LAYER_KEYS, paintOps, paintMarker, cellOrigin } from "./observer-render.js";
+    import { LEGEND_ROWS } from "./observer-legend.js";
+    import { createLightningTrail } from "./observer-lightning.js";
+
+    // ── config ──────────────────────────────────────────────────────────
+    const SERIES_COLOR  = SPECIES_COLOR;
+    const grid = document.getElementById("grid");
+    const gx = grid.getContext("2d");
+    const series = document.getElementById("series");
+    const sx = series.getContext("2d");
+    const statusEl = document.getElementById("status");
+    const renderStatsEl = document.getElementById("render-stats");
+
+    let dims = { width: 256, height: 256 };
+    let rocks = [];
+    let lastFrame = null;
+    // One trail instance for the page lifetime — created here so its closure
+    // outlives any single frame, then recorded from onWorld and read from render().
+    const lightningTrail = createLightningTrail();
+    const history = { CATALYST: [], MEMBRANE: [], SPORE: [] };
+    const HISTORY_MAX = 512;
+
+    // ── layer visibility ───────────────────────────────────────────────
+    // Initial state comes from LEGEND_ROWS' `defaultOff`, so the key list and
+    // its defaults stay in the one tested module — the page still types no key.
+    const startsHidden = new Set(LEGEND_ROWS.filter((r) => r.defaultOff).map((r) => r.layer));
+    const layers = Object.fromEntries(LAYER_KEYS.map((k) => [k, !startsHidden.has(k)]));
+
+    // ── connection ──────────────────────────────────────────────────────
+    // Derive scheme from the page origin: wss:// under HTTPS (a hardcoded ws://
+    // is blocked as mixed content on an HTTPS-served page).
+    const wsScheme = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${wsScheme}//${location.host}/ws/observer`);
+    ws.onopen  = () => { statusEl.textContent = "connected"; };
+    ws.onclose = () => { statusEl.textContent = "disconnected"; };
+    ws.onerror = () => { statusEl.textContent = "error"; };
+    ws.onmessage = (ev) => {
+      const frame = JSON.parse(ev.data);
+      if (frame.type === "bootstrap") onBootstrap(frame);
+      else if (frame.type === "world") onWorld(frame);
+    };
+
+    function onBootstrap(f) {
+      dims = f.grid;
+      rocks = f.rocks || [];
+      // Size from BOTH received dimensions — never derive one from the other.
+      grid.width = canvasWidth(dims.width);
+      grid.height = canvasHeight(dims.height);
+      render();
+    }
+
+    // ── render ──────────────────────────────────────────────────────────
+    // render() is the repaint path: driven by a fresh frame OR a layer-toggle
+    // click. It never touches statusEl (socket-owned) and never appends to the
+    // population history (that would duplicate a sample and compress the series).
+    function render() {
+      // R11: observe-only. A saturated default world issues on the order of 124k fill
+      // operations per frame, so "12 ms against a 500 ms tick" is a decidable fact where
+      // "does it look smooth" is not. Never threshold-asserted — it moves with hardware.
+      const t0 = performance.now();
+      drawWorld(gx, {
+        grid: dims,
+        rocks,
+        entities: lastFrame?.entities ?? [],
+        env: lastFrame?.env ?? {},
+        // `?? 0`: before the first frame, lastFrame is undefined and
+        // active(undefined) would yield NaN ages, so nothing would draw or expire.
+        lightningTrail: lightningTrail.active(lastFrame?.tick ?? 0),
+        layers,
+      });
+      const renderMs = Math.round(performance.now() - t0);
+      renderStatsEl.textContent = `tick ${lastFrame?.tick ?? "—"} · render ${renderMs}ms`;
+    }
+
+    function onWorld(f) {
+      lastFrame = f;
+      // Recorded here, never in render(): render() also runs on layer-toggle
+      // clicks, which must not re-record the same tick's strikes.
+      lightningTrail.record(f.tick, f.env?.lightning ?? []);
+      render();
+      updatePanels(f);
+      pushHistory(f.populations);
+      drawSeries();
+    }
+
+    function updatePanels(f) {
+      document.getElementById("scoreboard").innerHTML = table(f.scoreboard);
+      document.getElementById("populations").innerHTML = table(f.populations);
+    }
+    function table(obj) {
+      return "<table>" + Object.keys(obj).map(k =>
+        `<tr><td style="color:${SPECIES_COLOR[k] || "#ddd"}">${k}</td><td>${obj[k]}</td></tr>`
+      ).join("") + "</table>";
+    }
+
+    function pushHistory(pops) {
+      for (const k of Object.keys(history)) {
+        history[k].push(pops[k] || 0);
+        if (history[k].length > HISTORY_MAX) history[k].shift();
+      }
+    }
+    function drawSeries() {
+      sx.fillStyle = "#000"; sx.fillRect(0, 0, series.width, series.height);
+      let max = 1;
+      for (const k of Object.keys(history)) for (const v of history[k]) max = Math.max(max, v);
+      for (const k of Object.keys(history)) {
+        const data = history[k];
+        sx.strokeStyle = SERIES_COLOR[k]; sx.beginPath();
+        for (let i = 0; i < data.length; i++) {
+          const xx = (i / HISTORY_MAX) * series.width;
+          const yy = series.height - (data[i] / max) * (series.height - 4);
+          if (i === 0) sx.moveTo(xx, yy); else sx.lineTo(xx, yy);
+        }
+        sx.stroke();
+      }
+    }
+
+    // ── legend / layer panel ───────────────────────────────────────────
+    // Row classification is structural (contract 2), never a string match:
+    //   marker row       — carries `entity`, no `layer`
+    //   collective control — carries `layer`, neither `entity` nor `swatch`
+    const isCollectiveRow = (row) => "layer" in row && !("entity" in row) && !("swatch" in row);
+    const collectiveRow = LEGEND_ROWS.find(isCollectiveRow);
+
+    // A row without its own `layer` (the eight marker rows) follows the
+    // collective control's layer instead of a hardcoded key. A row with
+    // neither `layer` nor `entity` (Rock) has no layer to follow — it is
+    // always visible.
+    function rowVisible(row) {
+      const key = "layer" in row ? row.layer : ("entity" in row ? collectiveRow.layer : null);
+      return key === null || layers[key] !== false;
+    }
+
+    function makeSwatch(row) {
+      const canvas = document.createElement("canvas");
+      canvas.width = CELL_PITCH;
+      canvas.height = CELL_PITCH;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = BACKGROUND_COLOR;
+      ctx.fillRect(0, 0, CELL_PITCH, CELL_PITCH);
+      if (row.entity) {
+        paintMarker(paintOps(ctx), row.entity, cellOrigin(0), cellOrigin(0));
+      } else if (row.swatch) {
+        ctx.fillStyle = row.swatch;
+        ctx.fillRect(cellOrigin(0), cellOrigin(0), CONTENT_SIZE, CONTENT_SIZE);
+      }
+      return canvas;
+    }
+
+    function buildRow(row) {
+      const rowEl = document.createElement("div");
+      rowEl.className = "legend-row";
+
+      if (isCollectiveRow(row)) {
+        const spacer = document.createElement("div");
+        spacer.className = "spacer";
+        rowEl.appendChild(spacer);
+      } else {
+        rowEl.appendChild(makeSwatch(row));
+      }
+
+      const labelEl = document.createElement("span");
+      labelEl.textContent = row.label;
+      rowEl.appendChild(labelEl);
+
+      if (row.note) {
+        const noteEl = document.createElement("span");
+        noteEl.className = "note";
+        noteEl.textContent = row.note;
+        rowEl.appendChild(noteEl);
+      }
+
+      if ("layer" in row) {
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = layers[row.layer] !== false;
+        checkbox.addEventListener("change", () => {
+          layers[row.layer] = checkbox.checked;
+          updateDimming();
+          render();
+        });
+        rowEl.appendChild(checkbox);
+      }
+
+      return rowEl;
+    }
+
+    let legendRows = [];
+    function updateDimming() {
+      for (const { row, el } of legendRows) {
+        el.classList.toggle("off", !rowVisible(row));
+      }
+    }
+
+    function buildLegend() {
+      const legendEl = document.getElementById("legend");
+      legendRows = LEGEND_ROWS.map((row) => {
+        const el = buildRow(row);
+        legendEl.appendChild(el);
+        return { row, el };
+      });
+      updateDimming();
+    }
+    buildLegend();
+  </script>
+</body>
+</html>

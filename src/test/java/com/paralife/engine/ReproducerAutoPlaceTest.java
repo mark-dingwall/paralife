@@ -1,5 +1,10 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 import com.paralife.codec.Frame;
 import com.paralife.metrics.WebSocketMetrics;
 import com.paralife.websocket.SessionRegistry;
@@ -9,18 +14,12 @@ import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Entity.Role;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.springframework.web.socket.WebSocketSession;
-
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatNoException;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.web.socket.WebSocketSession;
 
 /**
  * Plan 20.1-02 (Task 1 TDD RED): D-02 REPRODUCER server-side auto-place.
@@ -48,6 +47,7 @@ class ReproducerAutoPlaceTest {
     private CompositeConfig compositeConfig;
     private SimulationConfig config;
     private ActionResolver resolver;
+    private SpeciesSpawnCounter budSpawnCounter;
 
     @BeforeEach
     void setUp() {
@@ -59,6 +59,8 @@ class ReproducerAutoPlaceTest {
         config = SimulationConfig.defaults();
         resolver = new ActionResolver(worldGrid, botRegistry, sessionRegistry, config,
                 compositeRegistry, compositeConfig, legacyProfile());
+        budSpawnCounter = new SpeciesSpawnCounter();
+        resolver.setSpawnCounter(budSpawnCounter);
     }
 
     // ── Fixtures ─────────────────────────────────────────────────
@@ -166,12 +168,15 @@ class ReproducerAutoPlaceTest {
         // Leave (6,7) = offset(+1,+2) free — distance² = 5
 
         // Act
+        long before = budSpawnCounter.get(ParticleType.SPORE);
         resolver.resolveActions(1, Map.of("s-rep", reproduce('5')));
 
         // The bud must land on (6,7) — the nearest unblocked cell
         assertThat(worldGrid.getCell(6, 7).occupant())
                 .as("bud should spawn at nearest free cell (6,7) — not a first-found cell")
                 .isInstanceOf(Particle.class);
+        assertThat(budSpawnCounter.get(ParticleType.SPORE) - before)
+                .as("O4: committed bud increments its species by exactly 1").isEqualTo(1L);
     }
 
     /**
@@ -426,6 +431,9 @@ class ReproducerAutoPlaceTest {
         assertThat(poolAfter)
                 .as("pool energy must be unchanged after a bounded skip (no cost deducted)")
                 .isEqualTo(poolBefore);
+
+        assertThat(budSpawnCounter.get(ParticleType.SPORE))
+                .as("O4: a skipped bud commits no birth (failed-path control)").isZero();
     }
 
     /**

@@ -189,6 +189,43 @@ tasks.register<Test>("leakProbe") {
     }
 }
 
+// M5-A observer: the renderer's pure geometry and painting modules are plain ES
+// modules tested by Node's built-in runner (no npm dependencies, no browser).
+//
+// Two Node facts this task exists to work around:
+//   1. `node --test src/test/js/` treats the directory as a module path and fails
+//      with MODULE_NOT_FOUND — the supported form is the test-file glob, quoted so
+//      Node (not the shell) expands it.
+//   2. A glob matching NOTHING is a successful zero-test run (exit 0). So the gate
+//      would silently pass if a test file were renamed or deleted. The preflight
+//      below names the files that must exist; deleting one fails the build.
+val requiredJsTests = listOf(
+    "observer-markers.test.js",
+    "observer-render.test.js",
+    "observer-legend.test.js",
+    "observer-lightning.test.js",
+)
+
+tasks.register<Exec>("jsTest") {
+    group = "verification"
+    description = "Runs the observer renderer's JavaScript module tests under Node."
+
+    doFirst {
+        val jsTestDir = layout.projectDirectory.dir("src/test/js").asFile
+        val missing = requiredJsTests.filterNot { jsTestDir.resolve(it).isFile }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "Missing required JS test file(s): $missing. Node exits 0 on a zero-match " +
+                    "glob, so this preflight is what keeps the gate from passing vacuously."
+            )
+        }
+    }
+
+    commandLine("node", "--test", "src/test/js/*.test.js")
+}
+
+tasks.named("check") { dependsOn("jsTest") }
+
 // Phase 18 (D-15): loadHarnessJar — standalone load harness fat jar.
 // Produces build/libs/paralife-*-load-harness.jar with main class LoadHarness.
 // Invocation: java -jar build/libs/paralife-*-load-harness.jar --server-uri ws://... --count 200

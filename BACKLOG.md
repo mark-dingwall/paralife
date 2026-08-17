@@ -417,3 +417,422 @@ real trigger.
 destroying spatial emergence*. Its unlock is therefore a **spatial-emergence discriminator** — M5's eyes,
 or a headless tuning-invariant spatial-structure test (the E1 family) — **never any 1-D death read.** Stays
 open, non-blocking, M5-gated; matches `balance_tuning_deferred`.
+
+---
+
+## Observer visualiser (M5-A) follow-ups
+
+### Observer exposure hardening (prerequisite for public deployment)
+
+The M5-A observer visualiser (`/ws/observer`) ships `enabled=false` + a session cap
+only. Before ANY authenticated/public exposure: real auth/authz, non-wildcard origin
+policy, and handshake rate-limiting. Until then the endpoint exposes full-world state
+(which the bot path deliberately vision-scopes) and must stay operator-only.
+
+### Observer bounded viewport, zoom/pan, and an explicit render budget
+
+Slice A renders the whole world directly at a 6px pitch, sized for the default 256×256
+grid. Two independent triggers activate this item — either one is sufficient:
+
+1. **Interactive navigation or a larger world.** Any work that begins zoom/pan gestures, or
+   that claims observer support beyond the default 256×256 target.
+2. **A measured render cost.** The page shows an observe-only render duration next to the
+   tick (R11). If that figure consumes a material fraction of the configured tick interval
+   at the *default* grid size, this item is live regardless of trigger 1. This second
+   trigger exists because the default world can saturate on its own: a measured late-run
+   default configuration held 32,016 rocks, 45,559 mutagen cells, 21,049 toxin cells and
+   25,311 nutrients — roughly 124,000 fill operations per frame. A grid-size-only trigger
+   would never fire on the case actually measured.
+
+**Trigger 2 has already fired.** Slice A replayed that saturated load through the shipped
+renderer in Chrome (~128k fill operations, 1537×1537 backing store): **93–268 ms per frame**
+across five runs, against the default 500 ms tick — 19–54% of a tick spent painting, on a
+desktop machine. A live early-run frame (3,813 entities, empty env field) cost 8–19 ms, so
+the cost is dominated by the environment and nutrient layers, not by entity markers. This
+item is therefore live on measurement alone, independent of any zoom/pan work.
+
+**Caching the static layers is not the fix.** Background, grid lines and rocks never change
+after bootstrap, so they can be painted once into an offscreen buffer and blitted each frame.
+Counting real frames through the shipped `drawWorld` shows why that does not solve this item:
+on a live world (tick 78–207, 3.4k entities, ~3.2k toxin cells, no mutagen) the static prefix
+is **83% of the frame's fill operations** — but that frame already renders in 11–20 ms
+(median 15 ms, 50 samples in Chrome), so there is nothing to win. On the saturated load that
+actually fired trigger 2, the same prefix is only ~25% of ~128k operations; the remaining 75%
+is environment and nutrient cells, which change every tick and cannot be cached. A static-layer
+cache would take the 268 ms worst case to roughly 200 ms — still a fifth of the tick. The
+layer that must shrink is the one that changes, which is what a bounded viewport does.
+
+Those two shares were both measured at the old `density-threshold: 128`, which placed 32,224
+rocks. The default is now 185 (5,952 rocks), so the cacheable prefix has fallen to roughly 6,500
+operations — about 6% of a saturated frame. The conclusion holds a fortiori: there is even less
+to win from caching than the figures above suggest. The saturated wall-clock numbers themselves
+have not been re-measured since the density change and will have improved somewhat.
+
+**Re-measured 2026-08-02, at `density-threshold: 185`, during the Slice B visual pass.** An
+operator watched a `bootRun` session to full environment saturation — mutagen covering every
+cell, toxin widespread, most remaining cells rocks or nutrients — and observed a **40–60 ms**
+worst case against the 500 ms tick (8–12%), versus the 93–268 ms recorded above. The rock
+reduction accounts for most of it. Two caveats on reading this as headroom: the world held
+**zero entities** (no bot clients were connected, so the marker layers were empty — see
+`observer-render.js`'s entity loop, the one layer that scales with population), and the toxin
+figure was inflated by the permanent-stain bug recorded below, which paints intensity-1 cells
+forever. Trigger 2 remains fired on the original measurement; this narrows the gap rather than
+closing it, and the item stays live pending a saturated-env-plus-full-population figure.
+
+Work: a bounded or tiled viewport with zoom/pan, plus a stated render budget. Reintroducing
+an **offscreen full-world buffer is the first move** once panning is in scope — panning under
+direct rendering repaints the entire world every pan frame, whereas panning over a buffer is a
+blit. The seam already exists: `drawWorld(ctx, state)` takes its context as an argument, so
+this means creating a buffer and passing its context, touching no marker or layer-order code.
+It was deliberately NOT shipped dormant in Slice A (an unused transform had already produced an
+odd-dimension centering defect in review). Also deferred here: composite role glyphs, which
+need more than a 5px content square.
+
+### Observer UI headless-browser JS smoke
+
+`observer.html` render fidelity is judged by eye (the stack has no browser-test harness).
+The frame contract is covered automatically by `ObserverEndpointIntegrationTest` (real
+handshake + Jackson parse), but the page's own JS (`JSON.parse` → canvas render → `#status`
+tick signal) is not executed by any test. When a headless-browser harness is justified
+(htmlunit for JVM-only, or Playwright for real canvas), add a smoke that loads the page,
+completes the observer handshake, and asserts `#status` shows a tick — RED-tested with a
+deliberate JS error. Deferred per the M5-A review (2026-07-19); not blocking MVP.
+
+## Environment persistence defects (found 2026-08-02 by observer visual pass)
+
+Findings from the first two visual sessions on the Slice B panel. The observer did not cause any
+of them — it made pre-existing engine behaviour visible for the first time, which is the point of
+building it. Verdicts are from static-read investigation; each cites the line that decides it.
+**None is fixed.** E-1..E-4 came from session 1, E-5..E-9 from session 2.
+
+### E-1 · Toxin never reaches zero — every event leaves a permanent stain
+
+`CellularAutomaton.java:61` computes `(int) Math.round(mixed * (1.0 - decayRate))`. With the
+configured `decayRate = 0.1` (agreeing in `application.yml:188` and `EnvironmentConfig.Toxin
+.defaults()`), a locally uniform value `v` decays to `round(0.9v)`, which **equals `v` for every
+`v` in 1..5** — `Math.round` is half-up, so even `round(4.5) = 5`. Intensities 1–5 are fixed
+points. The `if (after < threshold) after = 0` clear on the next line uses a hardcoded
+`threshold = 1` (passed at `EnvironmentEngine.java:468`), so it only zeroes cells that already
+rounded to 0; it never breaks the plateau.
+
+Reproduced numerically against the production loop (64×64 torus, one 255 stamp, real
+parameters): by tick 10 the stamp has flattened to 49 cells at intensity 1, and at tick 400 it
+is still 49 cells at intensity 1. Each toxin event therefore unions a permanent radius-3 Moore
+stain onto the map. It is permanently *visible* because the snapshot (`EnvironmentEngine.java
+:1076`) and the renderer (`observer-render.js:31`, `alpha = 0.15 + 0.6*(i/255)`) both draw
+anything `> 0` — intensity 1 paints at alpha 0.152.
+
+Secondary cost: `advanceToxin`'s idle short-circuit (`EnvironmentEngine.java:439`) tests
+`nonZeroToxinCellCount`, which can never return to 0 once any toxin has spawned. The full
+O(W·H·nonzero) CA sweep therefore runs every tick for the life of the process.
+
+Fix is a code change in `CellularAutomaton.diffuseStep` — guarantee strict monotonic decay when
+`decayRate > 0` (floor instead of round, plus a `self - 1` fallback when the result fails to
+descend). Raising the hardcoded `threshold` literal is smaller but clamps the symptom rather
+than fixing the arithmetic. No config-only fix: `decay-rate >= 0.6` would clear value-1 cells
+but guts toxin lethality and still rides the rounding boundary.
+
+**Mechanism, not emergence** — "toxin intensity strictly decreases each tick while decayRate > 0"
+is an EARS-shaped invariant and should be pinned. The resulting *coverage share* is emergence
+and must not be.
+
+**Resolved** (`5b059e0`, EARS-1/EARS-2). `CellularAutomaton.diffuseStep` now floors the decay
+(`Math.floor`, not `Math.round`), so the grid maximum strictly descends every tick and an
+undisturbed field reaches all-zero within a bounded number of ticks (the 49-cell stain clears by
+tick 7). Floor alone suffices — no `self - 1` fallback — because `floor(mixed·(1−d)) < M` for any
+`d > 0`, `M ≥ 1` (proof in the frozen plan, Task 1).
+
+### E-2 · Mutagen blooms are unbounded and ratchet across outbreaks
+
+`EnvironmentEngine.advanceMutagen` (`:565-627`). Two independent defects:
+
+1. **No radius cap and no intensity decay.** While an outbreak is active, every non-zero cell
+   gossips outward each tick. There is no distance-from-origin test anywhere, and the strain
+   byte is only copied (`:602`), never attenuated — the optional ±1 mutation is a *hue* drift,
+   not a magnitude. The sole brake is `outbreak-lifetime-ticks: 300`.
+2. **The bloom ratchets.** The gossip loop at `:581-583` iterates every non-zero cell in
+   `mutagenGrid`, not just the active outbreak's descendants, and `spawnMutagen` (`:536`) stamps
+   a new origin without clearing the grid. Any surviving legacy zone becomes a full-strength
+   gossip source the moment the next outbreak begins, so the bloom grows from its whole existing
+   perimeter rather than from a fresh point. Zone decay (`:612-626`) only runs when
+   `activeMutagen == null`.
+3. **The whole field clears in one tick, which reads as a visual glitch.**
+   `mutagenLastReinforcedTick[nx][ny]` is written at `:603`, but `:592`'s
+   `if (existingStrain != 0) continue` short-circuits first — so a cell's timestamp is stamped
+   once at colonization and never refreshed. Every cell in a bloom therefore ages out within a
+   few ticks of its neighbours, and once the outbreak ends the entire field vanishes together
+   instead of receding. Fix travels with the decay model: attenuate intensity per tick and draw
+   alpha from it, so the bloom fades rather than being switched off.
+
+Smallest fixes, independent of each other: gate gossip on a new `maxRadius` against the origin
+already carried on `MutagenEvent` (~3 lines at `:586-593`); and source the gossip loop only from
+cells belonging to the active outbreak, e.g. `mutagenLastReinforcedTick[x][y] >= activeMutagen
+.startTick()` (one condition at `:583`). No config-only fix — lowering the lifetime shortens each
+bloom without touching the cross-outbreak accumulation.
+
+Not statically determinable: whether the observed session actually crossed the 300-tick lifetime
+plus 50 quiet ticks needed for full clearance. The ratchet holds either way.
+
+**Resolved** (`77f4e99` + `fa17c26`). Defect 1 (unbounded radius): gossip is now capped at a new
+`max-radius` by toroidal Chebyshev distance from the outbreak origin (`77f4e99`, EARS-3). Defect 2
+(cross-outbreak ratchet): the gossip loop sources only cells colonized at or after the active
+outbreak's `spawnTick` (`77f4e99`, EARS-4). Defect 3 (whole-field one-tick clear): zone decay now
+runs every tick rather than only when idle, so blooms age out rolling rather than vanishing together
+(`fa17c26`, EARS-5). Intensity-attenuation redraw was **not** taken (out of scope — see E-3).
+
+**Follow-up (observer tuning): the `max-radius` cap was dropped.** The Chebyshev cap drew a hard
+square and needed an arbitrary magnitude. It is replaced by a per-outbreak **grow-window**: the
+bloom gossips outward for a random `grow-ticks-min..max` (default 30..60) ticks, then the front
+freezes — a time bound that is now the natural size cap (and tunable, later, from the observer
+controls). Defect 1 stays resolved via a different mechanism; EARS-4/EARS-5 are unchanged.
+
+**Follow-up (PR #27 review): dead-window between the empty field and the lifetime.** A review
+found that EARS-5's per-cell age-out empties the whole bloom by ~`growTicks + zoneDecayTicks`
+after spawn (~110 ticks at defaults), but `activeMutagen` only cleared at `isExpired`
+(`spawnTick + outbreakLifetimeTicks`, 300) — and `spawnMutagen` refuses a new outbreak while
+`activeMutagen != null`. So mutagen was impossible for the ~190-tick phantom-active tail of every
+outbreak. Fixed: `advanceMutagen` now ends the outbreak once it has stopped growing AND its field
+is fully decayed, so the Poisson lambda (not a phantom tail) governs the next spawn
+(`MutagenZoneDecayTest.outbreakEndsWhenFieldFullyDecaysNotAtLifetime`).
+
+### E-3 · Mutagen bloom shape is a near-solid diamond, not a ragged front
+
+Wanted: a more irregular, organic bloom. The current shape is 8-neighbour Moore with
+`gossip-probability: 0.3` rolled per neighbour per tick, and `if (existingStrain != 0) continue`
+at `:592` means a cell is written once and never revisited. Because the roll re-fires every tick
+against a persistent frontier, gaps fill within a few ticks — the frontier advances ~0.3 cells
+per tick in Chebyshev distance and the interior is solid, leaving only a thin ragged rim.
+
+Raggedness will not come from changing the neighbourhood. It needs one of: per-cell
+susceptibility (weight the probability by fertility or terrain), a one-shot infection roll per
+neighbour instead of a repeating one, or an anisotropic / noise-modulated probability field.
+
+**Emergence, not mechanism** — bloom shape is tuning-sensitive and cannot be phrased as an EARS
+clause. Per the constitution clause it gets no default-suite test; judge it by eye on the
+visualiser, and pin at most a tuning-invariant ordinal ratio in the `@Tag("slow")` suite.
+
+**Partially addressed (MVP, observer tuning).** The grow-window (see E-2 follow-up) freezes the
+Moore front mid-advance, so the bloom stops while its frontier is still ragged instead of filling to
+a solid square. Good enough by eye for now; the *mechanism* pinned is only "gossip stops after
+`growTicks`" (`MutagenGrowthTest`) — the raggedness itself stays observe-only emergence. A genuinely
+organic front (per-cell susceptibility / one-shot rolls) is still the fuller fix if wanted.
+
+### E-4 · No way to watch life without running bots
+
+Not a defect — recording it because it cost an operator two confused sessions. Particles exist
+if and only if a WebSocket client registered one: `WorldWebSocketHandler.java:619` is the sole
+spawn site, with reproduction (`ActionResolver.java:685/704/949`) and composite dissolution
+(`SimulationEngine.java:1349`) the only other constructions. Startup places rocks
+(`RockGenerator.java:110`) and fertility only; nutrients arrive per-tick. No `initial-population`
+key exists anywhere in `src/main`.
+
+So a bare `bootRun` renders a lifeless world forever. The operator workaround is a second shell:
+
+```
+./gradlew runBot --args="ws://localhost:8080/ws/world 100"
+```
+
+Positional args are `<server-uri> <count 1..100> [duration-seconds]` (`BotRunner.java:44-53`,
+capped at `MAX_BOTS`); omit the duration for a visualiser session so it runs until Ctrl-C.
+
+If "start the server and watch life" is wanted as a first-class mode, it is a code change — an
+`ApplicationReadyEvent` seeder placing N particles through the existing `EligibleCellIndex`
+path, gated on a new key defaulting to 0. Note that unowned particles have no brain, so they
+would decay and never act; the fuller version is an auto-started in-process bot fleet.
+
+### E-5 · Bots cannot perceive the residual toxin field, and mostly ignore the rest
+
+Observed: a Membrane bot repeatedly walking straight through visible toxin. Three independent
+deciders, in firing order — fixing any one alone changes nothing:
+
+1. **The bit is never set for the residual field.** `EnvironmentEngine.java:966` sets
+   `CELL_STATUS_TOXIN_PRESENT` only when `intensity >= intensity-threshold` (`20`,
+   `application.yml:191`). E-1's permanent stain sits at intensity `1`. The renderer paints
+   anything `> 0`, so the operator sees a hazard the bots are never told about. **E-5 is
+   downstream of E-1 — fix E-1 first, then re-observe.**
+2. **Avoidance is gated on near-starvation.** `HeuristicBrain.java:154/161/331` all read
+   `if (!(lowEnergy && toxic))`, with `lowEnergy` = energy < 30% of max
+   (`TOXIC_AVOIDANCE_ENERGY_FRACTION`, `:73`). Above 30% the bit is decoded into a local and
+   never branched on. A healthy bot is *designed* to ignore toxin.
+3. **It is exclusion, not repulsion.** Those three sites only drop toxic cells from candidate
+   lists. The flee, chase, and fallback-walk branches never consult `cellStatus` at all, so a
+   bot fleeing a predator or chasing prey will cross toxin regardless of energy.
+
+Decide intent before coding: (2) may well be deliberate ("desperate bots take risks"). (1) is a
+plain defect once E-1 is fixed.
+
+**Resolved** (`5b059e0`, EARS-2) — **no production change of its own**. Decider (1), the only
+in-scope defect, existed *because* of E-1's residual stain: the `TOXIN_PRESENT` bit was correctly
+gated on `intensity >= threshold`, but E-1 left a permanent intensity-1 band below it. With E-1
+fixed the field decays to 0, so no sub-threshold band lingers and the bit is absent for the right
+reason. EARS-2 pins that the band is transient. Deciders (2) the 30%-energy avoidance gate and
+(3) exclusion-not-repulsion were left exactly as they are by user decision — deliberate behaviour,
+not defects.
+
+### E-6 · Bonding and composites are statistically unreachable at current defaults
+
+Observed: no bonded pairs or composites in two long sessions. Both are passive engine scans
+(`SimulationEngine.java:456-462` and `:632-658`) — no bot verb is required, so this is not a
+brain gap. (`V` is a locomotor ballot, not composite formation.)
+
+The blocker is the energy gate: bonding needs **both** partners at ≥ `bond-energy-threshold: 50`,
+and children spawn at `childStartEnergy() = maxEnergy / 2` (`MetabolicProfile.java:93`):
+
+| species | child E | decay/tick | nutrient gain | net per eat-tick | combat win |
+|---------|---------|------------|---------------|------------------|------------|
+| CATALYST | 40 | 3 | 3 | **0** | +15 |
+| SPORE | 30 | 2 | 5 | +3 | +8 |
+| MEMBRANE | 60 | 1 | 8 | +7 | +5 |
+
+All three legal bond pairs (C→S, S→M, M→C) need a Catalyst or Spore at ≥50. **A Catalyst child
+cannot get there by feeding at all** — gain 3 exactly cancels decay 3 — so its only route up is
+winning combat. Spore needs ~7 net eat-ticks. Then a 0.10 roll. Composites need two such pairs
+adjacent — roughly the square of an already-small rate.
+
+Config-only fixes exist (lower the threshold, or raise Catalyst's `nutrientConsumeEnergy` to 4).
+This is **balance tuning, not a defect** — it belongs with E-9, not ahead of it.
+
+### E-7 · The solo attack verb is a no-op, so bot combat intent is discarded
+
+`ActionResolver.java:509-512` handles `case 'A'` by incrementing `restCount` and nothing else.
+`HeuristicBrain.java:199` emits `A` whenever prey is at distance 1. So the brain's one offensive
+decision is dropped every time, and *all* combat is the passive engine scan.
+
+Consequence, given E-6: Catalyst's only energy route up is combat, and combat is something it
+cannot choose to do. This is the strongest single candidate for E-9's extinction ordering.
+
+Not obviously a bug — the comment says composite-`A` dispatch was Phase 3 work and solo-`A` was
+left equivalent to rest deliberately. But brain and resolver now disagree, which is a real seam.
+Cheapest honest fix is to stop emitting `A` in the brain; the interesting one is to make it do
+something.
+
+**Resolved** (`3dd1aee`, EARS-6). The `HeuristicBrain` chase branch now emits `M` toward adjacent
+prey, never solo `A`. Chosen scope was the cheap honest fix (stop emitting `A`); making `A` a real
+bonus attack was rejected as a balance change layered on the untested E-9 hypothesis.
+`ActionResolver`'s `case 'A'` is unchanged — it stays correct for the composite path.
+
+### E-8 · Lightning fires as configured but is unobservable
+
+Not a spawn bug — confirmed empirically, not inferred. A bare `bootRun` logged 5 strikes in the
+first 257 ticks (~2 min), via `EnvironmentEngine.java:1126`:
+
+```
+Lightning strike: tick=48  center=(246,2)   inner=2 outer=4 damage=40 fertility=25 fleeing=8
+Lightning strike: tick=55  center=(209,42)  ...
+Lightning strike: tick=212 center=(222,186) ...
+Lightning strike: tick=249 center=(200,201) ...
+Lightning strike: tick=257 center=(227,145) ...
+```
+
+Consistent with λ = 0.04 at summer peak / 0.005 off-season over a 200-tick year
+(`application.yml:165-168`).
+
+It is invisible because `EnvironmentEngine.java:370` clears `lightningStrikesThisTick` every
+tick, so a strike appears in **exactly one 500ms frame** — one 6px square on a 1536px canvas.
+The wire also carries only the centre `Position` (`:1184`), never `outer-radius: 4`, so the
+rendered mark is 1/81 of the area actually damaged.
+
+Two independent fixes: hold the strike in the observer frame for N ticks (or fade it client-side),
+and put the radius on the wire so the affected disc is drawn. Renderer-side persistence alone is
+enough to make it visible.
+
+**Resolved** (`2d6fa01` + `a858dc4`) — both fixes taken (user chose persistence + radius on wire).
+E-8a (`2d6fa01`, EARS-7): each strike now carries its Euclidean outer radius on the wire alongside
+the centre. E-8b (`a858dc4`, EARS-8/EARS-9): the renderer holds each strike for
+`LIGHTNING_TRAIL_TICKS` (6) frames at strictly decreasing opacity and draws it as its true toroidal
+Euclidean disc rather than a single centre cell.
+
+### E-9 · Extinction ordering: Catalyst first, then Spore; Membrane persists
+
+Observed across both sessions. **This is the balance-tuning signal that was being waited on** —
+tuning was deferred until a GUI existed to give visual feedback, and it now does.
+
+The E-6 table is a plausible mechanism (Catalyst net-zero on feeding, Spore marginal, Membrane
+comfortable) and E-7 removes Catalyst's only escape route. **Neither has been tested** — the
+ordering matching the arithmetic so neatly is exactly when to be suspicious. Confirm before
+tuning on it.
+
+**Emergence, not mechanism.** Per the constitution clause, population outcomes get no
+default-suite test. Verify by instrumented observation (`DeathDiagnostics` census, which already
+exists behind `paralife.diagnostics.death-trace.enabled`) and judge by eye on the visualiser.
+
+## Review remediation — PR #27 (2026-08-17)
+
+Multi-model review of the observer branch. Dispositions:
+
+- **Fixed — mutagen dead-window** (correctness). See E-2 follow-up above.
+- **Fixed — observer permit leak** (correctness, O9). The gate acquired its permit in
+  `beforeHandshake`, but the "upgrade committed (101) then socket dies before the WS opens" path
+  fires no session lifecycle callback, so `releaseIfHeld` never ran and the permit leaked until
+  `maxSessions` orphans wedged the cap. Acquisition moved to `afterConnectionEstablished`
+  (`ObserverSessionGate.acquireForSession`), tying the permit to the session lifecycle whose
+  `afterConnectionClosed` is guaranteed to free it; `beforeHandshake` keeps the enabled-refusal +
+  a best-effort cap fast-reject. Race-free capping preserved (now at establish). Test:
+  `ObserverSessionGateTest.upgradeCommittedButSessionNeverOpensLeaksNoPermit`.
+- **Fixed — seed cherry-pick** (test-integrity). `EnvironmentPhaseGateIntegrationTest` had its
+  seed re-picked 42→1 to make a marginal "all four effects fire" Poisson roll land — the banned
+  default-gate anti-pattern. Verified the assertion is irreducibly seed-sensitive (mutagen
+  infection + buff need spatial entity/bloom collision + a survival chain; no lambda fixes it), so
+  it is genuinely emergence. Moved to `@Tag("slow")` (opt-in), reverted to seed 42. Each effect's
+  MECHANISM stays default-gated deterministically (`ToxinTest`/`MutagenTest`/`LightningTest`/
+  `CompostTest`).
+- **Deferred — no explosion upper-bound guard** (test-coverage). Removing the `[5%,150%]`
+  population band was correct (a per-population magnitude aggregate, class-banned from the default
+  gate). A replacement upper bound is *also* a banned aggregate, so it cannot go in the default
+  suite; a tuning-invariant ordinal explosion guard could live in the `@slow`
+  `EmergenceStabilityLoadTest` if wanted. Discretionary — not required by the removal. **Backlog.**
+- **Won't-fix — HeuristicBrain distance-1 chase** (raised as correctness). A rejected move into an
+  occupied prey cell is functionally identical to the old `'A'`/rest: the bot holds position while
+  passive RPS combat (SimulationEngine) keeps damaging the adjacent prey each tick. Holding a
+  winning fight is correct; falling through would let a predator wander off prey it is beating.
+  The only real E-7 gain (distance-2 closing) already works. Distance-1 hold-vs-forage is bot
+  *strategy* = emergence, not a mechanism defect.
+- **Kept + documented — rock coverage 49%→9%** (scope-creep). Genuinely outside the named
+  env/bot-defect scope but observer-motivated (49% rock leaves little life to watch). One-PR
+  decision (D: user, 2026-08-17); named in the PR scope-diff rather than split.
+
+### Round 2 (2026-08-17) — second multi-model review
+
+Fixed: **#7** `onTickEnvOnlyForTest` now mirrors `onTick`'s `lightningStrikesThisTick.clear()`
+(test-path strike accumulation); **#11** deleted the now-vacuous
+`ObserverEndpointIntegrationTest.malformedUpgradesDoNotLeakObserverPermits` (the permit-on-handshake
+design it guarded no longer exists after Round 1; RED-test proved it unfailable); **#14** CLAUDE.md
+"two→four renderer modules"; **#2** removed `ObserverOutboundSender`'s `if(!isOpen()) continue` drain
+guard (it short-circuited the observer's ONLY backup reaper — the drain-owned self-heal — for the
+closed-without-callback case; the bot sender keeps the guard because its FSM+grace-sweep reap it);
+**#10** flipped the lightning-trail sort to oldest-first so the newest strike paints on top.
+
+Settled — **do not re-litigate** (verified against the code, kept deliberately):
+
+- **#4 buffed predator "hops over" adjacent prey — NOT a bug.** A `MOVEMENT_PLUS_1` `'M'` over a
+  distance-1 prey lands on the far side, still Chebyshev-1 from it; passive RPS combat
+  (`SimulationEngine`, every tick, no attack verb) keeps fighting. Worst case is a harmless jitter
+  across the prey while it dies. Emitting `'A'` to "hold" would contradict the deliberate E-7 test
+  `HeuristicBrainChaseTest` (pins `'M'`, never `'A'`) for no gain. Distinct from the Round-1
+  distance-1 item but same verdict: bot strategy = emergence.
+- **#12 `CellularAutomaton` sourceMax prescan — NOT dead code.** It is the E-1 quantized-decay
+  guarantee: it forces the grid max to drop ≥1 per step even when `1.0 - decayRate` is a no-op in
+  IEEE-754, so no toxin/mutagen field can stain permanently under *any* positive rate the
+  constitution's planned tuning might set. Correctly a no-op at *shipped* rates (reviewer's read),
+  but removing it reinstates E-1 under low-decay tuning. A cheaper incremental-max (thread the prior
+  step's max through the return, drop the prescan) is a valid **optimization backlog item**, not a
+  correctness fix — the pass is bounded and only runs with an active field.
+- **#13 `ObserverOutboundSender` vs `admission.OutboundSender` "duplication" — kept separate.** The
+  two differ materially (resume/STALLED FSM + queue backpressure + metrics vs latest-wins capacity-1
+  + drain-owned cleanup). A shared base couples two independently-evolving components for ~40 lines
+  of teardown — the speculative abstraction the constitution's "no unused abstractions" rule warns
+  against.
+- **#3 pre-upgrade cap "not authoritative" — by design.** `beforeHandshake`'s `availablePermits()`
+  read is a documented best-effort fast-reject; `acquireForSession` (Semaphore, at establish) is the
+  race-free authority and closes over-cap losers. Live cap is never exceeded. This *is* the Round-1
+  permit-leak fix's design.
+- **#1 register-after-attach phantom — can't fire.** Spring serializes a session's lifecycle
+  callbacks, and the drain is parked on an empty mailbox until after `register`, so no concurrent
+  `cleanup` can interleave the attach→register window. The realistic inline bootstrap-send failure
+  is already caught → `cleanup` + rethrow.
+
+Discarded (low-value, no backlog entry): **#5** hollow/strobing bloom (bloom *shape* = emergence,
+E-3 explicitly MVP-partial); **#6** "no flood ceiling" (`growTicks` *is* the ceiling — bloom bounded
+to a Moore-ball of radius `growTicks`); **#8** unescaped `innerHTML` (all values server-generated
+enum names + int counts — no injection source; YAGNI); **#9** `growTicksMax` overflow (pathological
+config only — "no handling for impossible cases").

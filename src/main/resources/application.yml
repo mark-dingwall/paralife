@@ -23,7 +23,7 @@ paralife:
     height: 256
     rock:
       seed: 0
-      density-threshold: 128
+      density-threshold: 185
       textures:
         - /rocks/perlin-01.png
         - /rocks/perlin-02.png
@@ -207,6 +207,14 @@ paralife:
         gossip-probability: 0.3
         zone-decay-ticks: 50
         outbreak-lifetime-ticks: 300
+        # The bloom gossips outward for a random grow-ticks-min..max ticks, then the
+        # front freezes. This is the natural size cap (replaced the old max-radius
+        # square). Gossip is per-neighbour-independent, so an edge cell with k infected
+        # Moore neighbours is colonized at 1-(1-0.3)^k per tick — >=0.3, faster where
+        # the front is solid — giving a ragged blob at least ~9..18 cells across over
+        # 30..60 ticks.
+        grow-ticks-min: 30
+        grow-ticks-max: 60
       compost:
         full-strength: 30
         half-strength: 15
@@ -235,3 +243,6 @@ paralife:
     sensor-passive-drain: 1
     can-form-composites: true
     seed:                     # Phase 16 Plan 01: Long; null = unseeded (CompositeEnergyDistributor RNG)
+  observer:
+    enabled: false
+    max-sessions: 4
