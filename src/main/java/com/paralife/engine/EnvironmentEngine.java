@@ -632,6 +632,7 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         // ticks — an extra O(w·h) pass (~65k reads/tick at 256×256) on top
         // of the existing gossip scan; negligible.
         int decayTicks = cfg.zoneDecayTicks();
+        boolean anyRemaining = false;
         for (int x = 0; x < w; x++) {
             for (int y = 0; y < h; y++) {
                 int strain = mutagenGrid[x][y] & 0xFF;
@@ -639,8 +640,20 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                 long lastReinforced = mutagenLastReinforcedTick[x][y];
                 if (tickNumber - lastReinforced >= decayTicks) {
                     mutagenGrid[x][y] = 0;
+                } else {
+                    anyRemaining = true;
                 }
             }
+        }
+
+        // Dead-window fix: end the outbreak once its bloom has fully decayed and it
+        // is no longer growing. The bloom empties ~growTicks+zoneDecayTicks after
+        // spawn, far short of outbreakLifetimeTicks; leaving activeMutagen set until
+        // then kept spawnMutagen() (guarded on activeMutagen == null) from starting a
+        // fresh outbreak over the empty remainder. Poisson lambda governs the next
+        // spawn — not this phantom-active tail.
+        if (activeMutagen != null && !activeMutagen.isGrowing(tickNumber) && !anyRemaining) {
+            activeMutagen = null;
         }
     }
 

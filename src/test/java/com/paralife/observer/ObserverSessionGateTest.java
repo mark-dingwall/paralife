@@ -48,20 +48,23 @@ class ObserverSessionGateTest {
     }
 
     @Test
-    void capEnforcedSequentially() throws Exception {
+    void capEnforcedAtEstablishSequentially() throws Exception {
         ObserverSessionGate g = gate(true, 2);
-        assertThat(before(g, new HashMap<>())).isTrue();
-        assertThat(before(g, new HashMap<>())).isTrue();
-        assertThat(before(g, new HashMap<>())).as("third refused at cap 2").isFalse();
+        assertThat(g.acquireForSession(sessionWith(new HashMap<>()))).isTrue();
+        assertThat(g.acquireForSession(sessionWith(new HashMap<>()))).isTrue();
+        assertThat(g.acquireForSession(sessionWith(new HashMap<>())))
+                .as("third establish refused at cap 2").isFalse();
         assertThat(g.availablePermits()).isZero();
+        // Once full, beforeHandshake fast-rejects to spare the doomed upgrade round-trip.
+        assertThat(before(g, new HashMap<>())).as("handshake fast-rejected when full").isFalse();
     }
 
     @Test
-    void capNeverExceededUnderConcurrentHandshakeStampede() throws Exception {
-        // The design's whole reason for a Semaphore is that `size() < max; add()` is a
-        // check-then-act race. Fire far more callers than the cap simultaneously behind a
-        // barrier and assert EXACTLY maxSessions win. (RED-test by swapping the Semaphore for a
-        // plain `if (count < max) count++` — this stampede then admits > maxSessions.)
+    void capNeverExceededUnderConcurrentEstablishStampede() throws Exception {
+        // The Semaphore's whole reason is that `size() < max; add()` is a check-then-act race.
+        // Acquisition is now at establish, so fire far more concurrent establishes than the cap
+        // behind a barrier and assert EXACTLY maxSessions win. (RED-test by swapping the Semaphore
+        // for a plain `if (count < max) count++` — this stampede then admits > maxSessions.)
         int max = 4, callers = 16;
         ObserverSessionGate g = gate(true, max);
         CyclicBarrier barrier = new CyclicBarrier(callers);
@@ -72,7 +75,7 @@ class ObserverSessionGateTest {
             for (int i = 0; i < callers; i++) {
                 futures.add(pool.submit(() -> {
                     barrier.await(); // release all callers at once
-                    if (before(g, new HashMap<>())) successes.incrementAndGet();
+                    if (g.acquireForSession(sessionWith(new HashMap<>()))) successes.incrementAndGet();
                     return null;
                 }));
             }
@@ -80,74 +83,53 @@ class ObserverSessionGateTest {
         } finally {
             pool.shutdownNow();
         }
-        assertThat(successes.get()).as("exactly maxSessions win the stampede").isEqualTo(max);
+        assertThat(successes.get()).as("exactly maxSessions win the establish stampede").isEqualTo(max);
         assertThat(g.availablePermits()).as("permits exhausted, never negative").isZero();
     }
 
     @Test
-    void releaseIsExactlyOnceAcrossErrorThenClose() throws Exception {
+    void releaseIsExactlyOnceAcrossErrorThenClose() {
         ObserverSessionGate g = gate(true, 2);
-        Map<String, Object> attrs = new HashMap<>();
-        assertThat(before(g, attrs)).isTrue();
+        WebSocketSession s = sessionWith(new HashMap<>());
+        assertThat(g.acquireForSession(s)).isTrue();
         assertThat(g.availablePermits()).isEqualTo(1);
 
-        WebSocketSession s = sessionWith(attrs); // carries ATTR_PERMIT marker
         g.releaseIfHeld(s); // handleTransportError path
         g.releaseIfHeld(s); // afterConnectionClosed path (duplicate)
 
         assertThat(g.availablePermits())
                 .as("both close/error paths fire but the permit releases exactly once")
                 .isEqualTo(2);
-        assertThat(g.availablePermits())
-                .as("cap never inflated above maxSessions").isLessThanOrEqualTo(2);
     }
 
     @Test
-    void rejectedHandshakeWithoutExceptionReleasesPermit() throws Exception {
-        // beforeHandshake acquires the permit BEFORE the upgrade is validated. Spring rejects a
-        // malformed upgrade (bad headers / missing key / unsupported version) by returning false
-        // from doHandshake WITHOUT throwing, so afterHandshake sees exception==null and a non-101
-        // status, and NO session is established (releaseIfHeld never runs). The permit must be
-        // returned here or maxSessions bad requests wedge the cap at 503 permanently.
+    void upgradeCommittedButSessionNeverOpensLeaksNoPermit() throws Exception {
+        // O9 leak (review finding), now closed: the permit is NOT taken at the handshake, so an
+        // upgrade that commits 101 and then dies before the WS session opens — firing no session
+        // lifecycle callback (onClose only follows onOpen) — strands nothing. Acquisition happens
+        // only at afterConnectionEstablished, whose afterConnectionClosed is guaranteed to free it.
         ObserverSessionGate g = gate(true, 1);
-        assertThat(before(g, new HashMap<>())).isTrue();
-        assertThat(g.availablePermits()).as("permit acquired at handshake").isZero();
+        assertThat(before(g, new HashMap<>())).as("handshake admitted, no permit taken yet").isTrue();
 
-        // Spring passes a ServletServerHttpResponse; a rejected upgrade carries a 4xx status.
-        MockHttpServletResponse rejected = new MockHttpServletResponse();
-        rejected.setStatus(HttpStatus.BAD_REQUEST.value());
-        g.afterHandshake(mock(ServerHttpRequest.class), new ServletServerHttpResponse(rejected),
-                mock(WebSocketHandler.class), null);
-
-        assertThat(g.availablePermits())
-                .as("a non-switching handshake (no session) releases its permit").isEqualTo(1);
-    }
-
-    @Test
-    void successfulUpgradeDefersReleaseToTheSession() throws Exception {
-        // positive control: a real upgrade returns 101 SWITCHING_PROTOCOLS and establishes a
-        // session that owns the permit (freed by releaseIfHeld on close). afterHandshake must NOT
-        // release here too — that would double-release and inflate the cap above maxSessions.
-        ObserverSessionGate g = gate(true, 1);
-        Map<String, Object> attrs = new HashMap<>();
-        assertThat(before(g, attrs)).isTrue();
-
+        // 101 committed, then the socket dies before onOpen — no session, no callback.
         MockHttpServletResponse upgraded = new MockHttpServletResponse();
-        upgraded.setStatus(HttpStatus.SWITCHING_PROTOCOLS.value()); // 101 → real upgrade
+        upgraded.setStatus(HttpStatus.SWITCHING_PROTOCOLS.value());
         g.afterHandshake(mock(ServerHttpRequest.class), new ServletServerHttpResponse(upgraded),
                 mock(WebSocketHandler.class), null);
 
-        assertThat(g.availablePermits()).as("established session still holds its permit").isZero();
-        g.releaseIfHeld(sessionWith(attrs)); // the session's own close releases exactly once
-        assertThat(g.availablePermits()).as("no double-release on the success path").isEqualTo(1);
+        assertThat(g.availablePermits())
+                .as("a committed-but-never-opened upgrade strands no permit").isEqualTo(1);
+        // Positive control: the permit is still there for a session that actually opens.
+        assertThat(g.acquireForSession(sessionWith(new HashMap<>())))
+                .as("acquisition happens at establish, not handshake").isTrue();
+        assertThat(g.availablePermits()).isZero();
     }
 
     @Test
-    void normalSingleCloseReleasesExactlyOne() throws Exception {
+    void normalSingleCloseReleasesExactlyOne() {
         ObserverSessionGate g = gate(true, 1);
-        Map<String, Object> attrs = new HashMap<>();
-        assertThat(before(g, attrs)).isTrue();
-        WebSocketSession s = sessionWith(attrs);
+        WebSocketSession s = sessionWith(new HashMap<>());
+        assertThat(g.acquireForSession(s)).isTrue();
 
         g.releaseIfHeld(s);
 

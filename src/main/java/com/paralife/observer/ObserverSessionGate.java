@@ -5,23 +5,27 @@ import java.util.concurrent.Semaphore;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
-import org.springframework.http.server.ServletServerHttpResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 
 /**
- * Pre-upgrade enablement + concurrency-cap gate for {@code /ws/observer}. Runs as a
- * {@link HandshakeInterceptor} so it can refuse the HTTP handshake (afterConnectionEstablished
- * is post-upgrade and cannot). A {@link Semaphore} makes the cap race-free under
- * concurrent handshakes (a plain size()&lt;max check is check-then-act).
+ * Enablement + concurrency-cap gate for {@code /ws/observer}.
+ *
+ * <p>Runs as a {@link HandshakeInterceptor} so it can refuse a disabled endpoint (and
+ * fast-reject at the cap) during the HTTP handshake. The AUTHORITATIVE, race-free permit
+ * is acquired later — at {@code afterConnectionEstablished} via {@link #acquireForSession}
+ * — because a permit taken in {@code beforeHandshake} cannot be freed on the
+ * "upgrade committed (HTTP 101) but the session never opens" path: a container fires no
+ * session lifecycle callback (onClose only follows onOpen), so {@link #releaseIfHeld}
+ * would never run and the permit would leak until {@code maxSessions} orphans wedge the
+ * cap. Tying acquisition to the session lifecycle (acquire on establish, release on
+ * close) makes every acquired permit reclaimable.
  *
  * <p>Release-once lease (O9): {@code handleTransportError} AND {@code afterConnectionClosed}
- * both fire for one failed connection, so release is guarded by a remove-once marker
- * (the {@code observerPermit} session attribute) — mirroring the bot cleanup's
- * {@code attrs.remove(ATTR_ENTITY_TYPE) != null} gate. This prevents double-release
- * inflating the semaphore above maxSessions.
+ * both fire for one failed connection, so release is guarded by a remove-once marker (the
+ * {@code observerPermit} session attribute) — preventing double-release above maxSessions.
  */
 @Component
 public class ObserverSessionGate implements HandshakeInterceptor {
@@ -43,39 +47,38 @@ public class ObserverSessionGate implements HandshakeInterceptor {
             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
             return false;
         }
-        if (!permits.tryAcquire()) {
+        // Best-effort fast-reject at the cap: refuse the HTTP upgrade cleanly instead of
+        // upgrading a connection that acquireForSession would immediately close. NOT
+        // authoritative (availablePermits() is check-then-act) — the race-free cap is
+        // enforced at acquireForSession; this only spares a full observer the round-trip.
+        if (permits.availablePermits() == 0) {
             response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
             return false;
         }
-        attributes.put(ATTR_PERMIT, Boolean.TRUE); // becomes a session attribute (remove-once marker)
         return true;
     }
 
     @Override
     public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                WebSocketHandler wsHandler, Exception exception) {
-        // afterHandshake runs only when OUR beforeHandshake returned true (permit held). A session
-        // — and therefore releaseIfHeld — exists ONLY if the upgrade actually switched protocols.
-        // Spring rejects a malformed upgrade by returning false from doHandshake WITHOUT throwing,
-        // so exception==null does NOT imply success. Release for every non-established handshake, or
-        // maxSessions bad requests wedge the cap permanently. (Success defers to releaseIfHeld — no
-        // double-release, since a non-101 status has no session to call it.)
-        if (!isUpgraded(response, exception)) {
-            permits.release();
-        }
+        // No permit is held before the session opens — nothing to release here.
     }
 
-    private static boolean isUpgraded(ServerHttpResponse response, Exception exception) {
-        if (exception != null) {
+    /**
+     * Authoritative, race-free permit acquire — called from
+     * {@code afterConnectionEstablished}, i.e. once a real session exists whose
+     * {@code afterConnectionClosed} is guaranteed to fire and free the permit via
+     * {@link #releaseIfHeld}. The {@link Semaphore} makes concurrent establishes race-free
+     * (exactly maxSessions win); the loser is closed by the caller.
+     *
+     * @return true if a permit was granted (and marked on the session); false at cap.
+     */
+    public boolean acquireForSession(WebSocketSession session) {
+        if (!permits.tryAcquire()) {
             return false;
         }
-        // Spring always passes a ServletServerHttpResponse here; doHandshake sets the status to
-        // 101 on a real upgrade and 4xx on rejection (both via servletResponse.setStatus).
-        if (response instanceof ServletServerHttpResponse servlet) {
-            return servlet.getServletResponse().getStatus() == HttpStatus.SWITCHING_PROTOCOLS.value();
-        }
-        return true; // unknown response type (not reachable under the servlet container): assume a
-                     // session was established so releaseIfHeld owns the release, never double-free.
+        session.getAttributes().put(ATTR_PERMIT, Boolean.TRUE); // remove-once release marker
+        return true;
     }
 
     /** Release the session's permit exactly once (idempotent across error+close). */

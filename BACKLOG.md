@@ -586,6 +586,15 @@ bloom gossips outward for a random `grow-ticks-min..max` (default 30..60) ticks,
 freezes — a time bound that is now the natural size cap (and tunable, later, from the observer
 controls). Defect 1 stays resolved via a different mechanism; EARS-4/EARS-5 are unchanged.
 
+**Follow-up (PR #27 review): dead-window between the empty field and the lifetime.** A review
+found that EARS-5's per-cell age-out empties the whole bloom by ~`growTicks + zoneDecayTicks`
+after spawn (~110 ticks at defaults), but `activeMutagen` only cleared at `isExpired`
+(`spawnTick + outbreakLifetimeTicks`, 300) — and `spawnMutagen` refuses a new outbreak while
+`activeMutagen != null`. So mutagen was impossible for the ~190-tick phantom-active tail of every
+outbreak. Fixed: `advanceMutagen` now ends the outbreak once it has stopped growing AND its field
+is fully decayed, so the Poisson lambda (not a phantom tail) governs the next spawn
+(`MutagenZoneDecayTest.outbreakEndsWhenFieldFullyDecaysNotAtLifetime`).
+
 ### E-3 · Mutagen bloom shape is a near-solid diamond, not a ragged front
 
 Wanted: a more irregular, organic bloom. The current shape is 8-neighbour Moore with
@@ -746,3 +755,38 @@ tuning on it.
 **Emergence, not mechanism.** Per the constitution clause, population outcomes get no
 default-suite test. Verify by instrumented observation (`DeathDiagnostics` census, which already
 exists behind `paralife.diagnostics.death-trace.enabled`) and judge by eye on the visualiser.
+
+## Review remediation — PR #27 (2026-08-17)
+
+Multi-model review of the observer branch. Dispositions:
+
+- **Fixed — mutagen dead-window** (correctness). See E-2 follow-up above.
+- **Fixed — observer permit leak** (correctness, O9). The gate acquired its permit in
+  `beforeHandshake`, but the "upgrade committed (101) then socket dies before the WS opens" path
+  fires no session lifecycle callback, so `releaseIfHeld` never ran and the permit leaked until
+  `maxSessions` orphans wedged the cap. Acquisition moved to `afterConnectionEstablished`
+  (`ObserverSessionGate.acquireForSession`), tying the permit to the session lifecycle whose
+  `afterConnectionClosed` is guaranteed to free it; `beforeHandshake` keeps the enabled-refusal +
+  a best-effort cap fast-reject. Race-free capping preserved (now at establish). Test:
+  `ObserverSessionGateTest.upgradeCommittedButSessionNeverOpensLeaksNoPermit`.
+- **Fixed — seed cherry-pick** (test-integrity). `EnvironmentPhaseGateIntegrationTest` had its
+  seed re-picked 42→1 to make a marginal "all four effects fire" Poisson roll land — the banned
+  default-gate anti-pattern. Verified the assertion is irreducibly seed-sensitive (mutagen
+  infection + buff need spatial entity/bloom collision + a survival chain; no lambda fixes it), so
+  it is genuinely emergence. Moved to `@Tag("slow")` (opt-in), reverted to seed 42. Each effect's
+  MECHANISM stays default-gated deterministically (`ToxinTest`/`MutagenTest`/`LightningTest`/
+  `CompostTest`).
+- **Deferred — no explosion upper-bound guard** (test-coverage). Removing the `[5%,150%]`
+  population band was correct (a per-population magnitude aggregate, class-banned from the default
+  gate). A replacement upper bound is *also* a banned aggregate, so it cannot go in the default
+  suite; a tuning-invariant ordinal explosion guard could live in the `@slow`
+  `EmergenceStabilityLoadTest` if wanted. Discretionary — not required by the removal. **Backlog.**
+- **Won't-fix — HeuristicBrain distance-1 chase** (raised as correctness). A rejected move into an
+  occupied prey cell is functionally identical to the old `'A'`/rest: the bot holds position while
+  passive RPS combat (SimulationEngine) keeps damaging the adjacent prey each tick. Holding a
+  winning fight is correct; falling through would let a predator wander off prey it is beating.
+  The only real E-7 gain (distance-2 closing) already works. Distance-1 hold-vs-forage is bot
+  *strategy* = emergence, not a mechanism defect.
+- **Kept + documented — rock coverage 49%→9%** (scope-creep). Genuinely outside the named
+  env/bot-defect scope but observer-motivated (49% rock leaves little life to watch). One-PR
+  decision (D: user, 2026-08-17); named in the PR scope-diff rather than split.

@@ -48,13 +48,13 @@ class ObserverWebSocketHandlerTest {
         ObserverWebSocketHandler handler =
                 new ObserverWebSocketHandler(broadcaster, sender, gate, builder, grid);
 
-        // Replicate the real handshake precondition: beforeHandshake acquires a permit and
-        // stamps the ATTR_PERMIT marker into what becomes the session's attribute map.
+        // beforeHandshake now only ADMITS — the permit is acquired at establish, tied to the
+        // session lifecycle. afterConnectionEstablished acquires it, then the bootstrap send throws.
         Map<String, Object> handshakeAttrs = new HashMap<>();
         boolean admitted = gate.beforeHandshake(mock(ServerHttpRequest.class),
                 mock(ServerHttpResponse.class), mock(WebSocketHandler.class), handshakeAttrs);
-        assertThat(admitted).as("precondition: handshake acquired a permit").isTrue();
-        assertThat(gate.availablePermits()).as("precondition: one permit now held").isEqualTo(3);
+        assertThat(admitted).as("precondition: handshake admitted").isTrue();
+        assertThat(gate.availablePermits()).as("precondition: no permit taken until establish").isEqualTo(4);
 
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getId()).thenReturn("obs-fail");

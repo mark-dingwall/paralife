@@ -41,6 +41,13 @@ public class ObserverWebSocketHandler extends AbstractWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        // Authoritative, race-free cap: acquire the permit now that a real session exists
+        // (its afterConnectionClosed is guaranteed to free it). The pre-upgrade fast-reject
+        // is best-effort, so a concurrent stampede can reach here over-cap — close the losers.
+        if (!gate.acquireForSession(session)) {
+            session.close(CloseStatus.SERVICE_OVERLOAD);
+            return;
+        }
         try {
             // The drain owns its terminal-failure teardown: if a send breaks (and a Jetty close
             // callback may not follow), it runs cleanup directly. cleanup is idempotent, so this

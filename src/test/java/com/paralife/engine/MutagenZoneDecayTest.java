@@ -87,4 +87,35 @@ class MutagenZoneDecayTest {
         assertThat(env.mutagenStrainAtForTest(aged)).isEqualTo(0);
         assertThat(env.mutagenStrainAtForTest(fresh)).isEqualTo(3);
     }
+
+    // Dead-window fix — the outbreak must END when its bloom has fully decayed and
+    // it has stopped growing, not linger 'active' over an empty grid until
+    // outbreakLifetimeTicks (which the bloom outlives by ~2/3 of its span). While
+    // activeMutagenEvent() stays non-null, spawnMutagen refuses a fresh outbreak
+    // (EnvironmentEngine.java:524), so the coupling silently suppressed all mutagen
+    // for the dead remainder of every lifetime.
+    // Fixture: gossip-probability = 0.0 (class-level), zone-decay-ticks = 5.
+    // Only the origin cell exists; it decays 5 ticks after spawn, ~295 ticks before
+    // the nominal 300-tick lifetime passed here.
+    @Test
+    void outbreakEndsWhenFieldFullyDecaysNotAtLifetime() {
+        Position origin = new Position(1, 1);
+        // growTicks=2 → frozen from tick 2; lifetime=300 → isExpired only at tick 300.
+        env.forceSpawnMutagenForTest(0L, origin, 3, 300, 2);
+
+        // Positive control: while the origin cell survives, the outbreak is active.
+        env.advanceMutagenForTest(3L);
+        assertThat(env.mutagenStrainAtForTest(origin))
+                .as("origin still colonized before it ages out").isEqualTo(3);
+        assertThat(env.activeMutagenEvent())
+                .as("outbreak stays active while its field persists").isNotNull();
+
+        // Age the origin past zoneDecayTicks (6 - 0 >= 5) → field empties.
+        env.advanceMutagenForTest(6L);
+        assertThat(env.mutagenStrainAtForTest(origin))
+                .as("origin has aged out — field is now empty").isEqualTo(0);
+        assertThat(env.activeMutagenEvent())
+                .as("outbreak ends with its field, not at the 300-tick lifetime")
+                .isNull();
+    }
 }

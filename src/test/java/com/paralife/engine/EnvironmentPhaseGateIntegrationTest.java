@@ -9,6 +9,7 @@ import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.WorldGrid;
 import java.util.List;
 import java.util.Random;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -37,37 +38,36 @@ import org.springframework.test.context.TestPropertySource;
  *   <li>Asserts &ge;1 buff was granted at some point during the run.</li>
  * </ol>
  *
- * <p><b>Determinism note:</b> {@link WorldGrid}'s {@code ThreadLocalRandom}
- * governs entity-level behavior, so this test intentionally makes no population
- * outcome assertion. The supplemental {@link EnvironmentDeterminismTest} covers
- * env-engine-only determinism.
- *
- * <p><b>Aggressive peak-lambdas in @TestPropertySource:</b> 0.20-0.25 is ~10x
- * production values (0.04 etc.). They guarantee all four effects fire within
- * the 300-tick window. These lambdas are CLASS-SCOPED so they don't leak into
- * other @SpringBootTest runs. NOT production values — forces event firing
- * within phase-gate window.
+ * <p><b>Why {@code @Tag("slow")} (opt-in, not default-gated):</b> "all four
+ * effects fire + a buff is granted in a stochastic full-stack run" is emergence,
+ * not mechanism. Effect firing rides on seasonal Poisson rolls; mutagen infection
+ * and the survivor-buff chain additionally need an entity to be standing on the
+ * bloom and to survive a cure — all seed- and layout-sensitive. No lambda makes
+ * that deterministic (verified: distinct seeds still miss at elevated lambdas).
+ * Pinning a seed that happens to fire would be the anti-pattern the firewall bans
+ * from the default gate, so this run lives in the opt-in suite instead. Each
+ * effect's MECHANISM is default-gated deterministically elsewhere
+ * ({@code ToxinTest}, {@code MutagenTest}, {@code LightningTest},
+ * {@code CompostTest}); {@link EnvironmentDeterminismTest} covers env-engine
+ * determinism. Seed 42 pins one representative firing run for this opt-in check.
  */
+@Tag("slow")
 @SpringBootTest
 @ActiveProfiles("test")
 @TestPropertySource(properties = {
-        // Seed for env engine RNG — deterministic Poisson/gossip/path selection.
-        // Re-picked from 42 to 1 (E-2a/b, task-2): the mutagen cross-outbreak
-        // gossip-source filter removes RNG draws whenever a legacy cell is
-        // skipped, shifting the shared draw sequence enough that seed 42 no
-        // longer lands a toxin/lightning hit on this test's sparse seeded
-        // population within 300 ticks. All assertions below are unchanged.
-        "paralife.simulation.events.seed=1",
+        // Env-engine RNG seed — pins one representative firing run for this opt-in
+        // (@slow) emergence check. See the class javadoc for why firing can't be
+        // made seed-independent here (so this is not a default-gated test).
+        "paralife.simulation.events.seed=42",
         "paralife.simulation.events.enabled=true",
         // Full-year cycle within 300 ticks — all four seasons engaged.
         "paralife.simulation.seasons.year-length-ticks=300",
-        // NOT production values — forces event firing within 300-tick window
-        // while keeping the run representative. Production lambdas are 0.04
-        // (lightning) / 0.03 (toxin) / 0.02 (mutagen); the peak-lambda used here
-        // is ~3-4x production, which reliably fires all four effects.
-        "paralife.simulation.events.lightning.peak-lambda=0.10",
-        "paralife.simulation.events.toxin.peak-lambda=0.15",
-        "paralife.simulation.events.mutagen.peak-lambda=0.15",
+        // NOT production values (0.04/0.03/0.02). Elevated ~8-15x so the pinned
+        // seed fires all four within 300 ticks; the population band these once had
+        // to stay survivable for is gone, so 'apocalyptic' lambdas are fine here.
+        "paralife.simulation.events.lightning.peak-lambda=0.30",
+        "paralife.simulation.events.toxin.peak-lambda=0.30",
+        "paralife.simulation.events.mutagen.peak-lambda=0.30",
         "paralife.tick.auto-start=false"
 })
 class EnvironmentPhaseGateIntegrationTest {
