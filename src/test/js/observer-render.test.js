@@ -219,10 +219,15 @@ test("the painter sizes its own background and grid from both dimensions", () =>
   assert.equal(horizontals.length, 5, "one border per row plus the trailing one");
 });
 
-test("absent environment and entity collections degrade gracefully", () => {
+test("missing optional world collections use their empty defaults", () => {
   const ctx = recordingContext();
-  drawWorld(ctx, { grid: { width: 2, height: 2 }, rocks: [], entities: [], env: {} });
-  assert.ok(ctx.calls.length > 0, "background and grid still paint");
+  drawWorld(ctx, { grid: { width: 2, height: 2 } });
+
+  // Background + 3 vertical + 3 horizontal grid lines. This fixture owns both
+  // dimensions, so the literal catches removal of any `?? []` / `?? {}` default.
+  assert.equal(ctx.calls.length, 7);
+  assert.equal(ctx.calls[0].color, BACKGROUND_COLOR);
+  assert.ok(ctx.calls.slice(1).every((call) => call.color === GRID_COLOR));
 });
 
 // Each key's ops are identified by the COLOUR they paint, never by call index.

@@ -37,6 +37,9 @@ Thumbs.db
 .codex/
 .codex
 
+# Multi-review transient prompts, sessions, and raw model output. Curated review records live in docs/history/reviews/.
+/.multi-review/
+
 # Harness runtime reports (transient capture artifacts — committed sidecars go under profiles/)
 harness-*-report.json
 

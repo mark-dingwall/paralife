@@ -47,11 +47,11 @@ class ObserverPageServesTest {
         assertThat(body).as("imports the marker module").contains("./observer-markers.js");
         assertThat(body).as("imports the legend module").contains("./observer-legend.js");
         assertThat(body).as("imports the lightning trail module").contains("./observer-lightning.js");
-        assertThat(body).as("world frames go through the extracted painter").contains("drawWorld(");
-        assertThat(body).as("R11: the render call is timed with a monotonic clock")
-                .contains("performance.now()");
-        assertThat(body).as("R11: the measured cost reaches the render-stats text")
-                .containsPattern("(?s)renderStatsEl\\.textContent[^;]*renderMs");
+        assertThat(body).as("R11: monotonic timing brackets the painter and reaches render stats")
+                .containsPattern("(?s)const\\s+t0\\s*=\\s*performance\\.now\\(\\);\\s*"
+                        + "drawWorld\\(.*?\\);\\s*"
+                        + "const\\s+renderMs\\s*=\\s*Math\\.round\\(performance\\.now\\(\\)\\s*-\\s*t0\\);\\s*"
+                        + "renderStatsEl\\.textContent[^;]*renderMs");
         assertThat(body).as("the connection status is not overwritten by a repaint")
                 .doesNotContainPattern("(?s)statusEl\\.textContent[^;]*renderMs");
     }
