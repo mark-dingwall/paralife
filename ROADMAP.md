@@ -26,11 +26,11 @@ determinism hooks + long-run fixtures.
 - **18** ✅ External load harness + per-instance harness-identity attribution (scales past `BotRunner`'s single process).
 - **19** ✅ High-density placement + partition-aware world execution — `LiveEntityRegistry`, golden-trace semantic-equivalence gate.
 - **19.1** ✅ P19 review-finding hardening — RNG determinism, lifecycle-leak closure, `markStalled` deadlock fix.
-- **20** ✅ Connection multiplexing & runtime tuning — JFR profiling toolchain, Jetty/app `@ConfigurationProperties`, `docs/RUNTIME.md`.
+- **20** ✅ WS:entity 1:1 connection model & runtime tuning — JFR profiling toolchain, Jetty/app `@ConfigurationProperties`, `docs/RUNTIME.md`.
 - **20.1** ✅ Restored SENSOR-stitched composite perception (sensory-organ model; LOCOMOTOR sees the SENSOR union).
 - **22** ✅ Integration-test resource-leak audit — ran **out-of-band** as a 2026-05-04 carrier-starvation incident response (not in sequence).
 - **21** ✅ Scale Benchmark Gate & Reports — real 100/500/1000-bot tier evidence (throughput, tick
-  drift, session stability, rejection, failure-mode coverage) + the M4↔M5/22.1 boundary statement.
+  work-time/headroom, session stability, rejection, failure-mode coverage) + the M4↔M5/22.1 boundary statement.
   Ran ahead of the docs editorial pass (sequencing decision A superseded, mirroring 22's
   out-of-band precedent). **M4 closed** — see [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 - **Docs editorial pass** ✅ — restructured `docs/` + added a STYLE guide; `CLAUDE.md` / `README.md`
@@ -43,32 +43,29 @@ determinism hooks + long-run fixtures.
   and **backed out** — tick-work wall-clock is too noise-dominated at this (11× headroom) scale to
   gate on (evidence in `BACKLOG.md`); the regression **tripwire** is deferred to M5 with the rest
   (needs a stable capacity rig).
+- **M5-A** ✅ **Live world visualiser** (`b35a492`, PR #27) — read-only `/ws/observer` JSON
+  bootstrap/world frames, operator page, full-world species/environment rendering, population
+  time-series, session cap, and off-thread latest-wins delivery. Ships disabled by default.
 
 ## Active / Next
 
-1. **⏭ M5 Observability & Operations** — live world visualiser (the unblocker for the gated work
-   below). Inherits the deferred tick-drift regression **tripwire** (absolute p99 / baseline-diff,
-   per-slot timers) from 22.1 — an absolute perf gate needs M5's stable capacity rig to set a
-   meaningful bound. No phase shape drafted yet.
+1. **⏭ M5-B Operations dashboards** — shape the admission/tick/WebSocket health surfaces from the
+   existing actuator and Micrometer signals. No implementation shape is drafted yet.
 
 ## Later
 
-- (M5 promoted to *Active / Next* — see above.)
+- **⏳ M5-C tick scheduling/drift regression tripwire** — the cheap in-test wall-clock ratio was
+  backed out in 22.1. A meaningful absolute-p99 or baseline-diff gate still needs a stable
+  500–1000-bot capacity rig and, ideally, per-slot timers.
+- **⏳ Emergence / balance-tuning campaign** — now eligible to schedule: Phase 21 is stable and
+  M5-A supplies the human spatial-emergence guard. Scheduling still requires an explicit tuning
+  decision; death-cause counts remain observe-only and any automated emergence gate stays ordinal,
+  control-anchored, and `@Tag("slow")`.
+- **⏳ Population Viability phase** (drafted) — unblocked by M5-A; schedule when selected.
 
 ## Gated
 
-- **🚫 Emergence / balance-tuning *campaign*** (env, metabolic, global constants) — the full A/B campaign
-  stays **GUI / M5-gated**: a 1-D scalar can Goodhart-drive the spatial emergence that is the Core Value,
-  so it wants eyes. Death-treadmill sits at prod defaults (~78% starvation) by deliberate deferral.
-  *Measurement/tuning split resolved* — [`docs/notes/headless-feedback-loop-adr.md`](docs/notes/headless-feedback-loop-adr.md)
-  (**Accepted, 2026-07-01**): *measuring* emergence was never blocked, only *tuning* to it. Death-cause
-  **counts are observe-only emergence** (banked to `CLAUDE.md` firewall corollary). The full backlog
-  cluster (path-alpha existence proof, cheap gauge, ensemble-N campaign, foraging assay, invariant/checksum
-  substrate) lives in [`BACKLOG.md`](BACKLOG.md) §Headless feedback-loop + emergence testing. The campaign
-  itself stays gated: **Phase 21 stable AND a spatial-emergence guard exists** (M5 eyes, or a headless
-  spatial invariant). Partially supersedes `MEMORY.md` → balance-tuning-deferred (measuring OK, tuning
-  deferred).
-- **🚫 Population Viability phase** (drafted) — visualiser-gated for the same reason.
+- (No roadmap item is currently blocked on a missing prerequisite; future v4 work remains unshaped.)
 
 ## Horizon
 
@@ -77,15 +74,15 @@ determinism hooks + long-run fixtures.
 
 ## Process lanes (post-GSD habits, run alongside phases)
 
-- **Docs editorial** — see *Active / Next #1*.
+- **Docs editorial** — opportunistic canonical-doc merge-backs; the prior editorial pass is complete.
 - **EARS anchor sweep** — opportunistic. Convert remaining oracle-shared / constant-referential clauses
   into clause-isolating anchors, as piloted on SCHEMA §0 R1/R2. Done: SCHEMA R4/R5/R6 encode-isolating
   anchors (PR #19); HARNESS §0 authored (17 clauses); ADMISSION §0 precedence edges pinned (A25–A27,
   cap-gate arming); rejection token-string literals pinned (A28, `RejectionTokenWireTest`);
-  condition→token routing for the `no-active-entity`/`malformed`/`grid-full` handler tokens pinned
-  (A29/A30/A31); A14/A22 stall-recovery mechanism default-gated (respawn-count restore twin +
-  recognition of existing A10/A12/A13 coverage; E2E stays `@slow`). Remaining ADMISSION §0 hardening:
-  `reconnect-required`/408 routing. Tracked in [`BACKLOG.md`](BACKLOG.md).
+  condition→token routing for the `no-active-entity`/`malformed`/`grid-full`/`reconnect-required`
+  handler tokens pinned (A29/A30/A31/A32); A14/A22 stall-recovery mechanism default-gated
+  (respawn-count restore twin + recognition of existing A10/A12/A13 coverage; E2E stays `@slow`).
+  Remaining marker-shape gaps are tracked in [`BACKLOG.md`](BACKLOG.md).
 - **Deferred / tech-debt** — `999.x` items (offspring agency, verb-role coupling, VT-pinning conversion,
   namespace consolidation, JFR re-baseline) live in [`.planning/ROADMAP.md`](.planning/ROADMAP.md)
   §Backlog and [`BACKLOG.md`](BACKLOG.md). Promote when their trigger fires.

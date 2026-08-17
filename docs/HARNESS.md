@@ -21,7 +21,7 @@ assertion it turns on (the line that would go red — not merely "a test exists"
 tunable magnitude: the cardinality cap (64) is **test-owned** in its fold anchors (each builds its
 own `AttributionTagger(cap, …)` with a small literal cap) and the production default is read back
 through the config accessor (H6); the `32`-char id bound is pinned constant-referentially via
-`AttributionSanitizer.MAX_HARNESS_ID_LENGTH` (H1). Emergence — throughput, tick drift, session
+`AttributionSanitizer.MAX_HARNESS_ID_LENGTH` (H1). Emergence — throughput, tick work-time, session
 stability, and the 5 000-conn/JVM **design ceiling** (§1) — is **not** pinned here; it is observed
 by the Phase 21 benchmark, never asserted in the default suite.
 
@@ -38,8 +38,8 @@ by the Phase 21 benchmark, never asserted in the default suite.
 | H9 | WHEN parsing `--duration` THE SYSTEM SHALL accept an INTEGER seconds value (0 = indefinite) and reject a duration string. | §3 | `LoadHarnessOptionsTest.duration_300seconds_parsesCorrectly` — `durationSeconds…isEqualTo(300)`; `duration_zero_parsesAsForever`; negative control `duration_isoString_exitsNonZero` — `rc…isNotEqualTo(0)` (rejects `PT5S`). |
 | H10 | WHEN parsing `--ramp-up` THE SYSTEM SHALL accept `instant \| rate:<n> \| wave:<c>:<s>` and reject any other syntax. | §3 | `LoadHarnessOptionsTest.rampUp_rate50_parsesCorrectly` — `((RampUpSpec.Rate) h.rampUp).perSecond()…isEqualTo(50)`; `rampUp_instant_/wave_parsesCorrectly`; negative control `rampUp_garbage_exitsNonZero`. |
 | H11 | WHEN parsing `--species-mix` THE SYSTEM SHALL accept `balanced \| <C>:<M>:<S>` (three fractions) and reject a two-fraction ratio. | §3 | `LoadHarnessOptionsTest.speciesMix_threePartRatio_parsesCorrectly`; `speciesMix_balanced_parsesCorrectly`; negative control `speciesMix_twoFractions_exitsNonZero`. |
-| H12 | WHEN writing a report THE SYSTEM SHALL serialize snake_case and publish via atomic temp-rename so a reader never observes a torn file and no residual temp file is left behind. | §6 | `ReportWriterTest.writeOverwrite_fieldNamesAreSnakeCase` (camelCase absent); `writeOverwrite_tmpFileDoesNotExistAfterWrite` — after write, `Files.list(dir)` filtered to `*.tmp` `…isEmpty()` (no residual temp; the impl stages via `Files.createTempFile` random names, so this scans the dir rather than a fixed path — RED-tested against a leave-temp mutant); concurrency `concurrentWriteOverwrite_neverProducesTornFile` (50 VTs, final always parses valid). |
-| H13 | WHEN emitting `server_metrics` THE SYSTEM SHALL include the full `ReportSnapshot.BENCHMARK_METER_NAMES` key set, with `null` for any meter not scraped (fail-soft; a run never fails on a missing meter). | §6 | `ReportSnapshotTest.absentMeterNormalizesToNullValuedCategoryKey` — `serverMetrics().keySet()…containsExactlyInAnyOrderElementsOf(BENCHMARK_METER_NAMES.keySet())` + `get("paralife.tick.work.ms")…isNull()`; `serverMetricsKeyOrderIsDeterministic`; `bareFactoriesDefaultServerMetricsToEmptyNeverNull`. |
+| H12 | WHEN writing an overwrite report or initial JSONL header THE SYSTEM SHALL serialize snake_case into a temp file, atomically replace the target when the filesystem supports it, fall back to replacement otherwise, and leave no residual temp file. | §6 | `ReportWriterTest.writeOverwrite_fieldNamesAreSnakeCase` (camelCase absent); `writeOverwrite_tmpFileDoesNotExistAfterWrite` — after write, `Files.list(dir)` filtered to `*.tmp` `…isEmpty()`; concurrency `concurrentWriteOverwrite_neverProducesTornFile` covers the normal atomic-move path. JSONL counter appends are direct and outside this clause. |
+| H13 | WHEN emitting a counter snapshot's `server_metrics` THE SYSTEM SHALL include the full `ReportSnapshot.BENCHMARK_METER_NAMES` key set, with `null` for any meter not scraped (fail-soft; a run never fails on a missing meter). | §6 | `ReportSnapshotTest.absentMeterNormalizesToNullValuedCategoryKey` — `serverMetrics().keySet()…containsExactlyInAnyOrderElementsOf(BENCHMARK_METER_NAMES.keySet())` + `get("paralife.tick.work.ms")…isNull()`; `serverMetricsKeyOrderIsDeterministic`. Header factories deliberately emit an empty, non-null map. |
 | H14 | WHEN `--report-mode overwrite` THE SYSTEM SHALL merge header+counters into one object retaining header fields; WHEN `append` THE SYSTEM SHALL emit JSONL (header first line, counter lines after). | §6 | `ReportWriterTest.writeOverwrite_secondWriteRetainsHeaderFields` — `harness_id…isEqualTo("test-harness-01")` after 2nd write; `appendJsonl_firstCallWritesHeaderAsJson`; `appendJsonl_subsequentCallsAppendCounterLines` (3 lines); `appendJsonl_eachLineIsIndependentlyParseable`. |
 | H15 | WHEN the run terminates THE SYSTEM SHALL write `exit_reason` ∈ `{duration-reached, signal, fatal-error}` on the final report write. | §6 | `LoadHarnessIntegrationTest.basicRun_exitCode0_reportWritten_snakeCaseFields` — `exit_reason…isEqualTo("duration-reached")`; `signalPathFinalReport_carriesExitReasonAndCounters` — `…isEqualTo("signal")`; enum `shutdownHook_producesGenericSignalReason` — `isIn("duration-reached","signal","fatal-error")`. |
 | H16 | WHEN scraping server meters THE SYSTEM SHALL omit any missing/erroring/stalled meter (never throw) and bound the whole scrape within `TOTAL_BUDGET`. | §11 | `ServerMetricsScraperTest.scrapeOmitsStalledMeterAndStaysWithinBudget` — `out…containsExactly(entry("fast",7.0))` (stalled omitted, not thrown) + `elapsedMs…isLessThan(1000)` (bounded, not `meters × timeout`); `returnsNullForAbsentStatisticOrMalformedJson`. Live control `ScrapeLiveIntegrationTest` — ⚠ `@Tag("slow")`, excluded from `./gradlew test`. |
@@ -63,22 +63,22 @@ a clause because no isolating test pins it:
 
 ### WS:Entity 1:1 (D-05 / D-21)
 
-**The fundamental architectural principle: one WebSocket connection per entity.**
+**The fundamental architectural principle: one WebSocket connection per bot-controlled entity
+while Alive.**
 
 Many concurrent WebSocket connections is a stated architectural goal — Paralife deliberately pursues
 a massively parallel architecture that demonstrates scale via concurrent connections, not via
 multiplexing. All scale-out is done by running more connections (more bots, more harness JVMs),
 never by sharing a single connection across multiple entities.
 
-**WS:entity 1:1** — every entity on the grid has exactly one WebSocket session, and every WebSocket
-session owns exactly one entity during the Alive phase. Enforced by the session FSM in
-`WorldWebSocketHandler` (see `ADMISSION.md §3`). Exception: STALLED-held entities during the
-grace window (Phase 17 D-13) sit on the grid with no active session pending rebind.
+**WS:entity 1:1** — every Alive bot-controlled entity has exactly one WebSocket session, and every
+Alive bot WebSocket session owns exactly one such entity. Rocks and nutrients have no session.
+STALLED-held entities temporarily sit on the grid without an active session pending rebind.
+Enforced by the session FSM in `WorldWebSocketHandler` (see `ADMISSION.md §3`).
 
-**Multi-entity-per-session is strongly discouraged but not banned.** Exceptions are reviewed
-case-by-case; deviation requires an explicit justification in an ADR or future-phase spec. The WS
-FSM, admission gate, resume-token registry, and per-session outbound queue are all designed around
-the 1:1 invariant. Violating it requires redesigning all four.
+**Multi-entity-per-session is not supported.** A future change would require an explicit design
+decision and redesign of the WS FSM, admission gate, resume-token registry, and per-session
+outbound queue.
 
 ### Scale Model (D-01 / D-02)
 
@@ -100,8 +100,8 @@ the 1:1 invariant. Violating it requires redesigning all four.
 | Connections per entity | **1** (invariant) |
 | Entities per connection | **1** (Alive phase) |
 | Scale-out strategy | N independent harness JVMs |
-| Multiplexing | Strongly discouraged; case-by-case ADR if needed |
-| Exception trigger | Explicit justification in ADR or future-phase spec |
+| Multiplexing | Unsupported by the current session/admission design |
+| Future-change trigger | Explicit design decision plus redesign of the WS FSM, admission gate, resume-token registry, and outbound queue |
 
 Cross-reference: `docs/ARCHITECTURE.md §Connection model`; `ADMISSION.md §3` (FSM diagram).
 
@@ -115,7 +115,7 @@ Harness identity rides on the WebSocket **handshake via HTTP headers**:
 
 | Header | Value | When Present |
 |--------|-------|-------------|
-| `X-Paralife-Source` | `operator` \| `harness` \| `unknown` (client-allowed subset of the source taxonomy — see §4) | Always |
+| `X-Paralife-Source` | `operator` \| `harness` \| `unknown` (client-allowed subset of the source taxonomy — see §4) | Always for `BotClient`; optional for arbitrary clients |
 | `X-Paralife-Harness` | `<harness-id>` | Only when `X-Paralife-Source: harness` |
 
 The header path was chosen over:
@@ -330,8 +330,10 @@ grep 'HARNESS overflow' server.log                          # cardinality cap br
 ### Wire Format
 
 All JSON is snake_case (Jackson `PropertyNamingStrategies.SNAKE_CASE` at `ObjectMapper` level;
-Java field names stay camelCase). File is written via atomic temp-rename — external readers never
-observe a half-written file.
+Java field names stay camelCase). Overwrite reports and the initial JSONL header are staged via a
+temp file and atomically replaced when the filesystem supports `ATOMIC_MOVE`; the implementation
+falls back to non-atomic replacement otherwise. JSONL counter records append directly, so a reader
+tailing a live report must tolerate an incomplete trailing line.
 
 ### Header Object
 
@@ -344,7 +346,7 @@ Written once at startup (append mode) or on every write (overwrite mode, merged)
   "target_count": 1000,
   "start_wall_time": "2026-04-28T12:00:00Z",
   "jvm_version": "21.0.6",
-  "build_sha": null
+  "server_metrics": {}
 }
 ```
 
@@ -407,7 +409,7 @@ distinguish them. Operators needing to distinguish should use process supervisor
 | Mode | Behavior |
 |------|----------|
 | `overwrite` (default) | Single JSON object always reflecting current state. `ReportSnapshot.merge(header, counters)` on every write — header fields never lost. |
-| `append` | JSONL — first line is the header object; subsequent lines carry rolling counter objects only. |
+| `append` | JSONL — first line is the header object; subsequent lines carry rolling counter objects only. Live readers must tolerate an incomplete trailing line during append. |
 
 ---
 
@@ -533,9 +535,10 @@ into `ReportSnapshot.serverMetrics()` (Task 3, §6 above).
 
 `tools/benchmark/run-tiers.sh <ws-uri> [duration-seconds]` loops the three benchmark tiers
 (100 / 500 / 1000), invoking `build/libs/*-load-harness.jar` per tier with pinned
-`--ramp-up rate:50`, and writes each tier's report to a **fresh per-sweep directory**
-`reports/run-<epoch-seconds>/bench-<tier>.json` — a new directory per invocation, so a stale
-report from a prior sweep can never satisfy a verify glob. Each tier is gated in-script: a harness
+`--ramp-up rate:50`, and writes each tier's report to a timestamped sweep directory
+`reports/run-<epoch-seconds>/bench-<tier>.json`. The name has one-second resolution and the script
+uses `mkdir -p`, so do not launch two sweeps in the same second or reuse an existing directory;
+otherwise a stale report could satisfy a later verify glob. Each tier is gated in-script: a harness
 non-zero exit **or** a degenerate report (`peak_registered == 0`, or no non-null server metric —
 i.e. a dead / wrong server) is counted as a failure; the loop continues but the sweep exits
 non-zero if any tier failed, rather than masking a bad run as green.

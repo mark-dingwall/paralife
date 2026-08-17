@@ -50,7 +50,7 @@ review remediation). Still untested: the non-200 (404) omit, the junk-200 parse-
 → restore-flag-and-return-partial legs — all trivially mockable via the injected `HttpClient`. Also same file:
 `actuatorBaseFrom` no-port branch and a bare-`NaN`-token parse case are untested; the public
 `ServerMetricsScraper(URI,...)` constructor's load-bearing trailing-slash invariant is undocumented. *Trigger:*
-next touch of `ServerMetricsScraper`, or a P22.1 harness-hardening slice. *Anchor:* `ServerMetricsScraperTest`.
+next touch of `ServerMetricsScraper`, or the next harness-hardening slice. *Anchor:* `ServerMetricsScraperTest`.
 (Surfaced by the Phase 21 post-implementation review, 2026-07-04; budget leg closed 2026-07-05.)
 
 **`EncodeDeflatePerformanceGateTest` must be `@Tag("slow")` when re-enabled (firewall, latent). ~~open~~ RESOLVED 2026-07-06 (Phase 22.1).**
@@ -151,6 +151,16 @@ constant-referential blind spots.
   `held-on-close`, `rebind-stale`, `transport-error-held` (STALLED-lifecycle edge transitions;
   the other 7 of 10 marker shapes are pinned by `AdmissionLogMarkersIntegrationTest` /
   `TickHealthGateIntegrationTest`).
+- **Normalize the orphan `stale-resume-token` rejection.** A post-`tryRebind` race emits the
+  literal `E|400|stale-resume-token` directly from `WorldWebSocketHandler`; it has no
+  `RejectionToken` constant, admission-rejection metric increment, or exact-wire test, so A28's
+  nine-token enum-backed vocabulary does not cover it. Promote it into the taxonomy, metric path,
+  and literal-pinned suite on the next admission-contract change.
+- **Initialize the maintenance gauge from configuration.** Admission honors
+  `AdmissionConfig.maintenance()`, but `AdmissionMetrics` initializes the gauge to zero and no
+  production path calls `setMaintenance`; `/actuator/metrics/paralife.admission.maintenance` can
+  therefore disagree with the live gate after a maintenance-enabled startup. Fix the wiring and
+  add a context-level positive/negative control on the next admission-metrics change.
 
 **Trigger:** opportunistic / next admission-touching change.
 
@@ -159,26 +169,26 @@ constant-referential blind spots.
 `src/test/java/com/paralife/codec/`; strengthens `ADMISSION.md` §0 A4/A6/A14/A22 + the partial/orphan
 deferrals.
 
-## Post-MVP / M005 follow-ups (ex-SCHEMA §13)
+## M5 / post-MVP follow-ups (ex-SCHEMA §13)
 
 **Why:** folded from `SCHEMA.md` §13 (docs editorial pass, Task 2) — the heading stays as a stub
-pointing here. These are M005 / post-MVP **FEATURE** deferrals, not docs housekeeping.
+pointing here. These are remaining M5 / post-MVP **FEATURE** deferrals, not docs housekeeping.
 
-- Precompress fan-out infrastructure (`BroadcastChannel`, `CompressedFrame`) → M005.
-- Visualizer UI + observer endpoint → M005.
+- Precompress fan-out infrastructure (`BroadcastChannel`, `CompressedFrame`) → M5 follow-up.
 - Composite rotation, multi-tick gestation, persistent POISONED debuff, Poisson-disk rock generator,
   per-session pseudonym IDs → post-MVP.
 - Bot memory / fog-of-war / A* / shadowcasting → post-MVP (curCoords is the foundation).
-- FEEDER / ATTACKER / REPRODUCER advanced target-selection heuristics (authority-lite client-side
-  brain branches) → post-MVP (MVP ships fallback-auto + server-side dispatch only).
+- FEEDER / ATTACKER advanced target-selection heuristics (authority-lite client-side brain branches)
+  → post-MVP. REPRODUCER is passive/minimal and server-auto-places; any future client policy for it
+  must preserve that distinct authority model.
 - **`paralife.ws.bytes.saved` metric deferred** — Jetty 12 does not expose per-frame post-deflate byte
   length without reaching into extension internals. Phase 15 ships only `paralife.ws.active.sessions`
   (Gauge) and `paralife.ws.tick.frame.bytes` (DistributionSummary). The bytes-saved Counter lands once
-  Jetty exposes a stable post-deflate length hook, or via observer-phase (M005) fan-out
+  Jetty exposes a stable post-deflate length hook, or via an M5 observer fan-out
   instrumentation. See plan 15-10.
 
-**Trigger:** M005 milestone start (fan-out/visualizer/bytes-saved items); opportunistic for the
-post-MVP feature items.
+**Trigger:** a measured observer fan-out/bytes consumer for those two infrastructure items;
+opportunistic for the post-MVP feature items. The visualiser UI and endpoint shipped in M5-A.
 
 **Anchor:** `SCHEMA.md` §13 (stub); `WebSocketMetrics.java:26` (bytes.saved javadoc);
 `MetricsEndpointIntegrationTest.java:73,79` (deferred-metric assertions).
@@ -259,6 +269,18 @@ Properties / caveats to carry into any implementation:
 **Anchor:** `TickBroadcaster.buildEventsForBot` (+ its `relativeTo`), `Coord.Relative`; `SCHEMA.md`
 §0 R3 + §2/§8.4.
 
+## Tick-id wire exhaustion
+
+**Why:** the compact `T` header encodes `tickId` in exactly three base64 characters. The codec
+rejects values above 262143, so the default 500ms loop reaches the wire limit after about 36.4
+hours of uninterrupted process uptime. The live contract now states the actual bound; the runtime
+behavior still needs an explicit design (wrap with client ordering semantics, widen/version the
+wire field, or reset process state deliberately).
+
+**Trigger:** before claiming multi-day server uptime, or the next compact-wire version change.
+
+**Anchor:** `PerceptionCodec.encodeFixedBase64`, `PerceptionCodec.encodeTick`; `SCHEMA.md` §6.3.
+
 ## Headless feedback-loop + emergence testing (Pelagia harvest)
 
 **Orientation for future-you — read this before the items.** In mid-2026 we investigated *Pelagia*
@@ -276,11 +298,9 @@ Properties / caveats to carry into any implementation:
    ratios** (ordinal "evolved forages ≥3× random", not cardinal "starvation==78%"), and only in
    `@Tag("slow")` — never the default gate. This is why the assay ports and the death-share doesn't.
 
-**Two do-now precursors — NOT filed below (they aren't deferred):** *(a)* bank the firewall label-vs-count
-doctrine + the class-ban into `CLAUDE.md` §Testing philosophy + a memory; *(b)* ratify the ADR (direction
-only — it never converged; ratify the *shape*, not the 5 escalations) and harvest both notes into
-`ROADMAP.md`/here before they rot (they're untracked). Do these first; the items below assume the doctrine
-exists.
+**Completed precursors:** the firewall label-vs-count doctrine and class-ban are in `CLAUDE.md`,
+and the accepted ADR has been harvested into this backlog and `ROADMAP.md`. The items below assume
+that doctrine.
 
 The launch question — *"is a headless feedback **loop** available today?"* — the ADR left open. It answers
 only the cheap *measurement* half (yes). The *loop* half is what **B1 (path-alpha)** actually settles.
@@ -342,10 +362,10 @@ new driver beside `com.paralife.harness`. *Effort: M.*
 **Why:** the actual perturb→measure→compare→adjust loop over N seeds, diffing distributions (not one
 chaotic run vs another).
 
-**Trigger:** **gated** — Phase 21 landed (density/timing stable, else you tune a soon-stale world) **AND**
-a Core-Value guard exists (M5 visualiser is the default guard; a headless spatial-emergence invariant is a
-possible substitute — don't nail the lift to M5-the-artifact, tie it to M5's *function*). Matches the
-`balance_tuning_deferred` stance.
+**Status:** prerequisites satisfied — Phase 21 landed and M5-A supplies the human Core-Value guard.
+The campaign is eligible but still requires an explicit scheduling/tuning decision; availability of
+the visualiser does not authorize a tuning change by itself. A headless spatial-emergence invariant
+remains a possible substitute for unattended work.
 
 **Anchor:** `SimulationConfig` / `MetabolicProfile` (the knobs); `EmergenceStabilityLoadTest`;
 `com.paralife.harness`. *Effort: M+ (campaign).*
@@ -404,19 +424,19 @@ single-run / GoldenTrace use works today.
 firewall doctrine (do-now precursor) ─ everything below references it
     ├─ B1 path-alpha        (independent, opportunistic)
     ├─ B2 cheap gauge ──── B4 campaign ─┐
-    ├─ B3 paired driver ───────────────┤ (gated: Phase 21 stable + Core-Value guard)
+    ├─ B3 paired driver ───────────────┤ (eligible; explicit campaign authorization still required)
     ├─ S1 invariants ─┐
     ├─ S2 checksum  ──┴─ E1 assay scaffold ── E2 real assay (gated: v4.0 genome)
 ```
 
-Zero-gate / actionable now: **B1, E1, S1, S2** (+ the two do-now precursors). Everything else waits on a
-real trigger.
+Zero-gate / actionable now: **B1, E1, S1, S2**. Everything else waits on its named trigger or an
+explicit campaign decision.
 
-**The #5 open question (non-blocking):** *should the tuning deferral ever lift before M5?* Its hazard is
-**not** "can the number move" (B1 settles that) — it is that a 1-D scalar can be *hit while silently
-destroying spatial emergence*. Its unlock is therefore a **spatial-emergence discriminator** — M5's eyes,
-or a headless tuning-invariant spatial-structure test (the E1 family) — **never any 1-D death read.** Stays
-open, non-blocking, M5-gated; matches `balance_tuning_deferred`.
+**The #5 question is resolved by M5-A (2026-08-17).** The hazard was never "can the number move"
+(B1 settles that); it was that a 1-D scalar can be hit while silently destroying spatial emergence.
+The shipped visualiser supplies the required human spatial discriminator, so the prerequisite gate is
+open. Campaign scheduling remains an explicit decision, and a 1-D death read alone is still never a
+safe tuning guard.
 
 ---
 
@@ -502,8 +522,8 @@ deliberate JS error. Deferred per the M5-A review (2026-07-19); not blocking MVP
 
 Findings from the first two visual sessions on the Slice B panel. The observer did not cause any
 of them — it made pre-existing engine behaviour visible for the first time, which is the point of
-building it. Verdicts are from static-read investigation; each cites the line that decides it.
-**None is fixed.** E-1..E-4 came from session 1, E-5..E-9 from session 2.
+building it. E-1/E-2/E-5/E-7/E-8 are resolved below; E-3 is partially addressed; E-4/E-6/E-9 remain
+observational or future work. E-1..E-4 came from session 1, E-5..E-9 from session 2.
 
 ### E-1 · Toxin never reaches zero — every event leaves a permanent stain
 
@@ -748,9 +768,9 @@ Observed across both sessions. **This is the balance-tuning signal that was bein
 tuning was deferred until a GUI existed to give visual feedback, and it now does.
 
 The E-6 table is a plausible mechanism (Catalyst net-zero on feeding, Spore marginal, Membrane
-comfortable) and E-7 removes Catalyst's only escape route. **Neither has been tested** — the
-ordering matching the arithmetic so neatly is exactly when to be suspicious. Confirm before
-tuning on it.
+comfortable), but the original E-7 theory is now historical: the brain no longer emits the discarded
+solo `A` and instead moves toward prey. The extinction ordering has not been re-established after that
+change and the rock-density/env fixes in PR #27. Re-observe before tuning on it.
 
 **Emergence, not mechanism.** Per the constitution clause, population outcomes get no
 default-suite test. Verify by instrumented observation (`DeathDiagnostics` census, which already

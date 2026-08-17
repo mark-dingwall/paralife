@@ -109,7 +109,7 @@ class PerceptionCodecRoundTripTest {
                 // V5 — state-change + event (bonded CAT; reproduced success)
                 "T|001|0A1B|15/80|2|cC:7A|vS",
                 // V6 — LOCOMOTOR full frame (pool + roster + vision + alarm + dmg + FLEEING)
-                "T|004|0A1B|15/80|2|s61R,91F,43C1,+3-21R62,+3+33M32|fF:2E:0F03|v6H3,6N,T3|p120/200|g62,93,+0+21",
+                "T|004|0A1B|15/80|1|s61R,91F,43C1,+3-21R62,+3+33M32|fF:2E:0F03|v6H3,6N,T3|p120/200|g62,93,+0+21",
                 // V7 — authority-lite FEEDER (radius-1 vision)
                 "T|004|0C1E|20/60|1|s21F",
                 // V8 — passive member DEFENDER minimal frame
@@ -121,7 +121,7 @@ class PerceptionCodecRoundTripTest {
                 // V10 — resync (Sync with two active effects, no `f` prefix per SCHEMA §6.2)
                 "S|7A|S:1Fg8,I:1Ef0",
                 // V11 — multi-member alarm (LOCO sees two alarms). Canonical block order per §6.3.1: v before g.
-                "T|005|0A1B|30/100|2|v6N,9N|g62,93,+0+21",
+                "T|005|0A1B|30/100|1|v6N,9N|g62,93,+0+21",
                 // V12 — env-only cell (empty cell with toxin hazard, relative anchor)
                 "T|001|0A1B|15/80|2|s+2+022",
                 // V13 — RLE with per-cell env supplements (rock column of 3 south, all MUTAGEN_ZONE)

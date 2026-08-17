@@ -23,8 +23,8 @@ The canonical, source-referenced specifications. Code javadoc cites these by nam
 
 | Doc | Capability |
 |-----|------------|
-| `SCHEMA.md` | Compact-text wire protocol — frame/block grammars, bitmask layout, round-trip vectors. **Byte-exact contract.** |
-| `ENVIRONMENT.md` | Environment-layer mechanics, including quantized toxin diffusion decay. |
+| `SCHEMA.md` | Wire protocols — byte-exact compact-text bot frames plus the JSON `/ws/observer` frame/rendering contract (§14). |
+| `ENVIRONMENT.md` | Quantized toxin diffusion-decay guarantee (the currently extracted environment contract). |
 | `ADMISSION.md` | Admission control, backpressure, resume-token FSM, STALLED lifecycle |
 | `HARNESS.md` | External load harness, harness-identity attribution, WS:entity 1:1 connection model + design ceilings |
 | `RUNTIME.md` | Per-connection runtime tuning (`paralife.runtime.*`), per-scale-tier JVM presets |
@@ -33,7 +33,7 @@ The canonical, source-referenced specifications. Code javadoc cites these by nam
 
 | Doc | What |
 |-----|------|
-| `ARCHITECTURE.md` | Deep subsystem rationale (outbound concurrency / backpressure FSM, connection model, runtime tuning) — the detail factored out of CLAUDE.md §Architecture |
+| `ARCHITECTURE.md` | Deep subsystem rationale (outbound concurrency / backpressure FSM, connection model, runtime tuning, observer visualiser) — the detail factored out of CLAUDE.md §Architecture |
 | `history/gsd-graduation.md` | Dated decision record: why we graduated off GSD, the reject fence, open questions (archival, non-normative) |
 | `history/leak-audit-2026-06-09.md` | Dated one-off resource-leak investigation (archival reference) |
 | `history/reviews/2026-07-31-observer-render-slice-a.md` | Archived multi-model review of the observer renderer’s first slice, including its later closeout record. |

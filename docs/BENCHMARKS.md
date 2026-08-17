@@ -6,6 +6,11 @@ Real captured evidence from the Task 1–4 pipeline (`tools/benchmark/run-tiers.
 observations**, it does not assert thresholds, and it documents not-sustained tiers honestly
 rather than fabricating a green.
 
+These are **historical fixtures captured on 2026-07-05**, not proof of HEAD capacity. The reports
+record JVM `21.0.6` but no source SHA, effective configuration, host capacity, or JVM flags; project
+defaults have changed since capture. Use them as dated evidence only, not as a baseline comparison
+against current code.
+
 Every figure below traces to a saved report file (`ls docs/benchmarks/`):
 
 ```
@@ -76,9 +81,9 @@ that clock covers connect/ramp-up too).
   run-global peak. These runs (32–50s wall time) are shorter than that window, so no early spike
   should have decayed out of the reported value — but for any future run longer than that window,
   scrape promptly at run-end or treat the MAX as a recency-weighted figure, not a true peak.
-- **Work-time, not drift:** `paralife.tick.work.ms` is per-tick work-time, honestly named. Against
-  a 500ms tick period (`application.yml`), MAX values of ~55–63ms across all three tiers imply
-  actual scheduling drift ≈ 0.
+- **Work-time, not drift:** `paralife.tick.work.ms` is per-tick listener-dispatch work-time. Against
+  a 500ms tick period (`application.yml`), MAX values of ~55–63ms show roughly 437–445ms of nominal
+  work-time headroom; they do **not** measure wake-up or scheduling drift.
 - **Empty-category honesty:** `paralife.backpressure.stalled.total` / `.rebound` /
   `.terminal.dropouts` are eagerly-registered counters — they read `0.0` in **all three** tiers,
   not null, because this run never drove a genuine mid-session outbound-queue stall (that requires
@@ -115,9 +120,10 @@ failure mode, where one exists, is "admission-capped by design," not "degraded/c
 ## M4-close boundary statement
 
 **(a) Validated scale envelope — tiers with real captured evidence:**
-- **100 concurrent bots**: fully validated. All 100 requested connections registered and held for
-  the full run (`peak_registered == current_registered == 100`), zero connect failures, zero
-  admission rejections. `docs/benchmarks/bench-100.json`.
+- **100-bot tier**: the final snapshot recorded `peak_registered == current_registered == 100`,
+  zero initial connect failures, and no admission-rejection meter. The overwrite report has no
+  availability time series, so it does not prove uninterrupted occupancy for the full run.
+  `docs/benchmarks/bench-100.json`.
 - **500 and 1000-bot *target* tiers**: real evidence captured (`docs/benchmarks/bench-500.json`,
   `docs/benchmarks/bench-1000.json`), but the *validated concurrent envelope* both plateau at is the
   configured **admission cap of 256 concurrent sessions** — demonstrated safely and consistently under

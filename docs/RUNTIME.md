@@ -53,7 +53,7 @@ HARNESS.md §1 D-02 ceiling) AND tuning under §2 has been exhausted.
 | `paralife.runtime.jetty.max-frame-size` | 65536 | `Configurable.setMaxFrameSize` | T-20-DOS-1 cap |
 | `paralife.runtime.jetty.max-binary-message-size` | 65536 | `Configurable.setMaxBinaryMessageSize` | bytes |
 | `paralife.runtime.jetty.max-text-message-size` | 65536 | `Configurable.setMaxTextMessageSize` | bytes |
-| `paralife.runtime.jetty.idle-timeout-ms` | 60000 | `Configurable.setIdleTimeout` | Project-current default (Jetty's own default is 30000); also bound via legacy `paralife.websocket.idle-timeout-ms` for back-compat |
+| `paralife.runtime.jetty.idle-timeout-ms` | 60000 | `Configurable.setIdleTimeout` | Project-current default (Jetty's own default is 30000); also bound via legacy `paralife.websocket.idle-timeout-ms` for back-compat. A non-default legacy value wins whenever the runtime value is 60000, even if 60000 was set explicitly; clear the legacy key to pin 60000. |
 | `paralife.runtime.jetty.auto-fragment` | true | `Configurable.setAutoFragment` | |
 | `paralife.runtime.jetty.max-outgoing-frames` | -1 (unlimited) | `Configurable.setMaxOutgoingFrames` | Carve-out: -1 OR positive ≥1. Secondary to Phase 17 D-10 `OutboundSender` bounded queue (primary outbound backpressure signal); -1 = delegate entirely to D-10 queue |
 

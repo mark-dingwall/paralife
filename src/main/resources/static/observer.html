@@ -41,8 +41,9 @@
     </div>
   </div>
   <script type="module">
-    // Rendering lives in three pure modules: marker geometry (observer-markers.js),
-    // world painting (observer-render.js), and legend row data (observer-legend.js),
+    // Rendering lives in four pure modules: marker geometry (observer-markers.js),
+    // world painting (observer-render.js), legend row data (observer-legend.js),
+    // and lightning trail state/geometry (observer-lightning.js),
     // all covered by `./gradlew jsTest`. This page owns only the connection, the
     // panels, the layer-toggle state, and the time series.
     import { SPECIES_COLOR, BACKGROUND_COLOR, CONTENT_SIZE, CELL_PITCH } from "./observer-markers.js";

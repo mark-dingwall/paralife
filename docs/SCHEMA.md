@@ -1,11 +1,13 @@
-# Wire Protocol — Compact-Text Codec
+# Wire Protocols
 
-**Status:** Live capability contract — byte-exact.
+**Status:** Live capability contract — compact-text bot protocol (§§0–13) is byte-exact;
+observer JSON protocol/rendering contract is §14.
 **Pinned by:** `PerceptionCodecRoundTripTest` (round-trip vectors, §10), `PerceptionCodecErrorTest`
 (negative paths + DoS bounds, §12), `TickBroadcasterProjectionTest` (vision / tier projection, §7–§8).
 
-> **Normative layer:** the EARS clauses in **§0** are the contract; the prose sections (§1–§13) are
-> rationale, tables, and worked examples — non-normative unless tagged otherwise.
+> **Normative layer:** the EARS clauses in **§0** are the compact-text contract; the prose sections
+> (§1–§13) are rationale, tables, and worked examples unless tagged otherwise. The separately
+> test-pinned observer contract lives in §14.
 
 ---
 
@@ -21,18 +23,18 @@ tunable defaults.
 |---|---|---|---|
 | R1 | WHEN encoding or decoding any compact field THE SYSTEM SHALL use the single shared 64-char base64 alphabet. | §1 | `Base64CodecTest.decodeDigitMapsEachCharToIndex` — `assertEquals(i, Base64Codec.decodeDigit(c))` across all 64 indices vs a **test-owned** alphabet literal (decode-isolating); `encodeDigitMapsEachIndexToChar` (inverse); `decodeDigitRejectsInvalidChars`. Joint backstop: `PerceptionCodecRoundTripTest.roundTripsExactly`, all 13 vectors. |
 | R2 | WHEN parsing a coordinate token THE SYSTEM SHALL select the form by first-char class: `+`/`-` → 4-char relative, `1`–`9` → numpad, absolute only in fixed positional slots. | §2 | `CoordTest` (decode-isolating, via `decode()` of a hand-authored frame) — `numpadDispatch` (`Numpad('6')`), `relativeDispatch` (`Relative(4,-2)`/`(-4,2)`), `relativeMagnitudeIsPositional` (`Relative(63,5)` from `+-+5` — `-` is digit 63 in the magnitude slot, not a sign), `absoluteIsPositionalOnly` (curX/curY off the fixed header), `invalidFirstCharRejected` (negative + the numpad/relative cases as positive controls). Joint backstop: `roundTripsExactly` V2/V3. |
-| R3 | WHEN a relative coordinate's source offset would exceed ±63 THE SYSTEM SHALL bound it to ±63 before emission, never widening the 4-char relative form. | §2, §8.4 | type invariant `Coord.Relative` ctor (±63 guard, the backstop) + pre-construction producer clamps where offsets *can* be large (`TickBroadcaster.gatherLocoRelativeCells`, `buildRosterIfChanged`); V9 exercises the in-range max. *Reachability investigation (closed): no current producer emits >±63 — composites are size-2 adjacent, solo vision ≤±2; the redundant post-construction codec clamp was removed.* |
+| R3 | WHEN a relative coordinate's source offset would exceed ±63 THE SYSTEM SHALL bound it to ±63 before emission, never widening the 4-char relative form. | §2, §8.4 | type invariant `Coord.Relative` ctor (±63 guard, the backstop) + pre-construction producer clamps for LOCOMOTOR SENSOR-union cells and roster entries (`TickBroadcaster.gatherLocoRelativeCells`, `buildRosterIfChanged`); V9 exercises the in-range max. |
 | R4 | WHEN emitting a block THE SYSTEM SHALL separate list entries with `,` and intra-entry structure with `:`; `;` SHALL NOT appear. | §3 | `PerceptionCodecEncodeContractTest.encodeUsesCommaBetweenEntriesColonIntraEntryNeverSemicolon` (encode-isolating: builds a two-`s`-entry + `f`-effect frame directly, asserts `,` between entries + the primary `code:` intra-entry separator + `;` absent everywhere). Joint backstop: `roundTripsExactly` V6/V13. |
 | R5 | WHEN emitting a spatial block (`s`/`g`/`v`) THE SYSTEM SHALL place coord first; WHEN emitting a type block (`f`/`c`) THE SYSTEM SHALL place code first. | §4 | `PerceptionCodecEncodeContractTest.encodePlacesCoordFirstInSpatialBlockCodeFirstInTypeBlock` (encode-isolating: `s` entry leads with coord, `f` entry leads with code + trailing ctx coord). Only the `f` leg is test-pinned: the `c` type block is code-first *by construction* (§4/§8.2 — it has no coord field, so nothing can misorder), making a `c`-leg assertion unfalsifiable. Joint backstop: `roundTripsExactly` V6. |
 | R6 | WHEN encoding a full `T` frame THE SYSTEM SHALL emit present optional blocks in the order `s, c, f, v, p, g`. | §6.3.1 | `PerceptionCodecEncodeContractTest.encodeEmitsBlocksInCanonicalOrder` (encode-isolating: all-six-blocks frame, asserts prefix sequence `containsExactly('s','c','f','v','p','g')`). Closes a round-trip blind spot — **no §10 vector carries both a `c` and an `f` block**, so a c/f reorder survives `roundTripsExactly`. Joint backstop: V6 + V11 (`v` before `g`). |
 | R7 | WHEN decoding a frame THE SYSTEM SHALL accept exactly the five types `r/S/T/a/E` and reject any other. | §5, §6 | `PerceptionCodecErrorTest.unknownFrameTypeRejected` — `assertTrue(ex.getMessage().contains("Unknown frame type"))` |
-| R8 | WHEN a client registers THE SYSTEM SHALL encode `r\|<entityType>` with type ∈ {C,M,S}. | §6.1 | `RegisterFrameResumeTokenTest.encodeRegisterWithoutToken` — `assertEquals("r\|C", encoded)` |
-| R9 | WHEN syncing THE SYSTEM SHALL encode `S\|<entityId>[\|effects]`, the effects segment present only on resync. | §6.2 | `SyncFrameResumeTokenTest.parseSyncEntityOnly` — `assertEquals("abc-123", sf.entityId())`; V10 |
-| R10 | WHEN a bot is a passive composite member (SENSOR/DEFENDER) THE SYSTEM SHALL send the minimal `T` form (no vision/effects/pool/roster); WHEN authority-lite (FEEDER/ATTACKER/REPRODUCER) THE SYSTEM SHALL set sensorRadius = 1. | §7, §6.3.2 | `TickBroadcasterProjectionTest.compositeSensorMemberReceivesMinimalForm` — `assertThat(frame.isMinimal())…isTrue()`; `authorityLiteFeederHasSensorRadius1` — `assertThat(frame.sensorRadius())…isEqualTo(1)` |
+| R8 | WHEN a client registers THE SYSTEM SHALL encode `r\|<entityType>[\|<resumeToken>]` with type ∈ {C,M,S}; the optional token slot is identified by its `r:` prefix (server-issued tokens are `r:<16-lowercase-hex>`). | §6.1 | `RegisterFrameResumeTokenTest.encodeRegisterWithoutToken` — `assertEquals("r\|C", encoded)`; `encodeRegisterWithToken` — `assertEquals("r\|C\|" + TOKEN, encoded)` |
+| R9 | WHEN syncing THE SYSTEM SHALL encode `S\|<entityId>[\|<resumeToken>][\|<effects>]`; the `r:` prefix disambiguates the optional token from effects. | §6.2 | `SyncFrameResumeTokenTest.parseSyncEntityOnly`, `parseSyncEntityAndToken`, `parseSyncEntityTokenAndEffects`; V10 covers effects without a token. |
+| R10 | WHEN a composite member is passive (SENSOR/DEFENDER/REPRODUCER) THE SYSTEM SHALL send the minimal `T` form; WHEN authority-lite (FEEDER/ATTACKER) THE SYSTEM SHALL set sensorRadius=1; WHEN LOCOMOTOR THE SYSTEM SHALL set sensorRadius=1 and project own adjacency plus the union of SENSOR 5×5 windows. | §7, §6.3.2 | `TickBroadcasterProjectionTest.compositeSensorMemberReceivesMinimalForm`, `authorityLiteFeederHasSensorRadius1`, `locomotorReceivesPoolSnapshotAndRoster`; `CompositePerceptionTest.reproducerMemberReceivesMinimalForm`; `SensorStitchedPerceptionTest.d03Monotonic_addingSensorWidensLocomotorCells`. |
 | R11 | WHEN emitting an error THE SYSTEM SHALL encode `E\|<code>[\|<message>]` with a 3-digit code. | §6.5 | `PerceptionCodecErrorTest.errorFrameRoundTrips` — `assertEquals("E\|429\|respawn cap", encoded)` |
 | R12 | WHEN emitting a vision cell THE SYSTEM SHALL prefix a presence byte (bit 0 entity, bit 1 env) and SHALL NOT emit presence=0 cells; entity kind per the §8.1.1 table. | §8.1, §8.1.1 | `TickBroadcasterProjectionTest.emptyCellsOmittedFromSBlock`; `tickFrameShowsNearbyEntitiesWithCorrectKindCodes` — `assertThat(kindCodeOf(east)).isEqualTo('M')` |
 | R13 | WHEN projecting entity status onto a cell THE SYSTEM SHALL encode STARVING=`0x01`, MUTATING=`0x02`, BUFFED=`0x04`. | §8.1.2 | `TickBroadcasterProjectionTest.entityStateBitConstantsMatchSchema` — `assertThat(EnvironmentEngine.ENTITY_STATUS_STARVING).isEqualTo((byte) 0x01)` (+ MUTATING `0x02`, BUFFED `0x04`) |
-| R14 | WHEN a tick produces a state transition THE SYSTEM SHALL carry at most one `c` token in the frame; on multiple candidates the server picks one (§8.2). | §8.2 | structural: `Frame.TickFrame.change` is `Optional<StateChange>` — singular by type; V5 (`cC:7A`) shows the encoding. Conflict-resolution is server-side emission, not round-trip-pinned (`TickBroadcaster` c-block, currently `Optional.empty()`). |
+| R14 | WHEN encoding a `TickFrame` whose optional state change is present THE SYSTEM SHALL carry exactly one `c` token. | §8.2 | structural: `Frame.TickFrame.change` is `Optional<StateChange>` — singular by type; V5 (`cC:7A`) shows the encoding. `TickBroadcaster` currently leaves it empty. |
 | R15 | WHEN emitting an event THE SYSTEM SHALL accept every code in `Event.ALL_CODES` and reject any unknown code. | §8.4 | `everyEventCodeRoundTrips` (drives `Event.ALL_CODES`); `PerceptionCodecErrorTest.validateEventCodeRejectsZ` — `contains("Unknown event code 'Z'")` |
 | R16 | WHEN a client submits an action THE SYSTEM SHALL accept verbs `M/E/A/R/V/L` and reject any other. | §8.6 | `PerceptionCodecErrorTest.actionRoundTrips` — `assertEquals("a\|M\|8", encoded)`; `unknownActionVerbRejected` |
 | R17 | WHEN any valid frame is decoded then re-encoded THE SYSTEM SHALL produce byte-identical output. | §10 | `PerceptionCodecRoundTripTest.roundTripsExactly` — `assertEquals(wireFrame, reEncoded, …)`, all 13 vectors |
@@ -49,11 +51,9 @@ definition** — it *is* the byte-exact round-trip contract, so there is nothing
 *RED-test evidence (2026-07-07), honest split:* a pure-encode regression breaks byte-exact
 round-trip, so `roundTripsExactly` **co-catches** the R4 (`,`→`;`) and R5 (coord-first-broken)
 perturbations via the §10 vectors — the encode-isolating gain there is the `;`-never leg for frame
-shapes no vector covers, plus clause-named failures. **R6 is the genuine blind-spot closure:** an
+  shapes no vector covers, plus clause-named failures. **R6 is the genuine blind-spot closure:** an
 f-before-c reorder was caught by `encodeEmitsBlocksInCanonicalOrder` **alone** — `roundTripsExactly`
-stayed green because no §10 vector exercises a `c` and an `f` block in the same frame. (R3's >±63 reachability check is now closed: investigation found no producer can emit
->±63 in the current feature set, so the redundant codec clamp was removed and no behavioural fix was
-needed — see the R3 anchor note above.)
+  stayed green because no §10 vector exercises a `c` and an `f` block in the same frame.
 
 ---
 
@@ -133,15 +133,17 @@ Blocks whose entries describe a **type anchor** put code first, coord as trailin
 
 | Char | Direction | Purpose | Frequency |
 |---|---|---|---|
-| `r` | C→S | Register entity type | Once (first msg) + on respawn after death |
-| `S` | S→C | Sync (entity id + effects on resync) | Once per session + on request |
+| `r` | C→S | Register entity type, optionally presenting a resume token | First message; again after terminal `D`/`B` or stalled reconnect |
+| `S` | S→C | Sync (entity id + fresh token + optional effects) | Every successful registration, respawn, or rebind |
 | `T` | S→C | Tick (state + events + effects + vision + composite blocks) | Every tick |
 | `a` | C→S | Action (M/E/A/R/V/L) | 0..1 per tick |
 | `E` | S→C | Error (includes `E|429` on respawn cap) | Opportunistic |
 
 ### World constants not on wire
 
-`worldSize`, `yearTicks`, `seasonAmp`, `reproduceCooldowns` are delivered by shared compiled classes (`com.paralife.config` / `com.paralife.world`) that `BotClient` imports from the same build as the server. Zero wire cost. This replaces the anticipated `season=<season>,<multiplier>` tagged slot in D-07.
+`worldSize`, `yearTicks`, `seasonAmp`, and reproduction constants are not transmitted by this
+protocol. `BotClient` does not import a shared configuration package; behavior that needs a value
+uses data present in the frame or client-local policy.
 
 ---
 
@@ -150,23 +152,29 @@ Blocks whose entries describe a **type anchor** put code first, coord as trailin
 ### 6.1 `r` — Register (client → server)
 
 ```
-r|<entityType>
+r|<entityType>[|<resumeToken>]
 ```
 
 - `<entityType>` ∈ `{C, M, S}` (Catalyst, Membrane, Spore).
+- `<resumeToken>` — optional full token shaped `r:<16-lowercase-hex>`, presented only for stalled rebind.
 
-Sent as the first message on a fresh session, and again on respawn after receiving a `D` (died) event. Server replies `S|...` on success or `E|429` if the per-session respawn cap is reached.
+Sent as the first message on a fresh session, after terminal `D` (died) or `B` (absorbed into a
+bonded pair), and on stalled reconnect with the cached token. Server replies `S|...` on success;
+registration/rebind failures use the admission taxonomy (`docs/ADMISSION.md` §1).
 
 ### 6.2 `S` — Sync (server → client)
 
 ```
-S|<entityId>[|<activeEffects>]
+S|<entityId>[|<resumeToken>][|<activeEffects>]
 ```
 
 - `<entityId>` — base64, ≥ 1 char, unbounded length (server allocates).
+- `<resumeToken>` — optional fresh `r:<16-lowercase-hex>` token. Its `r:` prefix is the positional
+  disambiguator from an effects segment.
 - `<activeEffects>` — **present only on resync** (not on initial register when bot has no history). Same token format as `f` block content but without the `f` prefix: `<code>:<expiryTick>[:<ctx>],...`.
 
-Initial `S` post-`r`: no effects segment. Resync `S` (after reconnect): carries any live effects.
+Every successful registration, respawn, or rebind returns a fresh token. A rebind `S` may also carry
+live effects; initial/respawn sync normally carries no effects.
 
 ### 6.3 `T` — Tick (server → client)
 
@@ -188,17 +196,17 @@ Positional header slots (always present, in this order):
 
 | Slot | Chars | Meaning |
 |---|---|---|
-| `<tickId>` | 4 base64 | Absolute world tick |
+| `<tickId>` | 3 base64 | Absolute world tick, range 0–262143; encoder rejects larger values |
 | `<curX><curY>` | 4 absolute base64 | Self world position (enables FLEEING direction; foundation for post-MVP shadowcasting / A* / memory) |
 | `<energy>/<maxEnergy>` | var | Slash-separated base64 ints |
-| `<sensorRadius>` | 1 base64 | `1` = 3×3 (authority-lite), `2` = 5×5 default, `3` = 7×7 with SENSOR_PLUS_1 |
+| `<sensorRadius>` | 1 base64 | `1` = authority-lite or LOCOMOTOR role signal, `2` = 5×5 default, `3` = 7×7 with SENSOR_PLUS_1. LOCOMOTOR may also receive stitched SENSOR cells beyond its own radius-1 window. |
 
 Tagged optional blocks (letter-prefix, no `=`):
 
 | Prefix | Present when | Contents |
 |---|---|---|
 | `s` | Radius > 0 and at least one non-default cell visible | Vision cell list (§8.1) |
-| `c` | This tick has a state-change transition | Exactly one change token (§8.2) |
+| `c` | Reserved codec-supported state-change transition; `TickBroadcaster` currently emits none | Exactly one change token (§8.2) |
 | `f` | At least one effect newly applied or still active at send-once gate | Effect list (§8.3) |
 | `v` | At least one event fired for this bot last tick | Event list (§8.4) |
 | `p` | Bot is in a composite and has full-authority tier | `<pool>/<maxPool>` shared-pool snapshot |
@@ -212,7 +220,8 @@ Tagged optional blocks (letter-prefix, no `=`):
 T|<tickId>|<curX><curY>|<energy>/<maxEnergy>[|v<event>,...]
 ```
 
-No vision, no effects, no pool, no roster. Alive-check + energy + own events only. SENSOR and DEFENDER receive this form. Substantially smaller.
+No vision, no effects, no pool, no roster. Alive-check + energy + own events only. SENSOR,
+DEFENDER, and REPRODUCER receive this form.
 
 ### 6.4 `a` — Action (client → server)
 
@@ -228,32 +237,43 @@ Grammar per verb in §8.6.
 E|<code>[|<message>]
 ```
 
-- `<code>` — 3-digit numeric HTTP-style (e.g. `429` respawn cap, `400` parse error, `403` unauthorised action).
-- `<message>` — optional human-readable string; clients may log but should not parse.
+- `<code>` — 3-digit HTTP-style numeric. Live server paths use 400, 404, 408, 409, 429, and 503.
+- `<message>` — server-produced admission/malformed errors use stable machine-readable tokens from
+  `ADMISSION.md` §1. `BotClient` interprets `408|reconnect-required` and treats 429 as terminal.
+
+Malformed/admission paths normally send `E`; a STALLED transition closes `SERVICE_RESTARTED` first,
+so its `E|408|reconnect-required` is best-effort and may not reach the client.
 
 ---
 
 ## 7. Authority Tiers
 
-Three tiers determine which `T` form a bot receives and what actions are accepted.
+Three tiers determine which `T` projection a bot receives. They do not form a server-side
+role/verb authorization matrix.
 
-| Tier | Entity types | `T` form | Sensor radius | Actions |
-|---|---|---|---|---|
-| **Full authority** | Solo Particle, Bonded Pair, composite **LOCOMOTOR** | Full, plus `p` + `g` for LOCOMOTOR | 2 (3 with SENSOR_PLUS_1) | M, E, A, R (solo/bonded); V (LOCOMOTOR); L (composite members) |
-| **Authority-lite** | composite **FEEDER**, **ATTACKER**, **REPRODUCER** | Full, no `p`/`g` | 1 (adjacent cells only) | E (FEEDER), A (ATTACKER), R (REPRODUCER), L |
-| **Passive** | composite **SENSOR**, **DEFENDER** | Minimal | — | L only |
+| Tier | Entity types | `T` form | Vision |
+|---|---|---|---|
+| **Full authority** | Solo Particle, Bonded Pair | Full | Radius 2; radius 3 with `SENSOR_PLUS_1` |
+| **Full authority** | composite **LOCOMOTOR** | Full, plus `p` + send-on-change `g` | Header radius 1; own adjacency plus the union of each SENSOR's 5×5 window |
+| **Authority-lite** | composite **FEEDER**, **ATTACKER** | Full, no `p`/`g` | Radius 1 (adjacent cells only) |
+| **Passive** | composite **SENSOR**, **DEFENDER**, **REPRODUCER** | Minimal | None |
 
 **Per-role notes** *(non-normative)*:
-- LOCOMOTOR — V primary; M fallback if size = 1. Sensor scope: Composite-stitched (SENSORs' combined field) — distinct from the radius above. Orchestrates composite movement.
+- LOCOMOTOR — V ballots, or M as a single-choice ballot; receives stitched SENSOR vision and orchestrates composite movement.
 - Bonded Pair — Primary decides.
 - DEFENDER — Passive absorber.
 - SENSOR — feeds stitched vision to LOCOMOTOR.
 
-### Authority-lite rationale
+### Action dispatch
 
-FEEDER / ATTACKER / REPRODUCER see radius-1 (multiple valid targets); they may submit an action to choose, else the server auto-picks a fallback. Phase 15 ships server-side dispatch only (E/A/R verbs + auto-fallback); authority-lite **client-side brain logic** is out of scope for Phase 15 — the MVP `HeuristicBrain` handles solo/bonded/LOCOMOTOR only, and authority-lite brain branches land post-MVP. Tracked in §13.
-
-All composite members (regardless of tier) may submit `a|L` (routed via `BotRegistry` composite lookup — see §8.6 for the alarm delivery mechanics).
+The codec accepts `M/E/A/R/V/L`; the handler requires an active entity but does not enforce a
+role/verb matrix. A composite member that submits any action is dispatched by its role; submitting
+no action performs no role action. On the wire, `M/E/A/R/V` require an argument and only `L` omits
+one. FEEDER ignores any supplied direction. ATTACKER uses a direction when present and auto-targets
+when absent; because composite dispatch is role-based, an argument-less `L` reaches that branch and
+also enqueues an alarm. REPRODUCER discards its syntactic direction and auto-places;
+DEFENDER/SENSOR are passive; and LOCOMOTOR consumes V ballots (or M as a single-choice ballot).
+Solo `A` currently rests.
 
 ---
 
@@ -317,7 +337,7 @@ s<entry>,<entry>,...
 
 | Bit | Flag |
 |---|---|
-| 0 | OVERCROWDED (vision-scoped — Phase 14 D-40, recomputed per bot) |
+| 0 | OVERCROWDED (solo/bonded: recomputed from visible Moore neighbours; composite-member frames: always 0) |
 | 1 | TOXIN_PRESENT |
 | 2 | MUTAGEN_ZONE |
 | 3-5 | reserved |
@@ -361,7 +381,9 @@ Token ends at next `,` or end-of-block. After coord + presence byte, inspect kin
 c<type>[:<ctx>]
 ```
 
-**Exactly one token per tick.** An entity cannot undergo two distinct transitions in the same tick (bonding AND composite-join simultaneously is physically meaningless). If the tick resolution would produce multiple candidates, the server picks one by priority (ties broken randomly) and silently drops the rest. Rare.
+The codec carries at most one token per tick (`Frame.TickFrame.change` is singular). This block is
+reserved in the live broadcaster: `TickBroadcaster` currently emits `Optional.empty()` rather than
+projecting engine transitions.
 
 | Code | Meaning | Context |
 |---|---|---|
@@ -382,7 +404,9 @@ Per-effect shape:
 <code>:<expiryTick>[:<ctx>]
 ```
 
-Temporary, timed. Sent once on initial application unless otherwise noted. `<expiryTick>` is absolute world tick (4 base64 chars per D-06). FLEEING's abs strike coord is in the trailing `<ctx>` slot — abs coords can't live in coord-first parsing because of digit ambiguity with numpad.
+Temporary effects, sent once on initial application unless otherwise noted. `<expiryTick>` is an
+absolute world tick (4 base64 chars per D-06), except infection `I`: the current broadcaster emits
+`0` as an unknown-expiry sentinel. FLEEING's absolute strike coord is in the trailing `<ctx>` slot.
 
 | Code | Meaning | Context | Send rule |
 |---|---|---|---|
@@ -401,7 +425,7 @@ v<event>,<event>,...
 
 Per-event shape:
 
-- No coord, no magnitude: `<code>` — e.g. `S`, `D`.
+- No coord, no magnitude: `<code>` — e.g. `S`, `D`, `B`.
 - No coord, has magnitude: `<code><magnitude>` — e.g. `T3`.
 - Has coord, no magnitude: `<coord><code>` — e.g. `6N`, `+1+0N`.
 - Has coord, has magnitude: `<coord><code><magnitude>` — e.g. `6H3`, `+2-1A5`.
@@ -426,8 +450,11 @@ Magnitude bound to code per the table below; parser knows per-code whether to co
 | `N` | Member alarm (LOCOMOTOR-only) | no | alarming member's cell (rel/numpad) |
 | `S` | Reproduced successfully | no | — |
 | `D` | Died | no | — |
+| `B` | Absorbed into a bonded pair; terminal respawn trigger | no | — |
 
-**Lightning coord range.** Lightning damage is currently surfaced via the `FLEEING` state change, which carries the strike as an **absolute** `XXYY` coord (`fF:` effect context) — so the ±63 relative bound does not bite on the live path. The documented `L`-event-with-relative-coord wire form (Vector 9) would, if emitted, use the same 4-char relative coord as any other `v` event, type-bounded to ±63 by `Coord.Relative`; lightning visibility already requires proximity enough to flee, so >±63 is not reachable in practice. There is NO special 6-char "extended relative" coord for lightning.
+**Lightning coord range.** FLEEING carries the strike as an absolute `XXYY` coord (`fF:` effect
+context). An `L` event uses the standard 4-char relative form and is type-bounded to ±63 by
+`Coord.Relative`; there is no special 6-char "extended relative" coord.
 
 ### 8.5 `g` block — composite roster (coord-first)
 
@@ -435,7 +462,9 @@ Magnitude bound to code per the table below; parser knows per-code whether to co
 g<coord><role>,<coord><role>,...
 ```
 
-Sent **on change only**. Each entry is `<coord><role>` with no `:` separator — both fields are fixed width (coord 1 or 4 chars via prefix rule; role always 1 char from `0`-`5`). Covers all members; `<size>` is derivable as `count(g entries)` so the old `:<size>` field is dropped.
+Sent **on change only** to LOCOMOTOR. Each entry is `<coord><role>` with no `:` separator — both
+fields are fixed width. The recipient LOCOMOTOR is implicit, so `g` lists all **other** members and
+total composite size is `count(g entries) + 1`. An absent `g` means unchanged roster, not empty.
 
 ### 8.6 `a` block — action verbs
 
@@ -454,7 +483,9 @@ a|<verb>[|<arg>]
 
 #### Vote example
 
-`a|V|493` → 1st choice NE, 2nd N, 3rd SE. Resolver runs **IRV** (Instant Runoff): eliminate the lowest-count candidate each round and redistribute by rank until one has majority. Replaces current plurality-only `ActionResolver.resolveLocomotorVote` (src/main/java/com/paralife/engine/ActionResolver.java:957-973). Ties at elimination broken by lowest numpad digit.
+`a|V|983` → 1st choice NE, 2nd N, 3rd SE. `ActionResolver.resolveLocomotorVote` runs
+**IRV** (Instant Runoff): eliminate the lowest-count candidate each round and redistribute by rank
+until one has a majority. Elimination ties use the lowest numpad digit.
 
 #### Alarm example
 
@@ -470,26 +501,26 @@ Decisions from `15-CONTEXT.md` superseded by this schema:
 
 | Decision | Was | Now | Reason |
 |---|---|---|---|
-| **D-07** | `season=<season>,<multiplier>` section on wire | Dropped entirely; client-derives from shared `SimulationConfig` | Zero wire cost; same compiled constants on both ends |
+| **D-07** | `season=<season>,<multiplier>` section on wire | Dropped; no current BotClient shared-config import | Server projects observable consequences through frames instead of publishing simulation constants |
 | **D-09** | Absolute x,y dropped from self | `<curX><curY>` in every `T` header | Required for FLEEING direction; foundation for post-MVP shadowcasting / A* / memory |
 | **D-11** | `R` (Registered) frame carries id | Replaced by `S` (Sync) frame | Single sync concept covers register ack and reconnect resync |
-| **D-13 / D-14** | Events "minimum non-derivable" | Expanded catalogue (E/A/H/T/M/R/L/N/S/D) | Bot reactions simpler with explicit events; deflate amortises |
-| **D-15** | CNS/REP/TX/IF/CURE/LH/STARVED_TICK dropped | E/R/H/T/M kept; LH becomes `<coord>L<X>` event | User preference for explicit events |
-| **D-16** | `CR` reproduce cooldown effect | Dropped from wire | Derivable client-side from shared config |
+| **D-13 / D-14** | Events "minimum non-derivable" | Expanded catalogue (E/A/H/T/M/R/L/N/S/D/B) | Bot reactions simpler with explicit events; deflate amortises |
+| **D-15** | CNS/REP/TX/IF/CURE/LH/STARVED_TICK dropped | E/R/H/T/M kept; `L` remains codec-reserved but is not projected; lightning survivors receive `fF` | Current broadcaster projects alarms only in `v`; lightning reaction uses the FLEEING effect |
+| **D-16** | `CR` reproduce cooldown effect | Dropped from wire | Cooldown remains server-authoritative; no current client constant import |
 | **D-17** | Per-action-cooldown code family | Dropped | No cooldowns on wire at all |
 | **D-18 / D-19** | `cellStatus` + `entityStatus` bytes in token | Same bit layouts, but entry shape changes: coord + presence byte + kind + optional states | Presence byte replaces `:` sentinel options from D-50 #1 |
 | **D-21** | Role codes `L/S/A/T/F` | Role codes `0`-`5` (LOCO / FEED / ATT / DEF / REP / SENS) | Matches `Entity.java` enum; frees letters for other uses |
 | **D-22** | `kind=6` composite + 2-char subcode | Single-char kind `0`-`5` per member kind | Simpler; roster correction. Nutrient gets `F`. |
-| **D-23** | Far-perception marker `<coord><letter>` | Lightning is now `v<coord>L<X>` event, not a `s` marker | Eliminates the `L` ambiguity entirely — D-50 #3 resolved by migrating lightning to events |
-| **D-24** | LOCOMOTOR + FEEDER = authority | 3-tier: full (solo / bonded / LOCO), authority-lite (FEED / ATT / REP), passive (SENS / DEF) | FEEDER / ATT / REP still autonomous but can choose among targets |
-| **D-25** | `cp=<pool>/<maxPool>:<size>` + `cs=...` sensor layout | `p<pool>/<maxPool>` + `g<coord><role>,...` | `:<size>` derivable from `g` count; `=` dropped for consistency; `g` roster covers all members; fixed-width coord+role permits `:` drop |
-| **D-26** | STV-based LOCOMOTOR vote | IRV (proper elimination rounds) | Code currently plurality-only; IRV matches design intent |
+| **D-23** | Far-perception marker `<coord><letter>` | No lightning `s` marker; `L` is reserved in the event codec but not emitted by `TickBroadcaster` | Current clients react to the `fF` survivor effect; event projection remains future work |
+| **D-24** | LOCOMOTOR + FEEDER = authority | Full (solo/bonded/LOCO), authority-lite (FEED/ATT), passive (SENS/DEF/REP); LOCO vision is adjacency + SENSOR union | Phase 20.1 restored the sensory-organ model and made REPRODUCER passive |
+| **D-25** | `cp=<pool>/<maxPool>:<size>` + `cs=...` sensor layout | `p<pool>/<maxPool>` + `g<coord><role>,...` | `=` dropped; recipient LOCO is implicit, so size is `g` count + 1 |
+| **D-26** | STV-based LOCOMOTOR vote | IRV (proper elimination rounds) | Implemented by `ActionResolver.resolveLocomotorVote` |
 | **D-28** | Neighbour IDs dropped | Preserved + bonded-secondary also hidden | Stricter zero-trust |
-| **D-37** | Rock map bulk delivery | Not delivered in bulk; per-cell in vision only (zero-trust). Visualizer / M005 may receive separately | Zero-trust; consistent with "perceive, don't be told" |
+| **D-37** | Rock map bulk delivery | Bot path remains per-cell/zero-trust; observer bootstrap separately carries the full rock map (§14) | Observer is read-only/operator-scoped, not a bot perception channel |
 | **D-45** | `W` (Welcome) + `R` (Registered) frames | `r` + `S` collapse both | Fewer frame types; simpler state machine |
 | **D-46** | Action grammar with `<ranks?>` slot | Unified `a|<verb>[|<arg>]` | Cleaner single-arg grammar |
 | **D-48** | Direction char encoding (alphabetic vs numeric) | **Numpad `1`-`9`** | Single spec covers 8 dirs + `5`=self marker + rank strings |
-| **D-49** | Season multiplier wire encoding | Client-derives via shared config | Zero wire cost |
+| **D-49** | Season multiplier wire encoding | Not transmitted | Bot behavior reacts to projected state rather than shared season constants |
 | **D-50 #1** | Status sentinel Options A/B/C | **Presence bitmask byte** (low 2 bits: entity/env, 4 bits reserved) | Removes ambiguity between kind chars and env state chars; drops `;` entirely; future-expandable |
 | **D-50 #3** | `L` ambiguity disambiguation rule | Lightning moved to events; no `L` marker in `s` block | Collision eliminated by migration |
 | **D-50 #5** | Rock map delivery mechanism | Not delivered; zero-trust per-cell only | See D-37 reversal |
@@ -500,9 +531,9 @@ Decisions from `15-CONTEXT.md` superseded by this schema:
 1. **FLEEING effect + lightning flee mechanic** (D-50 #9 → IN).
 2. **Alarm action `a|L`** + `vN<coord>` event delivery to LOCOMOTOR.
 3. **Proper IRV vote resolution** (replaces plurality).
-4. **Client-side respawn flow** (session stays open post-death; randomised cooldown; `r` re-register; server `S` or `E|429`).
+4. **Client-side terminal flow** (`D`/`B` triggers bare `r` registration; stalled reconnect presents the cached token; server returns `S` or an admission error).
 5. **Coord-first convention** for spatial blocks (`s` / `g` / `v`); code-first for type blocks (`f` / `c`).
-6. **Authority-lite tier** for FEEDER / ATTACKER / REPRODUCER — radius-1 vision; target choice permitted (server-side); client-side brain for authority-lite is post-MVP.
+6. **Composite authority tiers** — FEEDER/ATTACKER radius-1 authority-lite; SENSOR/DEFENDER/REPRODUCER passive; LOCOMOTOR adjacency + SENSOR-union vision.
 7. **Nutrient kind `F`** in `s` block (was missing from initial lock).
 8. **Presence bitmask** in `s` cell tokens (supersedes `;` sentinel from D-50 #1).
 
@@ -538,12 +569,12 @@ These MUST all satisfy `PerceptionCodec.encode(decode(x)) == x` byte-for-byte. I
 | 3 | Rock RLE run (relative anchor + numpad RLE dir, count = additional) | `T\|001\|0A1B\|15/80\|2\|s+4-21R62` |
 | 4 | Mixed-status cell (entity + env states) | `T\|001\|0A1B\|15/80\|2\|s+1+13M32` |
 | 5 | State-change + event (bonding with primary = Catalyst; reproduced success) | `T\|001\|0A1B\|15/80\|2\|cC:7A\|vS` |
-| 6 | LOCOMOTOR full frame (pool + roster + vision + alarm + own dmg + FLEEING) | `T\|004\|0A1B\|15/80\|2\|s61R,91F,43C1,+3-21R62,+3+33M32\|fF:2E:0F03\|v6H3,6N,T3\|p120/200\|g62,93,+0+21` |
+| 6 | LOCOMOTOR full frame (radius-1 role signal; stitched cells may extend farther) | `T\|004\|0A1B\|15/80\|1\|s61R,91F,43C1,+3-21R62,+3+33M32\|fF:2E:0F03\|v6H3,6N,T3\|p120/200\|g62,93,+0+21` |
 | 7 | Authority-lite FEEDER (radius-1 vision of a nutrient south) | `T\|004\|0C1E\|20/60\|1\|s21F` |
 | 8 | Passive member (DEFENDER) minimal frame | `T\|004\|0D2F\|18/50\|v6H3` |
 | 9 | FLEEING active (effect carries abs strike; event carries rel lightning-hit) | `T\|001\|0A1B\|15/80\|2\|fF:2E:0F03\|v+F-3L5` |
 | 10 | Resync (Sync with two active effects, no `f` prefix) | `S\|7A\|S:1Fg8,I:1Ef0` |
-| 11 | Multi-member alarm (LOCO sees two alarms) | `T\|005\|0A1B\|30/100\|2\|v6N,9N\|g62,93,+0+21` |
+| 11 | Multi-member alarm (LOCO sees two alarms) | `T\|005\|0A1B\|30/100\|1\|v6N,9N\|g62,93,+0+21` |
 | 12 | Env-only cell (empty cell with toxin hazard, relative anchor) | `T\|001\|0A1B\|15/80\|2\|s+2+022` |
 | 13 | RLE with per-cell env supplements (rock column of 3 south from W, all MUTAGEN_ZONE) | `T\|001\|0A1B\|15/80\|2\|s43R824,124,-1-124` |
 
@@ -553,8 +584,9 @@ These MUST all satisfy `PerceptionCodec.encode(decode(x)) == x` byte-for-byte. I
 - **Vector 4** — `+1+13M32`: relative (+1,+1), presence=3 (both), kind=M, entityState=3 (STARVING|MUTATING), envState=2 (TOXIN).
 - **Vector 5** — `cC:7A` = bonded primary = Catalyst, new maxEnergy slot `7A` (carried in ctx).
 - **Vector 6** — `43C1` combines "Catalyst at W" + OVERCROWDED into one presence=3 entry (kind=C, no entity state = omitted, envState=1). `R62` run = starter + 2 = 3 rocks east. `fF:2E:0F03` = FLEEING expires tick `2E` with strike coord abs (15, 3).
-- **Vector 9** — `fF:2E:0F03` + `v+F-3L5`: effect stores abs strike (15, 3); event says bot took 5 lightning dmg from relative offset (+15, -3). The relative coord is 4 chars: sign `+`, magnitude `F` (base64 → 15), sign `-`, magnitude `3` (base64 → 3). This is the standard §2 relative form; there is NO 6-char "extended relative" coord. If vision extends only to ±2, the relative coord still parses but falls outside the 5×5 snapshot — acceptable; lightning events can originate off-grid from the vision scope. An L event's source is type-bounded to ±63 by `Coord.Relative` and is not reachable beyond that in practice (see §8.4 lightning coord range note).
-- **Vector 10** — `S:1Fg8,I:1Ef0` = SENSOR_PLUS_1 expires `1Fg8`, MUTATING expires `1Ef0`.
+- **Vector 9** — `fF:2E:0F03` + `v+F-3L5`: effect stores abs strike (15, 3); event says bot took 5 lightning dmg from relative offset (+15, -3). The relative coord is 4 chars: sign `+`, magnitude `F` (base64 → 15), sign `-`, magnitude `3` (base64 → 3). This is the standard §2 relative form; there is no 6-char extended form.
+- **Vector 10** — codec-shape vector: `S:1Fg8,I:1Ef0` carries two explicit expiry values. Live
+  infection projection currently uses `0` as the unknown-expiry sentinel.
 - **Vector 13** — `43R824,124,-1-124`: starter at W is presence=3 rock run of 3 south (`R82`) with envState=4 (MUTAGEN) on starter; supplements at SW (`124` = numpad 1, presence=2, envState=4) and relative (-1,-2) (`-1-124` = presence=2, envState=4). Client merges: 3 rocks in column, each with MUTAGEN_ZONE.
 
 ---
@@ -567,7 +599,7 @@ pinned by §0 R18**.
 - **Single pass.** All grammars are LL(1) given the position rules. No backtracking required.
 - **Character class table.** A 64-entry lookup table (`charToInt[128]`) handles decoding; a 64-char array (`intToChar[64]`) handles encoding. Share between all fields.
 - **Presence bitmask expansion.** Reserve bits 2-5. Future entity-kind flags (e.g. "multi-entity in cell", "cell has special structure") can extend presence without a schema break.
-- **Tagged-block detection.** After the positional header, parser loops on `|`-separated segments, branching on the first char: `s` → vision, `c` → change, `f` → effects, `v` → events, `p` → pool, `g` → roster. Unknown leading char → `E|400` at server, or warn+skip at client (forward compat).
+- **Tagged-block detection.** After the positional header, parser loops on `|`-separated segments, branching on the first char: `s` → vision, `c` → change, `f` → effects, `v` → events, `p` → pool, `g` → roster. Unknown blocks throw `CodecException`; the server maps malformed inbound frames to `E|400|malformed`, while `BotClient` logs and drops malformed inbound payloads.
 - **`a` is the lone client-→server frame** — handler dispatches on first byte only.
 - **DoS bounds.** Codec enforces `MAX_S_ENTRIES = 256` (vision cells per `s` block) and `MAX_V_ENTRIES = 32` (events per `v` block). Exceeding either throws `CodecException` → server emits `E|400`. Bounds are constants in `PerceptionCodec` and documented in Frame javadocs.
 
@@ -602,7 +634,9 @@ Two frame types, distinguished by `type`.
 
 Static terrain only (grid dims + rock coordinates). Never retransmitted.
 
-### `world` — sent every tick, latest-wins (a slow observer skips ticks, never sees a queue backlog)
+### `world` — built/offered once per tick while observers are registered; latest-wins delivery
+
+A slow observer may receive only a subset of offered ticks and never accumulates a queue backlog.
 
 ```json
 {
@@ -642,8 +676,9 @@ subset beyond the always-present `x`, `y`, `kind`:
 | `compositeMember` | `species`, `compositeId`, `role`, `energy`, `brained`, `mutated`?, `buffed`? |
 
 `species` / `primarySpecies` / `secondarySpecies` ∈ `{CATALYST, MEMBRANE, SPORE}`. `role` ∈
-`{LOCOMOTOR, FEEDER, ATTACKER, DEFENDER, REPRODUCER, SENSOR}`. `brained` marks an entity currently
-owned by a connected bot (vs. server-idle/unowned).
+`{LOCOMOTOR, FEEDER, ATTACKER, DEFENDER, REPRODUCER, SENSOR}`. `brained` marks an entity owned by
+`BotRegistry` (vs. server-idle/unowned); it remains true while an entity is held through STALLED
+resume grace even though no bot socket is then connected.
 
 `mutated` is **true-only and optional**: present as the literal `true` exactly when the entity had
 an active infection at capture time (the same `EnvCleanupHooksBean` infection map that drives the

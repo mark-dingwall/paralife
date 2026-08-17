@@ -55,7 +55,7 @@ The loop, graduated off GSD (drop the machinery, keep the habits). These are **a
 - **JaCoCo** — Coverage reporting (XML + HTML)
 - **picocli** — CLI parsing for `LoadHarness` (the in-process `BotRunner` CLI parses its args by hand)
 - **Compact-text wire codec** (`com.paralife.codec`) — hand-rolled protocol on the hot path; Jackson (transitive via Spring) is used only for actuator/JSON, not perception frames
-- **`@ConfigurationProperties`** bound to 16 records — e.g. `GridConfig`, `TickConfig`, `SimulationConfig`, `MetabolicProfile`, `EnvironmentConfig`, `BondingConfig`, `CompositeConfig`, `SeasonsConfig`, `AdmissionConfig`, `JettyRuntimeConfig`, `AppRuntimeConfig`
+- **`@ConfigurationProperties`** bound to 17 records — e.g. `GridConfig`, `RockConfig`, `TickConfig`, `SimulationConfig`, `MetabolicProfile`, `EnvironmentConfig`, `BondingConfig`, `CompositeConfig`, `SeasonsConfig`, `AdmissionConfig`, `ObserverConfig`, `JettyRuntimeConfig`, `AppRuntimeConfig`
 
 ## Conventions
 
@@ -63,7 +63,7 @@ The loop, graduated off GSD (drop the machinery, keep the habits). These are **a
 
 **Data modeling:** Immutable records throughout. Sealed interface for polymorphism (`Entity` permits `Particle`, `Rock`, `Nutrient`, `BondedPair`, `CompositeMember`; `Particle` carries the `ParticleType` species enum CATALYST/MEMBRANE/SPORE, `CompositeMember` a `Role` enum). Mutations produce new instances (`Cell.withOccupant()`, `Entity.Particle.withEnergy()`). Wire frames are modelled by the `com.paralife.codec` record family (`Frame`, `CellEntry`, `Event`, `StateChange`).
 
-**Concurrency:** Single-threaded simulation core (all world mutations in tick event handlers). Virtual threads for I/O (WebSocket, tick loop heartbeat). `ReentrantReadWriteLock` on `WorldGrid` — read lock for snapshots, write lock for mutations.
+**Concurrency:** Tick-time simulation mutations are single-threaded and ordered. Registration, respawn, and connection cleanup also mutate `WorldGrid` on WebSocket threads; its `ReentrantReadWriteLock` protects snapshots and mutations. Virtual threads handle WebSocket I/O and the tick-loop heartbeat.
 
 **Spring patterns:** `@Component` beans for all services. `@EventListener` with `@Order` for tick pipeline sequencing. `@ConfigurationProperties` on records for type-safe config binding. Raw `WebSocketHandler` (not STOMP) for full protocol control.
 
@@ -71,7 +71,7 @@ The loop, graduated off GSD (drop the machinery, keep the habits). These are **a
 
 **Testing philosophy:**
 
-- **Pin mechanics; defer emergence.** Deterministic local mechanics (combat math, energy decay, reproduce cost/cooldown/floor gates, nutrient gain, population census, codec round-trips) belong in fast JUnit tests with assertions pinned to config/spec values. Emergent, statistical outcomes (multi-type survival, population oscillation, niche formation over long runs) are **not** gated in the default suite — they are inherently seed- and tuning-sensitive, so a pinned assertion on them is brittle and breaks the moment entity/env constants are tuned. They live in the opt-in `@Tag("slow")` `EmergenceStabilityLoadTest` (excluded from `./gradlew test`; run via `-PincludeLong=true`) and are otherwise deferred to hyperparameter tuning and the M5 visualiser. **Smell test:** if a "mechanics" test only goes green because the simulation happened to survive a multi-tick run, it is an emergence test in disguise — decompose it into engine-direct assertions on the underlying rule.
+- **Pin mechanics; defer emergence.** Deterministic local mechanics (combat math, energy decay, reproduce cost/cooldown/floor gates, nutrient gain, population census, codec round-trips) belong in fast JUnit tests with assertions pinned to config/spec values. Emergent, statistical outcomes (multi-type survival, population oscillation, niche formation over long runs) are **not** gated in the default suite — they are inherently seed- and tuning-sensitive, so a pinned assertion on them is brittle and breaks the moment entity/env constants are tuned. They live in the opt-in `@Tag("slow")` `EmergenceStabilityLoadTest` (excluded from `./gradlew test`; run via `-PincludeLong=true`) and are otherwise assessed through controlled tuning runs and the live observer visualiser. **Smell test:** if a "mechanics" test only goes green because the simulation happened to survive a multi-tick run, it is an emergence test in disguise — decompose it into engine-direct assertions on the underlying rule.
 
 - **Assert against independent constants, not the code under test.** Expected values are hand-computed literals or config-derived — never recomputed by calling the same production function the test exercises. A self-referential expected value shifts together with the bug and stays green (e.g. assert a starvation-boosted gain equals the literal `10`, not `(int)(base * (1 + boost * StarvationConfig.computeIntensity(...)))`). Pin to the *intended* contract so code drift fails the test, rather than mirroring whatever the code currently computes.
 
@@ -105,6 +105,8 @@ High-level map. Deeper subsystem rationale (outbound concurrency / backpressure 
 | Harness | `com.paralife.harness` | `LoadHarness` — standalone picocli load-test CLI (`./gradlew runHarness` / `loadHarnessJar`); harness-identity attribution (Phase 18) |
 | Metrics | `com.paralife.metrics` | `EmergenceMetrics` (bonded-pairs/composites/buffs/infections), `WebSocketMetrics` |
 | Runtime | `com.paralife.runtime` | `JettyRuntimeConfig`, `AppRuntimeConfig` — Phase 20 per-connection tuning knobs |
+| Diagnostics | `com.paralife.diagnostics` | Flag-gated `DeathDiagnostics` death-cause + lifespan census |
+| Observer | `com.paralife.observer` | `ObserverConfig`, JSON frame builder, broadcaster, latest-wins sender, session gate, handler |
 
 **Tick pipeline** (Spring `@EventListener` on `TickEvent`):
 1. `ResumeTokenRegistry` `@Order(1)` — Grace-expiry sweep; dead-entity cleanup before SimulationEngine
@@ -113,8 +115,8 @@ High-level map. Deeper subsystem rationale (outbound concurrency / backpressure 
 4. `CompositeEnergyDistributor` `@Order(15)` — Composite passive energy drain
 5. `ActionResolver` `@Order(20)` — Drain pending bot actions, resolve verbs `M/E/A/R/V/L` (move / eat / attack / reproduce / composite-vote / alarm)
 6. `EnvPostActionReconciler` `@Order(TICK_ORDER)` — Process env deaths, then drain/apply post-action buff grants (TICK_ORDER=25)
-7. `TickBroadcaster` `@Order(50)` — Per-bot tick frame (5x5 vision, wire bitmask, perception)
-8. `ObserverBroadcaster` `@Order(60)` — Bounded snapshot + serialize-once + non-blocking offer to observer mailboxes (off-thread delivery via `ObserverOutboundSender` drain VTs)
+7. `TickBroadcaster` `@Order(50)` — Role- and buff-dependent vision-scoped tick frames: solo/bonded radius 2 (3 with `SENSOR_PLUS_1`), FEEDER/ATTACKER radius 1, passive roles minimal, and LOCOMOTOR adjacency plus SENSOR-union vision
+8. `ObserverBroadcaster` `@Order(60)` — Full-world snapshot/build/serialize on the tick thread, then non-blocking offer to observer mailboxes; socket delivery runs on `ObserverOutboundSender` drain VTs
 9. `WebSocketKeepaliveService` `@Order(200)` — Keepalive PINGs
 10. `TickHealthMonitor` `@Order(Integer.MAX_VALUE)` — Sample tick wall-time into ring buffer
 
@@ -122,13 +124,13 @@ High-level map. Deeper subsystem rationale (outbound concurrency / backpressure 
 
 | Layer | Surface | Owner | Purpose |
 |-------|---------|-------|---------|
-| 1. Shadow grids | `byte[][] toxinGrid`, `mutagenGrid` (intensity 0–255) | `EnvironmentEngine` | Authoritative effect state; CA diffusion, spline paths, gossip |
+| 1. Shadow grids | `byte[][] toxinGrid` (intensity 0–255), `mutagenGrid` (0 clean; 1–255 categorical strain ID) | `EnvironmentEngine` | Authoritative effect state; CA diffusion, spline paths, gossip |
 | 2. Status caches | `Map<Position,Byte> cellStatusCache`, `Map<String,Byte> entityStatusCache` | `EnvironmentEngine.buildStatusCaches()` | Per-tick read-only bitmask projection (D-41). Derived from layer 1 + registries (BuffRegistry, Infection map). Rebuilt every tick, not a second source of truth |
-| 3. Wire bitmask | `cellStatus` / `entityStatus` bytes carried on the codec `CellEntry` inside each per-bot `Frame` | `TickBroadcaster` `@Order(50)` (per-bot) | Zero-trust vision-scoped bitmask. OVERCROWDED is **redacted per bot**: `cellStatus = (layer2 & ~BIT_OVERCROWDED) \| perBotOvercrowdedBit` — bit 0 recomputed from bot's 5x5 Moore count so outer vision cells correctly under-report global overcrowding (D-40 incomplete-information design) |
+| 3. Wire bitmask | `cellStatus` / `entityStatus` bytes carried on the codec `CellEntry` inside each per-bot `Frame` | `TickBroadcaster` `@Order(50)` (per-bot) | Zero-trust vision-scoped encoding. Solo/bonded frames recompute OVERCROWDED from visible Moore neighbours; composite-member frames always clear bit 0, including LOCOMOTOR SENSOR-union cells |
 
 Bit layout — two separate bytes, defined by `docs/SCHEMA.md` §8.1.2/§8.1.3 (the wire contract):
-- **`cellStatus` / `envState`** (D-38): OVERCROWDED=bit 0 (`0x01`, vision-scoped — redacted per bot), TOXIN_PRESENT=bit 1 (`0x02`), MUTAGEN_ZONE=bit 2 (`0x04`).
-- **`entityStatus` / `entityState`** (D-39): STARVING=bit 0 (`0x01`, projected from `Cell.FLAG_STARVING`), MUTATING=bit 1 (`0x02`, active infection), BUFFED=bit 2 (`0x04`, active survivor buff). There is intentionally **no** entity-level TOXIC bit — "entity on a toxic cell" is derivable from the cell-level TOXIN_PRESENT bit at the same coordinate. `EnvironmentEngine.buildStatusCaches()` is the encoder, `HeuristicBrain` the canonical decoder; both are pinned to these schema literals by contract tests (`TickBroadcasterProjectionTest`, `HeuristicBrainDeterminismTest`).
+- **`cellStatus` / `envState`** (D-38): OVERCROWDED=bit 0 (`0x01`, solo/bonded vision-scoped; always clear for composite members), TOXIN_PRESENT=bit 1 (`0x02`), MUTAGEN_ZONE=bit 2 (`0x04`).
+- **`entityStatus` / `entityState`** (D-39): STARVING=bit 0 (`0x01`, projected from `Cell.FLAG_STARVING`), MUTATING=bit 1 (`0x02`, active infection), BUFFED=bit 2 (`0x04`, active survivor buff). There is intentionally **no** entity-level TOXIC bit — "entity on a toxic cell" is derivable from the cell-level TOXIN_PRESENT bit at the same coordinate. `EnvironmentEngine.buildStatusCaches()` produces the source projection, `TickBroadcaster` is the canonical per-bot wire encoder/redactor, and `HeuristicBrain` is the canonical decoder; contract tests pin the literals.
 
 `Cell.flags` retains `FLAG_OVERCROWDED`/`FLAG_STARVING`; STARVING is both an intrinsic cell flag (set by `SimulationEngine` `@Order(10)`) **and** projected onto `entityStatus` bit 0 at `@Order(14)` so bots can see prey starvation. Env effects do NOT extend `Cell.flags` — intensity values don't fit single bits and cache locality favours per-effect shadow grids.
 
@@ -136,8 +138,9 @@ Bit layout — two separate bytes, defined by `docs/SCHEMA.md` §8.1.2/§8.1.3 (
 - `ParalifeApplication.main()` — Spring Boot startup
 - `TickEngine.onApplicationReady()` (`@EventListener(ApplicationReadyEvent.class)`) — Starts the virtual-thread tick loop (if `paralife.tick.auto-start: true`)
 - `WorldWebSocketHandler` — Client connections at `/ws/world`
+- `ObserverWebSocketHandler` — Read-only operator connections at `/ws/observer`; static page at `/observer.html`
 
-**Error handling:** Graceful degradation. WebSocket errors send an error frame (`E|<code>|<reason>`, e.g. `E|408|reconnect-required`). Tick loop catches exceptions and continues. No exception bubbling.
+**Error handling:** Malformed/admission failures use `E|<code>|<reason>` frames. A slow-client STALLED transition closes with `SERVICE_RESTARTED` first; `E|408|reconnect-required` is best-effort and may not arrive, so recovery follows the close plus resume token. Tick-loop listener failures are contained and the loop continues.
 
 ## Skills (web/mobile fallback)
 

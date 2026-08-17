@@ -1,7 +1,7 @@
 # Admission Control & Backpressure
 
 **Status:** Live capability contract.
-**Pinned by:** `AdmissionGateTest` (token taxonomy + the one pinned precedence edge),
+**Pinned by:** `AdmissionGateTest` (gate routing + precedence edges),
 `ResumeTokenRegistryTest` (resume-token FSM), `TickHealthMonitorTest` (overload gate),
 `OutboundSenderTest` (backpressure).
 
@@ -29,7 +29,7 @@ are pinned two ways. Condition → `RejectionToken.X` *routing*: constant-refere
 **gate-emitted** subset (A1–A6, A25–A27), and by **independent wire literal** for all four
 **handler-emitted** tokens — `no-active-entity`/`malformed`/`grid-full`/`reconnect-required`
 (A29/A30/A31/A32, emitted by `WorldWebSocketHandler`, not `AdmissionGate`). Token *string value*: the
-frozen strings of all 9 §1 tokens are pinned as independent wire literals by A28
+frozen strings of all 9 enum-backed §1 tokens are pinned as independent wire literals by A28
 (`RejectionTokenWireTest`).
 
 | # | Requirement | § | Pinned by — anchor (test method · quoted assertion · symbol) |
@@ -61,7 +61,7 @@ frozen strings of all 9 §1 tokens are pinned as independent wire literals by A2
 | A25 | WHEN the maintenance flag is set THE SYSTEM SHALL reject `maintenance` ahead of every lower guard — over tick-overload (guard 2) and over a reached global cap (guard 5). | §1, §5 | `AdmissionGateTest.maintenanceRejectedEvenWhenOverloaded` — overloaded + maintenance → `token()…isEqualTo(MAINTENANCE)` (maintenance > overload); `maintenanceRejectedEvenWhenCapReached` — cap armed via `seedReservedSlots()` (grid at cap) → `MAINTENANCE` (maintenance > cap). Positive control `seededCapAloneRejectsWorldFull` proves the seed genuinely arms the cap guard (→ `WORLD_FULL` with no higher guard). |
 | A26 | WHEN the tick-health gate is overloaded AND the global cap is already reached THE SYSTEM SHALL reject `tick-overload` (guard 2 > guard 5). | §1, §5 | `AdmissionGateTest.tickOverloadRejectedEvenWhenCapReached` — overloaded + cap armed via `seedReservedSlots()`, then `token()…isEqualTo(TICK_OVERLOAD)`. (Supersedes A4's "cap arg inert" caveat: this genuinely arms the reservation counter.) |
 | A27 | WHEN a valid STALLED resume token is presented AND the global cap is already reached THE SYSTEM SHALL rebind (guard 4 > guard 5), never reject `world-full`. | §1, §4, §5 | `AdmissionGateTest.validRebindWinsOverReachedCap` — `tryRebind` returns present + cap armed via `seedReservedSlots()`, then result `isInstanceOf(AdmissionResult.Rebind.class)`. |
-| A28 | WHEN encoding a rejection `ErrorFrame` that carries a §1 token THE SYSTEM SHALL produce the exact wire literal `E\|<code>\|<token>` verbatim (the frozen string value of the corresponding `RejectionToken` constant, all 9 §1 rows). | §1 | `RejectionTokenWireTest.tokenEncodesToExactWireLiteral` — parameterized over all 9 §1 rows; `PerceptionCodec.encode(new Frame.ErrorFrame(code, Optional.of(RejectionToken.X)))…isEqualTo` an **independent** literal (e.g. `"E\|429\|world-full"`), so renaming any constant's string value goes red. Pins the wire-encoding boundary, **not** condition→token routing (4 of 9 tokens are emitted outside `AdmissionGate`). |
+| A28 | WHEN encoding a rejection `ErrorFrame` that carries an enum-backed §1 token THE SYSTEM SHALL produce the exact wire literal `E\|<code>\|<token>` verbatim (the frozen string value of the corresponding `RejectionToken` constant, all 9 enum-backed rows). | §1 | `RejectionTokenWireTest.tokenEncodesToExactWireLiteral` — parameterized over all 9 `RejectionToken` rows; `PerceptionCodec.encode(new Frame.ErrorFrame(code, Optional.of(RejectionToken.X)))…isEqualTo` an **independent** literal (e.g. `"E\|429\|world-full"`), so renaming any constant's string value goes red. Pins the wire-encoding boundary, **not** condition→token routing. The direct `stale-resume-token` race response is the named unpinned orphan below. |
 | A29 | WHEN an `ActionFrame` (`a\|`) arrives on a session with no active entity (`ATTR_ENTITY_ID` absent) THE SYSTEM SHALL reject `E\|404\|no-active-entity` and SHALL NOT queue the action. | §1 | `WorldWebSocketHandlerTest.actionOnUnregisteredSessionRejectedNoActiveEntity` — captured send `…equals("E\|404\|no-active-entity")` (independent literal) + `verify(actionResolver, never()).queueAction(eq("s1"),…)` isolates the not-queued conjunct (`@SpyBean`). Positive control `actionOnRegisteredSessionIsQueued` — registered session's action → `verify(...).queueAction(eq("s2"),…)`, proving both conjuncts are condition-specific. RED-tested: token swap → reject row red; `return` removed → not-queued row red. |
 | A30 | WHEN inbound text fails codec decode OR decodes to a client-illegal frame direction (`Sync`/`Tick`, server→client only) THE SYSTEM SHALL reject `E\|400\|malformed`. | §1 | `WorldWebSocketHandlerTest.malformedFrameProducesError400` — CodecException path, captured send `…equals("E\|400\|malformed")` (independent literal); `clientIllegalFrameDirectionRejectedAsMalformed` — parameterized `{Sync,Tick}` wire (encode-derived; `assertInstanceOf` precondition proves the illegal-direction arm is reached, not the CodecException fallback), each captured send `…equals("E\|400\|malformed")`. RED-tested: Sync-arm token swap → only the Sync row red, Tick green (per-arm isolation). Covers all 3 `MALFORMED` emit sites. |
 | A31 | WHEN registration placement exhausts the eligible set THE SYSTEM SHALL reject `E\|503\|grid-full`. | §1 | `PlacementDensityIntegrationTest.fillsGridAndReceivesGridFullOnExhaustion` — captured exhaustion-boundary 503 payload `…isEqualTo("E\|503\|grid-full")`, upgrading the prior code-only `startsWith("E\|503")` to the exact token. ⚠ **integration-anchored / non-isolating** (survive-a-run fill; condition→token pinned but not unit-isolated). RED-tested: token swap → red (`was "E\|503\|maintenance"`). |
@@ -104,8 +104,9 @@ only runs for `isRespawn` requests, which the cap guard skips), not a reorderabl
   `StallRecoveryIntegrationTest` `@slow` anchors are retained as the end-to-end overflow-driven wiring
   (run via `-PincludeLong=true`), no longer the sole gate.
 - **Orphans (excluded from §0):** inbound collapse-to-one *behaviour* (only the counter A24 is
-  pinned). → BACKLOG. (`no-active-entity`/404 routing is no longer an orphan — now pinned by A29. The
-  §5 N-1 gauge-lag caveat is a documented observability note, not a deferred item — see §5.)
+  pinned), plus the direct `stale-resume-token` rebind-race response (no `RejectionToken` constant,
+  metric increment, or exact-wire test). → BACKLOG. (`no-active-entity`/404 routing is no longer an
+  orphan — now pinned by A29. The §5 N-1 gauge-lag caveat is a documented observability note.)
 - **Cross-guard precedence edges** beyond A6 — ✅ **now pinned** (A25 maintenance > overload/cap, A26
   overload > cap, A27 rebind > cap): the unit tests arm the `reservedSlots` cap gate via
   `seedReservedSlots()` (the production seed path), with `seededCapAloneRejectsWorldFull` as the
@@ -123,16 +124,19 @@ Wire format: `E|<code>|<token>` — the token slot is always populated for admis
 | HTTP Code | Token | Java Constant | Emitting Site | Cause |
 |-----------|-------|---------------|---------------|-------|
 | 400 | `malformed` | `RejectionToken.MALFORMED` | `WorldWebSocketHandler.handleTextMessage` (codec exception) | Codec / parse failure on any inbound frame |
+| 400 | `stale-resume-token` | — (direct literal; backlog orphan) | `WorldWebSocketHandler.handleRegister` | Token rebind succeeded, but the preserved entity's `BotRegistry` binding was absent at handler commit |
 | 404 | `no-active-entity` | `RejectionToken.NO_ACTIVE_ENTITY` | `WorldWebSocketHandler.handleAction` | Action frame (`a|`) on Unregistered or Dead session |
-| 408 | `reconnect-required` | `RejectionToken.RECONNECT_REQUIRED` | `WorldWebSocketHandler.handleAction` (stall path) | Any inbound frame from a STALLED session; client must drop connection and reconnect |
+| 408 | `reconnect-required` | `RejectionToken.RECONNECT_REQUIRED` | `WorldWebSocketHandler.handleTextMessage` (stall guard) | Any inbound frame from a STALLED session; best-effort send, then close/reconnect |
 | 409 | `already-registered` | `RejectionToken.ALREADY_REGISTERED` | `AdmissionGate.evaluate` | Second `r|` frame while session is Alive |
-| 429 | `world-full` | `RejectionToken.WORLD_FULL` | `AdmissionGate.evaluate` | Global admission cap reached (D-01); current active entity count >= `AdmissionConfig.cap` |
+| 429 | `world-full` | `RejectionToken.WORLD_FULL` | `AdmissionGate.evaluate` | Atomic fresh-registration reservation count is at `AdmissionConfig.cap` |
 | 429 | `respawn-cap` | `RejectionToken.RESPAWN_CAP` | `AdmissionGate.evaluate` | Per-session respawn cap reached (`RespawnConfig.maxRespawnsPerSession`) |
 | 429 | `tick-overload` | `RejectionToken.TICK_OVERLOAD` | `AdmissionGate.evaluate` | Tick-health admission gate firing (D-14); rolling mean tick-work exceeds high-water mark |
 | 429 | `maintenance` | `RejectionToken.MAINTENANCE` | `AdmissionGate.evaluate` | Operator maintenance flag set (`AdmissionConfig.maintenance = true`, D-16) |
-| 503 | `grid-full` | `RejectionToken.GRID_FULL` | `WorldWebSocketHandler.handleRegister` (placement) | Placement RNG exhausted `MAX_PLACEMENT_ATTEMPTS`; server cannot find an empty cell |
+| 503 | `grid-full` | `RejectionToken.GRID_FULL` | `WorldWebSocketHandler.handleRegister` (placement) | Eligible set exhausted or placement attempts cannot win a free cell |
 
-**Token set is closed for Phase 17.** Future phases extend `ADMISSION.md` with new entries.
+The nine `RejectionToken` values are the literal-pinned Phase-17 vocabulary. The direct
+`stale-resume-token` row is a later implementation orphan: live on the wire but not yet normalized
+through the enum/metric/test path (tracked in `BACKLOG.md`).
 
 Reserved but not emitted this phase: ingress-flood token (D-09 chose counter-only, no kill).
 
@@ -157,7 +161,7 @@ machine-readable token from §1 — frame shape unchanged).
 | **Unregistered** | absent | absent | absent | Fresh session, no `r|` received |
 | **Alive** | non-null String | non-null Character | absent | Entity on grid; bot receives tick frames |
 | **Dead** | absent (removed by `markDead`) | non-null | absent | Respawn pending; WS stays open (Phase 15.2 death-pivot) |
-| **STALLED** | absent | absent | Long (tick number) | Outbound queue overflowed; WS closed by server after `E|408|reconnect-required` |
+| **STALLED** | absent | non-null Character (retained) | Long (tick number) | Outbound queue overflowed; WS closes with `SERVICE_RESTARTED`; `E|408|reconnect-required` is best-effort |
 | **Reaped** | — | — | — | Terminal; entity removed from grid, resume token purged |
 
 Predicate definitions:
@@ -169,10 +173,11 @@ Predicate definitions:
 
 - Unregistered → (`r|`, AdmissionGate OK) → Alive
 - Alive → (`D` event, Phase 15.2) → Dead → (`r|` fresh) → Alive (new entityId, WS stays open)
-- Alive → (outbound queue full, D-11) → STALLED (WS closed, `E|408`) → (resume-token re-bind) → Alive (same entityId)
+- Alive → (outbound queue full, D-11) → STALLED (`SERVICE_RESTARTED` close; best-effort `E|408`) → (resume-token re-bind) → Alive (same entityId)
 - STALLED → (grace window expires) → Reaped (entity removed from grid)
-- Death-Pivot vs Stall-Pivot: death keeps the WS open and mints a new entityId on respawn with no
-  token; stall closes the WS, holds the entity for `graceWindowTicks`, and re-binds via resume token.
+- Death-Pivot vs Stall-Pivot: death keeps the WS open and respawns without *presenting* a resume
+  token; successful respawn returns a fresh token. Stall closes the WS, holds the entity for
+  `graceWindowTicks`, and re-binds via the cached resume token.
 
 ---
 
@@ -191,19 +196,22 @@ Stored in `ResumeTokenRegistry` as `Map<String, ResumeEntry>`:
 
 ```
 ResumeEntry {
-    entityId:      String     // BotRegistry's current entity ID at stall time
-    expiresAtTick: long       // currentTick + graceWindowTicks (default 10)
+    entityId:          String
+    originalSessionId: String
+    expiresAtTick:     long
+    state:             ACTIVE | STALLED
 }
 ```
 
-Key is the opaque token string. Registry lives in `com.paralife.admission`.
+Key is the opaque token string. ACTIVE entries use `Long.MAX_VALUE` and are not sweep-reapable;
+`convertToStalled` changes the existing token to STALLED with a finite grace expiry.
 
 ### Re-bind Flow
 
 Client reconnects on a new WebSocket, sends `r|<type>|<resumeToken>`:
 
 1. `AdmissionGate` looks up token in `ResumeTokenRegistry`.
-2. If found and `currentTick <= expiresAtTick`: re-bind entity.
+2. If found, STALLED, and `currentTick < expiresAtTick`: re-bind entity.
    - `BotRegistry` updated: old sessionId removed, new sessionId mapped to existing entityId.
    - Token consumed and purged.
    - Fresh token issued, returned in `S|<entityId>|<newResumeToken>`.
@@ -213,7 +221,7 @@ Client reconnects on a new WebSocket, sends `r|<type>|<resumeToken>`:
 
 `ResumeTokenRegistry.sweep(currentTick)` called each tick at `@Order(1)` (before `SimulationEngine @Order(10)`):
 
-1. Iterate entries where `expiresAtTick < currentTick`.
+1. Iterate STALLED entries where `expiresAtTick <= currentTick`.
 2. Call `cleanupBot(entityId)` — removes entity from grid, clears `BotRegistry` entry.
 3. Remove token from map.
 
@@ -292,14 +300,17 @@ On the first failed offer:
 
 1. Set `ATTR_STALL_TICK` session attribute to `currentTick`.
 2. Remove `entityId` attribute (entity stays on grid under grace).
-3. Remove `entityType` attribute.
-4. Issue resume token, store in `ResumeTokenRegistry`.
-5. Any further inbound frame → `E|408|reconnect-required`, then close WS.
-6. Sender VT interrupted (exits `queue.take()` with `InterruptedException`).
+3. Retain `entityType` for reconnect/respawn state.
+4. Convert the cached ACTIVE resume token to STALLED with a finite expiry.
+5. Close the transport with `SERVICE_RESTARTED`; any later inbound frame gets a best-effort
+   `E|408|reconnect-required` only if the session still reports open.
+6. Sender VT is detached/interrupted.
 
 ### Grace Window (D-12)
 
-Entity held on grid for `graceWindowTicks` (default 10) ticks. `ResumeTokenRegistry` holds `(token → entityId, expiresAtTick)`. If client reconnects with valid token before expiry, entity is re-bound. If grace expires, entity is reaped.
+Entity held on grid for `graceWindowTicks` (default 10) ticks. `ResumeTokenRegistry` holds the
+STALLED entry described in §4. If a client reconnects with a valid token strictly before expiry,
+the entity is re-bound; at the expiry tick it is reaped.
 
 ---
 
@@ -309,17 +320,17 @@ Entity held on grid for `graceWindowTicks` (default 10) ticks. `ResumeTokenRegis
 
 | Metric | Type | Tags | Increment Site |
 |--------|------|------|----------------|
-| `paralife.admission.rejected` | Counter | `reason=<token>` | `AdmissionGate.evaluate()` / handler on each rejection |
-| `paralife.admission.ingress.overwrites` | Counter | (aggregate) | `ActionResolver` on each `pendingActions.put` overwrite |
+| `paralife.admission.rejected` | Counter | `reason`, `source`[, `harness`] | Gate/handler rejection paths that route through `AdmissionMetrics` |
+| `paralife.admission.ingress.overwrites` | Counter | `source`[, `harness`] | `ActionResolver` on each `pendingActions.put` overwrite |
 
 ### Gauges
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| `paralife.admission.active.entities` | Count of cap-relevant occupants | `WorldGrid` live count |
-| `paralife.admission.maintenance` | 0 or 1 | `AdmissionConfig.maintenance()` |
+| `paralife.admission.active.entities` | Count of admitted cap-relevant occupants by `source`[, `harness`] (Alive plus STALLED grace-held entities) | `AdmissionMetrics.activeBuckets`, maintained by handler lifecycle paths |
+| `paralife.admission.maintenance` | Intended 0/1 maintenance state | `AdmissionMetrics.maintenanceState`; startup initialization gap tracked in `BACKLOG.md` |
 | `paralife.tick.health.work-time-ms` | Most recently completed tick work time (ms) | `TickEngine.getLastTickWorkMs()` |
-| `paralife.backpressure.stalled.sessions` | Count of sessions in STALLED grace | `ResumeTokenRegistry.size()` |
+| `paralife.backpressure.stalled.sessions` | Count of sessions in STALLED grace by `source`[, `harness`] | `AdmissionMetrics.stalledBuckets`, maintained by handler lifecycle paths |
 
 ### Log Markers (D-19) *(non-normative — marker string formats are not pinned)*
 
