@@ -186,6 +186,26 @@ class CellularAutomatonTest {
     }
 
     @Test
+    void diffuseStepStrictlyDecaysAtTheSmallestPositiveDoubleRate() {
+        // `1.0 - Double.MIN_VALUE` rounds to 1.0, so flooring alone would leave
+        // this uniform source unchanged. The byte grid must still make one
+        // quantized step when the configuration accepts a positive rate.
+        byte[][] src = {{(byte) 255}};
+        byte[][] decayed = new byte[1][1];
+        byte[][] noDecayControl = new byte[1][1];
+
+        CellularAutomaton.diffuseStep(src, decayed, 1, 1, 0.0, Double.MIN_VALUE, 0, 0);
+        CellularAutomaton.diffuseStep(src, noDecayControl, 1, 1, 0.0, 0.0, 0, 0);
+
+        assertThat(decayed[0][0] & 0xFF)
+                .as("a positive rate must reduce a maximum byte intensity even when floating-point subtraction rounds")
+                .isEqualTo(254);
+        assertThat(noDecayControl[0][0] & 0xFF)
+                .as("the same source remains unchanged when decayRate is zero")
+                .isEqualTo(255);
+    }
+
+    @Test
     void diffuseStepPositiveControlNoDecayHoldsPlateauAtSource() {
         // Positive control: the SAME fixture with decayRate 0.0 must hold at 3 —
         // otherwise a change that simply erodes every grid would pass vacuously.

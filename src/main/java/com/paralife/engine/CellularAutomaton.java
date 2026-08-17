@@ -13,10 +13,11 @@ package com.paralife.engine;
  * formula <code>next = (1 - diffusionRate) * self + diffusionRate * neighbourAvg</code>
  * then <code>next = floor(next * (1 - decayRate))</code>, with a post-decay threshold
  * clear that zeroes any destination cell below {@code threshold} to prevent
- * long-tail spread. Flooring (rather than rounding) the decay step guarantees the
- * grid maximum strictly descends every tick whenever {@code decayRate > 0}; rounding
- * has integer fixed points at low intensities (e.g. {@code round(0.9 * v) == v} for
- * {@code v} in 1..5), which stalls decay and leaves a permanent low-intensity stain.
+ * long-tail spread. Flooring (rather than rounding) the decay step avoids integer
+ * fixed points at low intensities (e.g. {@code round(0.9 * v) == v} for
+ * {@code v} in 1..5). The byte-grid clamp also makes every positive configured rate
+ * lower the grid maximum by at least one quantized intensity, including rates too
+ * small for {@code 1.0 - decayRate} to differ from {@code 1.0} in IEEE-754.
  */
 public final class CellularAutomaton {
 
@@ -42,6 +43,13 @@ public final class CellularAutomaton {
                                    int width, int height,
                                    double diffusionRate, double decayRate,
                                    int threshold, int radius) {
+        int sourceMax = 0;
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                sourceMax = Math.max(sourceMax, src[x][y] & 0xFF);
+            }
+        }
+
         int nonZero = 0;
         for (int x = 0; x < width; x++) {
             for (int y = 0; y < height; y++) {
@@ -62,6 +70,9 @@ public final class CellularAutomaton {
                         : 0.0;
                 double mixed = (1.0 - diffusionRate) * self + diffusionRate * neighbourAvg;
                 int after = (int) Math.floor(mixed * (1.0 - decayRate));
+                if (decayRate > 0.0 && sourceMax > 0 && after >= sourceMax) {
+                    after = sourceMax - 1;
+                }
                 if (after < threshold) after = 0;
                 if (after > 255) after = 255;
                 if (after < 0) after = 0;

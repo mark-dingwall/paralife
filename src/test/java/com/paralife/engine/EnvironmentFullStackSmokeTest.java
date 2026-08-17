@@ -1,10 +1,17 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.paralife.codec.CellEntry;
 import com.paralife.codec.Frame;
 import com.paralife.codec.PerceptionCodec;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
+import java.net.URI;
+import java.util.Optional;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import org.eclipse.jetty.websocket.api.Callback;
 import org.eclipse.jetty.websocket.api.Session;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
@@ -22,14 +29,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.TestPropertySource;
-
-import java.net.URI;
-import java.util.Optional;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Plan 14-06 Task 3: SUPPLEMENTAL full-stack smoke test.
@@ -69,8 +68,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p><b>Scope:</b> this is SUPPLEMENTAL to the roadmap-literal
  * {@link EnvironmentPhaseGateIntegrationTest}. This test guards the WebSocket
- * wire coverage only; it does NOT enforce full-pipeline population stability
- * or all four env-effect firing assertions.
+ * wire coverage only; it does NOT enforce population outcomes or all four
+ * env-effect firing assertions.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {

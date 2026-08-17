@@ -24,6 +24,7 @@ The canonical, source-referenced specifications. Code javadoc cites these by nam
 | Doc | Capability |
 |-----|------------|
 | `SCHEMA.md` | Compact-text wire protocol — frame/block grammars, bitmask layout, round-trip vectors. **Byte-exact contract.** |
+| `ENVIRONMENT.md` | Environment-layer mechanics, including quantized toxin diffusion decay. |
 | `ADMISSION.md` | Admission control, backpressure, resume-token FSM, STALLED lifecycle |
 | `HARNESS.md` | External load harness, harness-identity attribution, WS:entity 1:1 connection model + design ceilings |
 | `RUNTIME.md` | Per-connection runtime tuning (`paralife.runtime.*`), per-scale-tier JVM presets |
