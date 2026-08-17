@@ -16,8 +16,11 @@ import com.paralife.world.Position;
  * @param originCell    cell where the first strain byte was stamped
  * @param lifetimeTicks total ticks the event remains active (driven by
  *                      {@code config.mutagen().outbreakLifetimeTicks()})
+ * @param growTicks     ticks the bloom keeps gossiping outward before the front
+ *                      freezes (a random draw in the configured min..max range);
+ *                      the natural size bound now the radius cap is gone
  */
-public record MutagenEvent(long spawnTick, Position originCell, int lifetimeTicks) {
+public record MutagenEvent(long spawnTick, Position originCell, int lifetimeTicks, int growTicks) {
 
     public MutagenEvent {
         if (originCell == null)
@@ -25,6 +28,9 @@ public record MutagenEvent(long spawnTick, Position originCell, int lifetimeTick
         if (lifetimeTicks <= 0)
             throw new IllegalArgumentException(
                     "lifetimeTicks must be > 0: " + lifetimeTicks);
+        if (growTicks <= 0)
+            throw new IllegalArgumentException(
+                    "growTicks must be > 0: " + growTicks);
     }
 
     /**
@@ -32,5 +38,13 @@ public record MutagenEvent(long spawnTick, Position originCell, int lifetimeTick
      */
     public boolean isExpired(long tick) {
         return tick >= spawnTick + lifetimeTicks;
+    }
+
+    /**
+     * True while the bloom is still spreading — {@code tick} is within {@code growTicks}
+     * of the spawn. Once false, gossip stops and the front is frozen where it stood.
+     */
+    public boolean isGrowing(long tick) {
+        return tick < spawnTick + growTicks;
     }
 }

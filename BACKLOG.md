@@ -580,6 +580,12 @@ outbreak's `spawnTick` (`77f4e99`, EARS-4). Defect 3 (whole-field one-tick clear
 runs every tick rather than only when idle, so blooms age out rolling rather than vanishing together
 (`fa17c26`, EARS-5). Intensity-attenuation redraw was **not** taken (out of scope — see E-3).
 
+**Follow-up (observer tuning): the `max-radius` cap was dropped.** The Chebyshev cap drew a hard
+square and needed an arbitrary magnitude. It is replaced by a per-outbreak **grow-window**: the
+bloom gossips outward for a random `grow-ticks-min..max` (default 30..60) ticks, then the front
+freezes — a time bound that is now the natural size cap (and tunable, later, from the observer
+controls). Defect 1 stays resolved via a different mechanism; EARS-4/EARS-5 are unchanged.
+
 ### E-3 · Mutagen bloom shape is a near-solid diamond, not a ragged front
 
 Wanted: a more irregular, organic bloom. The current shape is 8-neighbour Moore with
@@ -595,6 +601,12 @@ neighbour instead of a repeating one, or an anisotropic / noise-modulated probab
 **Emergence, not mechanism** — bloom shape is tuning-sensitive and cannot be phrased as an EARS
 clause. Per the constitution clause it gets no default-suite test; judge it by eye on the
 visualiser, and pin at most a tuning-invariant ordinal ratio in the `@Tag("slow")` suite.
+
+**Partially addressed (MVP, observer tuning).** The grow-window (see E-2 follow-up) freezes the
+Moore front mid-advance, so the bloom stops while its frontier is still ragged instead of filling to
+a solid square. Good enough by eye for now; the *mechanism* pinned is only "gossip stops after
+`growTicks`" (`MutagenGrowthTest`) — the raggedness itself stays observe-only emergence. A genuinely
+organic front (per-cell susceptibility / one-shot rolls) is still the fuller fix if wanted.
 
 ### E-4 · No way to watch life without running bots
 

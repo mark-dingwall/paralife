@@ -536,10 +536,13 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         mutagenGrid[ox][oy] = (byte) strain;
         mutagenLastReinforcedTick[ox][oy] = tickNumber;
 
+        // Random grow window in [min, max] — the natural size bound (no radius cap).
+        int growTicks = cfg.growTicksMin()
+                + rng.nextInt(cfg.growTicksMax() - cfg.growTicksMin() + 1);
         activeMutagen = new MutagenEvent(tickNumber, new Position(ox, oy),
-                cfg.outbreakLifetimeTicks());
-        log.debug("Mutagen spawned: tick={} origin=({},{}) strain={} lifetime={}",
-                tickNumber, ox, oy, strain, cfg.outbreakLifetimeTicks());
+                cfg.outbreakLifetimeTicks(), growTicks);
+        log.debug("Mutagen spawned: tick={} origin=({},{}) strain={} lifetime={} growTicks={}",
+                tickNumber, ox, oy, strain, cfg.outbreakLifetimeTicks(), growTicks);
     }
 
     /**
@@ -572,7 +575,10 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
             activeMutagen = null;
         }
 
-        if (activeMutagen != null) {
+        // Gossip only while the bloom is still growing. Once growTicks elapse the
+        // front freezes where it stood — a random, mid-advance Moore frontier reads
+        // ragged, and growTicks is the natural size bound (no radius cap).
+        if (activeMutagen != null && activeMutagen.isGrowing(tickNumber)) {
             // Gossip propagation — double-buffered CA-like step.
             // Copy current grid into next buffer, then layer gossip additions on top.
             for (int x = 0; x < w; x++) {
@@ -603,16 +609,6 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
                                 if (mutated <= 0) mutated = 1;
                                 if (mutated > 255) mutated = 255;
                             }
-                            // EARS-3: radius cap, checked AFTER both RNG draws above.
-                            // Hoisting this above the probability/mutation rolls would
-                            // save a wasted draw for rejected neighbors, but it would
-                            // also remove draws from the shared rng stream, shifting
-                            // every subsequent draw and moving the spawn ticks of
-                            // toxin, mutagen and lightning. Leave the waste in place.
-                            Position origin = activeMutagen.originCell();
-                            int distX = Math.min(Math.abs(nx - origin.x()), w - Math.abs(nx - origin.x()));
-                            int distY = Math.min(Math.abs(ny - origin.y()), h - Math.abs(ny - origin.y()));
-                            if (Math.max(distX, distY) > cfg.maxRadius()) continue;
                             mutagenGridNext[nx][ny] = (byte) mutated;
                             mutagenLastReinforcedTick[nx][ny] = tickNumber;
                         }
@@ -1683,13 +1679,18 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         tickBuffsAndInfections(tickNumber);
     }
 
-    /** Test helper — force a new mutagen outbreak starting at the given origin. */
+    /** Test helper — force a new mutagen outbreak that grows for its whole lifetime. */
     void forceSpawnMutagenForTest(long tickNumber, Position origin, int strain, int lifetime) {
+        forceSpawnMutagenForTest(tickNumber, origin, strain, lifetime, lifetime);
+    }
+
+    /** Test helper — force an outbreak with an explicit grow window (for grow-stop tests). */
+    void forceSpawnMutagenForTest(long tickNumber, Position origin, int strain, int lifetime, int growTicks) {
         int x = origin.x();
         int y = origin.y();
         mutagenGrid[x][y] = (byte) Math.clamp(strain, 1, 255);
         mutagenLastReinforcedTick[x][y] = tickNumber;
-        activeMutagen = new MutagenEvent(tickNumber, origin, lifetime);
+        activeMutagen = new MutagenEvent(tickNumber, origin, lifetime, growTicks);
     }
 
     /** Test helper — expose active mutagen event. */
