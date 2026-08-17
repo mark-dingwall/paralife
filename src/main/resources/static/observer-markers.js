@@ -15,6 +15,7 @@ export const SPECIES_COLOR = {
 export const UNKNOWN_SPECIES_COLOR = "#888";
 export const NUTRIENT_COLOR = "#7a5";
 export const MUTATION_COLOR = "#ff0";
+export const BUFF_COLOR = "#0FF";
 export const GRID_COLOR = "#333";
 export const BACKGROUND_COLOR = "#000";
 export const ROCK_COLOR = "#555";
@@ -36,7 +37,7 @@ export function compositeCueColor(compositeId) {
 
 /**
  * Drawing operations for one occupant, in paint order (identity first, cues on top).
- * `entity` is a world-frame entity DTO; `mutated` is true-only on the wire.
+ * `entity` is a world-frame entity DTO; `mutated` and `buffed` are true-only on the wire.
  */
 export function markerOps(entity) {
   const ops = [];
@@ -101,6 +102,12 @@ export function markerOps(entity) {
   if (entity.mutated) {
     // Inset one pixel so it coexists with — rather than overwrites — the hollow shell.
     ops.push(outline(1, 1, CONTENT_SIZE - 2, CONTENT_SIZE - 2, MUTATION_COLOR));
+  }
+
+  if (entity.buffed) {
+    // Survivor-buff cue: a full-cell cyan shell — the outer ring, distinct from the
+    // inset mutation ring, so a buffed+mutated entity shows both.
+    ops.push(outline(0, 0, CONTENT_SIZE, CONTENT_SIZE, BUFF_COLOR));
   }
 
   return ops;

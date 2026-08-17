@@ -37,7 +37,7 @@ class ObserverBroadcasterTest {
     void setUp() {
         worldGrid = new WorldGrid(new GridConfig(16, 16));
         env = mock(EnvironmentEngine.class);
-        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of(), Set.of()));
+        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of(), Set.of(), Set.of()));
         botRegistry = new BotRegistry();
         spawnCounter = new SpeciesSpawnCounter();
         sender = mock(ObserverOutboundSender.class);

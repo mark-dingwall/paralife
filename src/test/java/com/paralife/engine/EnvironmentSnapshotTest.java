@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test;
 class EnvironmentSnapshotTest {
 
     /** Engine plus the canonical hooks bean that owns the live infection map. */
-    private record Rig(EnvironmentEngine engine, EnvCleanupHooksBean hooks) {}
+    private record Rig(EnvironmentEngine engine, EnvCleanupHooksBean hooks, BuffRegistry buffs) {}
 
     private static EnvironmentEngine newEngine(int dim) {
         return newRig(dim).engine();
@@ -50,7 +50,7 @@ class EnvironmentSnapshotTest {
                 cfg, buffs, FertilityConfig.defaults(), finalizer, hooks,
                 (ToxinPathGenerator) null, new Random(42L));
         hooks.registerCompostSink(env::applyCompost);
-        return new Rig(env, hooks);
+        return new Rig(env, hooks, buffs);
     }
 
     @Test
@@ -112,18 +112,21 @@ class EnvironmentSnapshotTest {
         List<EnvironmentSnapshot.Strike> lightning =
                 new ArrayList<>(List.of(new EnvironmentSnapshot.Strike(3, 3, 4)));
         Set<String> infected = new HashSet<>(Set.of("e1"));
+        Set<String> buffed = new HashSet<>(Set.of("e2"));
 
-        EnvironmentSnapshot snap = new EnvironmentSnapshot(toxin, mutagen, lightning, infected);
+        EnvironmentSnapshot snap = new EnvironmentSnapshot(toxin, mutagen, lightning, infected, buffed);
 
         toxin.add(new EnvironmentSnapshot.EnvCell(9, 9, 99));
         mutagen.add(new EnvironmentSnapshot.EnvCell(9, 9, 99));
         lightning.add(new EnvironmentSnapshot.Strike(9, 9, 4));
         infected.add("intruder");
+        buffed.add("intruder");
 
         assertThat(snap.toxin()).containsExactly(new EnvironmentSnapshot.EnvCell(1, 1, 10));
         assertThat(snap.mutagen()).containsExactly(new EnvironmentSnapshot.EnvCell(2, 2, 20));
         assertThat(snap.lightning()).containsExactly(new EnvironmentSnapshot.Strike(3, 3, 4));
         assertThat(snap.infectedIds()).containsExactly("e1");
+        assertThat(snap.buffedIds()).containsExactly("e2");
     }
 
     /**
@@ -143,5 +146,24 @@ class EnvironmentSnapshotTest {
         assertThat(rig.engine().snapshot().infectedIds())
                 .as("the engine seam projects the live infection key set")
                 .containsExactly("infected-1");
+    }
+
+    /**
+     * R1 (production seam) — the engine actually supplies the active buff ids from the
+     * BuffRegistry, same non-empty predicate as the bot wire's BUFFED bit. Clean control
+     * proves an always-populated set cannot pass.
+     */
+    @Test
+    void snapshotCarriesActiveBuffIdsFromTheBuffRegistry() {
+        Rig rig = newRig(16);
+
+        assertThat(rig.engine().snapshot().buffedIds())
+                .as("control: no buff granted → empty").isEmpty();
+
+        rig.buffs().grant("buffed-1", BuffRegistry.BuffType.ATTACK_PLUS_1, 100L);
+
+        assertThat(rig.engine().snapshot().buffedIds())
+                .as("the engine seam projects entities with an active buff")
+                .containsExactly("buffed-1");
     }
 }

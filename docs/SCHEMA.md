@@ -636,10 +636,10 @@ subset beyond the always-present `x`, `y`, `kind`:
 
 | `kind` | Fields present |
 |---|---|
-| `particle` | `species`, `energy`, `brained`, `mutated`? |
+| `particle` | `species`, `energy`, `brained`, `mutated`?, `buffed`? |
 | `nutrient` | `energy` (nutrient level) |
-| `bondedPair` | `primarySpecies`, `secondarySpecies`, `energy`, `brained`, `mutated`? |
-| `compositeMember` | `species`, `compositeId`, `role`, `energy`, `brained`, `mutated`? |
+| `bondedPair` | `primarySpecies`, `secondarySpecies`, `energy`, `brained`, `mutated`?, `buffed`? |
+| `compositeMember` | `species`, `compositeId`, `role`, `energy`, `brained`, `mutated`?, `buffed`? |
 
 `species` / `primarySpecies` / `secondarySpecies` ∈ `{CATALYST, MEMBRANE, SPORE}`. `role` ∈
 `{LOCOMOTOR, FEEDER, ATTACKER, DEFENDER, REPRODUCER, SENSOR}`. `brained` marks an entity currently
@@ -648,8 +648,13 @@ owned by a connected bot (vs. server-idle/unowned).
 `mutated` is **true-only and optional**: present as the literal `true` exactly when the entity had
 an active infection at capture time (the same `EnvCleanupHooksBean` infection map that drives the
 bot-facing `entityStatus` MUTATING bit, §8.1.3), and **omitted entirely** when clean — never sent as
-`false`. Nutrients never carry it. The field is additive and ignored by existing consumers, so
-`schemaVersion` remains `1`.
+`false`. Nutrients never carry it. Bot and observer projections sample that shared map at different
+pipeline stages, so a post-action cure can make them differ for one tick. The field is additive and
+ignored by existing consumers, so `schemaVersion` remains `1`.
+
+`buffed` follows the same true-only rule: present as `true` when the entity has any active survivor
+buff at capture time (sourced from `BuffRegistry`, the same non-empty predicate as the bot-facing
+`entityStatus` BUFFED bit, §8.1.3), omitted when it has none. Also additive; `schemaVersion` stays `1`.
 
 #### `env` — per-cell env layers, non-zero cells only
 
@@ -657,9 +662,10 @@ bot-facing `entityStatus` MUTATING bit, §8.1.3), and **omitted entirely** when 
 - `mutagen: [{x, y, strain}]` — `strain` is a **categorical id** (1–255), NOT a magnitude — render
   it as a distinct category, not an intensity gradient.
 - `lightning: [{x, y, radius}]` — strike centres applied on this tick only. `radius` is the
-  **Euclidean** outer radius of the damaged disc (every cell with `sqrt(dx²+dy²) ≤ radius` was hit),
-  so the renderer draws the true affected area rather than the centre alone. Additive key, ignored
-  by existing consumers — `schemaVersion` stays `1`.
+  **Euclidean** outer radius of the affected disc. Cells inside the configured inner radius take
+  damage; the remaining outer annulus receives fertility only (the inner radius is not carried on
+  the wire). The renderer therefore draws the full affected area rather than only the centre.
+  Additive key, ignored by existing consumers — `schemaVersion` stays `1`.
 
 #### Rendering contract (`observer.html` + `observer-markers.js` + `observer-render.js`)
 
@@ -685,9 +691,10 @@ layer; unchecking hides that layer. A repaint runs on both a fresh frame and a t
 | `bondedPair` | two triangles split on the main diagonal; the **primary owns the diagonal** and is one pixel larger |
 | `compositeMember` | full species fill plus a strictly smaller 2×2 cue whose hue derives from `compositeId` (stable per organism) |
 | any, `mutated` | inset 3×3 hollow `#ff0` cue, drawn over the marker so it coexists with the hollow shell |
+| any, `buffed` | full-cell hollow `#0FF` shell drawn over the marker — the outer ring, coexists with the inset mutation cue |
 
 Species colours are exact: Catalyst `#e34`, Membrane `#3d8`, Spore `#59f`. An unknown species falls
-back to `#888`.
+back to `#888`; rock is `#555`; an arrival-frame lightning strike is `#ffb`.
 
 **Layer order** is exactly: background → grid → rocks → toxin → mutagen → entities → lightning.
 Rocks sit **below** the environment field, so toxin or mutagen on a rock cell stays visible (rocks

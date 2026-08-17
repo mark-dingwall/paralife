@@ -43,7 +43,7 @@ class ObserverBootstrapOrderingTest {
     void bootstrapIsSentBeforeTheObserverIsRegistered_andWorldNeverPrecedesIt() throws Exception {
         WorldGrid grid = new WorldGrid(new GridConfig(16, 16));
         EnvironmentEngine env = mock(EnvironmentEngine.class);
-        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of(), Set.of()));
+        when(env.snapshot()).thenReturn(new EnvironmentSnapshot(List.of(), List.of(), List.of(), Set.of(), Set.of()));
         ObserverFrameBuilder builder = new ObserverFrameBuilder();
         ObserverOutboundSender sender = new ObserverOutboundSender();
         ObserverBroadcaster broadcaster = spy(new ObserverBroadcaster(builder, grid, env,

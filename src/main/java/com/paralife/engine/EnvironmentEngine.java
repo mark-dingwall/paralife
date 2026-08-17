@@ -1108,10 +1108,17 @@ public class EnvironmentEngine implements EnvCleanupHooksBean.CompostSink {
         for (Position p : lightningStrikesThisTick) {
             lightning.add(new EnvironmentSnapshot.Strike(p.x(), p.y(), strikeRadius));
         }
+        // Entities with any active survivor buff — same predicate as the bot wire's
+        // BUFFED bit (getBuffs non-empty), since getRegisteredEntityIds retains ids
+        // whose buff list has already expired to empty.
+        Set<String> buffedIds = new HashSet<>();
+        for (String id : buffRegistry.getRegisteredEntityIds()) {
+            if (!buffRegistry.getBuffs(id).isEmpty()) buffedIds.add(id);
+        }
         // Defensive copying lives at the record's single authoritative boundary.
         return new EnvironmentSnapshot(
                 toxin, mutagen, lightning,
-                envCleanupHooksBean.getInfections().keySet());
+                envCleanupHooksBean.getInfections().keySet(), buffedIds);
     }
 
     public int computeSplashDamage(Position defenderPos) {

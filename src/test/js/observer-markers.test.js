@@ -7,6 +7,7 @@ import {
   SPECIES_COLOR,
   NUTRIENT_COLOR,
   MUTATION_COLOR,
+  BUFF_COLOR,
   GRID_COLOR,
   BACKGROUND_COLOR,
   markerOps,
@@ -48,6 +49,7 @@ test("the palette is the exact contract values", () => {
   });
   assert.equal(NUTRIENT_COLOR, "#7a5");
   assert.equal(MUTATION_COLOR, "#ff0");
+  assert.equal(BUFF_COLOR, "#0FF");
   assert.equal(GRID_COLOR, "#333");
   assert.equal(BACKGROUND_COLOR, "#000");
 });
@@ -136,6 +138,18 @@ test("a bonded pair shows both species, and the primary owns the shared diagonal
     !has(secondary, 0, 0) || !has(secondary, CONTENT_SIZE, CONTENT_SIZE),
     "the secondary is inset off the diagonal, making the primary the larger triangle",
   );
+
+  const twiceArea = (points) =>
+    Math.abs(
+      points.reduce((sum, [x, y], index) => {
+        const [nextX, nextY] = points[(index + 1) % points.length];
+        return sum + x * nextY - y * nextX;
+      }, 0),
+    );
+  assert.ok(
+    twiceArea(primary.points) > twiceArea(secondary.points),
+    "the primary must occupy strictly more area than the secondary",
+  );
 });
 
 // The mutation cue must be readable ON TOP of the hollow shell, which is the
@@ -162,6 +176,40 @@ test("a mutated brained particle keeps its fill and gains the mutation cue", () 
   const ops = markerOps(particle("CATALYST", { mutated: true }));
   assert.equal(ops.filter(coversContent).length, 1);
   assert.ok(ops.some((o) => o.op === "outline" && o.color === MUTATION_COLOR));
+});
+
+test("a buffed brained particle keeps its fill and gains a full-cell cyan shell", () => {
+  const ops = markerOps(particle("CATALYST", { buffed: true }));
+  assert.equal(ops.filter(coversContent).length, 1, "the species fill is untouched");
+  const cue = ops.find((o) => o.op === "outline" && o.color === BUFF_COLOR);
+  assert.ok(cue, "the buff cue is present");
+  assert.deepEqual(
+    [cue.x, cue.y, cue.w, cue.h],
+    [0, 0, CONTENT_SIZE, CONTENT_SIZE],
+    "the buff shell spans the whole content square",
+  );
+});
+
+// Control: no buff → no cyan outline, so the cue can't be an always-on artefact.
+test("an un-buffed particle draws no buff cue", () => {
+  const ops = markerOps(particle("CATALYST"));
+  assert.ok(!ops.some((o) => o.color === BUFF_COLOR));
+});
+
+// Hardest combination: buffed AND mutated must show BOTH rings without overlap —
+// the buff shell is the outer ring, the mutation cue the inset ring.
+test("a buffed mutated particle shows the outer buff ring and the inset mutation cue", () => {
+  const ops = markerOps(particle("SPORE", { buffed: true, mutated: true }));
+  const buff = ops.find((o) => o.op === "outline" && o.color === BUFF_COLOR);
+  const cue = ops.find((o) => o.op === "outline" && o.color === MUTATION_COLOR);
+  assert.ok(buff && cue, "both rings are present");
+  assert.ok(
+    cue.x > buff.x &&
+      cue.y > buff.y &&
+      cue.x + cue.w < buff.x + buff.w &&
+      cue.y + cue.h < buff.y + buff.h,
+    "the mutation cue is inset strictly inside the buff ring",
+  );
 });
 
 // Geometry bounds across every operation type and every marker class. A marker
@@ -210,5 +258,6 @@ test("an unknown species falls back to a placeholder colour without weakening kn
   const ops = markerOps(particle("WEIRD"));
   const filled = ops.filter(coversContent);
   assert.equal(filled.length, 1);
+  assert.equal(filled[0].color, "#888");
   assert.ok(!Object.values(SPECIES_COLOR).includes(filled[0].color));
 });

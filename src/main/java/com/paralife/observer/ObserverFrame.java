@@ -24,14 +24,15 @@ public final class ObserverFrame {
      * One dynamic occupant. Nullable fields are omitted from JSON (NON_NULL): a
      * nutrient has only kind/energy; a particle adds species/brained; a bondedPair
      * uses primarySpecies/secondarySpecies; a compositeMember adds compositeId/role.
-     * {@code mutated} is true-only: a clean entity omits the key rather than sending false.
+     * {@code mutated} and {@code buffed} are true-only: a clean entity omits the key
+     * rather than sending false.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record EntityDto(
             int x, int y, String kind,
             String species, Integer energy, Boolean brained,
             String primarySpecies, String secondarySpecies,
-            String compositeId, String role, Boolean mutated) {
+            String compositeId, String role, Boolean mutated, Boolean buffed) {
 
         /** True-only wire encoding: false collapses to an omitted key. */
         private static Boolean trueOrNull(boolean flag) {
@@ -39,26 +40,26 @@ public final class ObserverFrame {
         }
 
         public static EntityDto particle(int x, int y, String species, int energy,
-                                         boolean brained, boolean mutated) {
+                                         boolean brained, boolean mutated, boolean buffed) {
             return new EntityDto(x, y, "particle", species, energy, brained,
-                    null, null, null, null, trueOrNull(mutated));
+                    null, null, null, null, trueOrNull(mutated), trueOrNull(buffed));
         }
 
         public static EntityDto nutrient(int x, int y, int level) {
-            return new EntityDto(x, y, "nutrient", null, level, null, null, null, null, null, null);
+            return new EntityDto(x, y, "nutrient", null, level, null, null, null, null, null, null, null);
         }
 
         public static EntityDto bondedPair(int x, int y, String primary, String secondary,
-                                           int energy, boolean brained, boolean mutated) {
+                                           int energy, boolean brained, boolean mutated, boolean buffed) {
             return new EntityDto(x, y, "bondedPair", null, energy, brained,
-                    primary, secondary, null, null, trueOrNull(mutated));
+                    primary, secondary, null, null, trueOrNull(mutated), trueOrNull(buffed));
         }
 
         public static EntityDto compositeMember(int x, int y, String species, String compositeId,
                                                 String role, int energy, boolean brained,
-                                                boolean mutated) {
+                                                boolean mutated, boolean buffed) {
             return new EntityDto(x, y, "compositeMember", species, energy, brained,
-                    null, null, compositeId, role, trueOrNull(mutated));
+                    null, null, compositeId, role, trueOrNull(mutated), trueOrNull(buffed));
         }
     }
 
