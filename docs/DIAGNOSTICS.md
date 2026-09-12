@@ -17,13 +17,17 @@ mechanics.
 - **Birth:** WHEN `LiveEntityRegistry` accepts a new grid entity id, THE SYSTEM SHALL record that
   id's birth at the current tick.
 - **First lethal hint:** WHEN an energy sink first identifies that an entity will reach zero energy,
-  THE SYSTEM SHALL retain that cause and pre-hit energy until terminal cleanup and SHALL ignore
-  later lethal hints for the same lifecycle.
+  THE SYSTEM SHALL retain that cause and supplied pre-hit field until terminal cleanup and SHALL
+  ignore later lethal hints for the same lifecycle.
+- **Pre-hit availability:** WHEN the lethal sink knows the entity's energy before applying damage,
+  THE SYSTEM SHALL supply that exact energy; WHEN the environment sweep attributes a death
+  post-hoc, THE SYSTEM SHALL supply `0` as the current unavailable-value sentinel. Capturing exact
+  environmental pre-hit energy at each damage site remains deferred in [`BACKLOG.md`](../BACKLOG.md).
 - **Starvation fallback:** WHEN a death is finalised without a retained lethal hint, THE SYSTEM
   SHALL attribute the death to `STARVATION` and record no pre-hit energy.
 - **Lifespan record:** WHEN a death is finalised, THE SYSTEM SHALL emit one `DEATH-TRACE` lifecycle
-  record containing the id, type, retained cause, current tick, pre-hit energy, and lifespan in
-  ticks from the recorded birth; an id without a recorded birth SHALL use `-1` for lifespan.
+  record containing the id, type, retained cause, current tick, retained pre-hit field, and lifespan
+  in ticks from the recorded birth; an id without a recorded birth SHALL use `-1` for lifespan.
 - **Death cleanup:** WHEN a particle, bonded pair, or composite member is finalised as dead, THE
   SYSTEM SHALL record its death before `LiveEntityRegistry.unregister` silently forgets its
   lifecycle state.

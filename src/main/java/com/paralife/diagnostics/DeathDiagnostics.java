@@ -69,7 +69,9 @@ public class DeathDiagnostics {
      * lifecycle (combat before the decay sweep, etc.) until death or forget reaps
      * the retained state.
      *
-     * @param preHit energy immediately BEFORE the lethal hit (for healthy-kill detection)
+     * @param preHit energy immediately before the lethal hit when the sink knows it; {@code 0} is
+     *               the unavailable-value sentinel for post-hoc environmental attribution (exact
+     *               environmental damage-site capture remains deferred in {@code BACKLOG.md})
      */
     public void hintLethal(String entityId, Cause cause, int preHit) {
         lethalHint.putIfAbsent(entityId, cause);
