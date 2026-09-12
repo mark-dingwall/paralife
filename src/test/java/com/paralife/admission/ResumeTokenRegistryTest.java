@@ -1,16 +1,15 @@
 package com.paralife.admission;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.paralife.engine.TickEvent;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
-
-import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 class ResumeTokenRegistryTest {
 
@@ -34,6 +33,34 @@ class ResumeTokenRegistryTest {
         AttributionTagger tagger = new AttributionTagger(64, mockTickEngine);
         metrics = new AdmissionMetrics(meterReg, admissionConfig, mockTickEngine, tagger);
         registry = new ResumeTokenRegistry(admissionConfig, metrics);
+    }
+
+    @Test
+    void discardActiveRemovesOnlyExactCandidateForExpectedEntity() {
+        String candidate = registry.issueActive("entity", "new");
+        String collateral = registry.issueActive("entity", "other");
+        assertThat(registry.contains(candidate)).isTrue();
+        assertThat(registry.contains(collateral)).isTrue();
+
+        registry.discardActive(candidate, "wrong-entity");
+        assertThat(registry.contains(candidate)).as("entity mismatch must preserve candidate").isTrue();
+        registry.discardActive(candidate, "entity");
+        assertThat(registry.contains(candidate)).isFalse();
+        assertThat(registry.peek(collateral).orElseThrow().state()).isEqualTo(ResumeTokenRegistry.State.ACTIVE);
+        registry.discardActive(candidate, "entity");
+        assertThat(registry.contains(collateral)).isTrue();
+    }
+
+    @Test
+    void discardActivePreservesStalledTokenAndItsExpiryAccounting() {
+        String token = registry.issueActive("entity", "old");
+        registry.convertToStalled(token, 100L);
+        var before = registry.peek(token).orElseThrow();
+
+        registry.discardActive(token, "entity");
+
+        assertThat(registry.peek(token)).contains(before);
+        assertThat(registry.stalledSize()).isEqualTo(1);
     }
 
     @Test

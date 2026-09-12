@@ -131,7 +131,6 @@ public class AdmissionGate {
                     resumeTokenRegistry.tryRebind(token.get(), req.sessionId(), req.tickNumber());
             if (rebind.isPresent()) {
                 ResumeTokenRegistry.RebindOutcome outcome = rebind.get();
-                metrics.incRebound();
                 return new AdmissionResult.Rebind(outcome.entityId(), outcome.freshResumeToken());
             }
         }

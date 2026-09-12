@@ -194,6 +194,8 @@ class AdmissionGateTest {
         AdmissionResult.Rebind rb = (AdmissionResult.Rebind) r;
         assertThat(rb.entityId()).isEqualTo("entity-old");
         assertThat(rb.freshResumeToken()).isEqualTo("r:freshtoken00000");
+        assertThat(registry.counter(AdmissionMetrics.M_REBOUND).count())
+                .as("token acceptance is not a committed BotRegistry rebind").isZero();
     }
 
     @Test

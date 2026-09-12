@@ -151,11 +151,12 @@ constant-referential blind spots.
   `held-on-close`, `rebind-stale`, `transport-error-held` (STALLED-lifecycle edge transitions;
   the other 7 of 10 marker shapes are pinned by `AdmissionLogMarkersIntegrationTest` /
   `TickHealthGateIntegrationTest`).
-- **Normalize the orphan `stale-resume-token` rejection.** A post-`tryRebind` race emits the
-  literal `E|400|stale-resume-token` directly from `WorldWebSocketHandler`; it has no
-  `RejectionToken` constant, admission-rejection metric increment, or exact-wire test, so A28's
-  nine-token enum-backed vocabulary does not cover it. Promote it into the taxonomy, metric path,
-  and literal-pinned suite on the next admission-contract change.
+- **Normalize the orphan `stale-resume-token` rejection.** ✅ **DONE 2026-09-12** — the defined
+  `BotRegistry.rebindSession == false` path uses `RejectionToken.STALE_RESUME_TOKEN`, exact wire
+  and rejection-metric pins, and atomic candidate-only compensation; success accounting and state
+  publication follow registry commit (`docs/ADMISSION.md` A33–A35). The defensive
+  `IllegalStateException` session-collision path remains deferred and may leave its newly minted
+  candidate uncompensated; this completion covers only the defined `false` stale outcome.
 - **Initialize the maintenance gauge from configuration.** Admission honors
   `AdmissionConfig.maintenance()`, but `AdmissionMetrics` initializes the gauge to zero and no
   production path calls `setMaintenance`; `/actuator/metrics/paralife.admission.maintenance` can

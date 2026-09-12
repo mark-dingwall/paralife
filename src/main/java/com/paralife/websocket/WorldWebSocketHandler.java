@@ -539,6 +539,19 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         }
 
         if (result instanceof AdmissionResult.Rebind rebind) {
+            // Token consumption precedes this commit. On the defined stale (false) outcome,
+            // compensate only the freshly minted candidate; do not publish success state.
+            if (!botRegistry.rebindSession(session.getId(), rebind.entityId())) {
+                resumeTokenRegistry.discardActive(rebind.freshResumeToken(), rebind.entityId());
+                if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.STALE_RESUME_TOKEN, session);
+                sendFrame(session, new Frame.ErrorFrame(400, Optional.of(RejectionToken.STALE_RESUME_TOKEN)));
+                try { session.close(); } catch (Exception ignored) {}
+                log.warn("BACKPRESSURE rebind-stale tick={} session={} entity={} {}",
+                        currentTick, session.getId(), rebind.entityId(),
+                        AttributionTagger.formatLogFields(session));
+                return;
+            }
+            if (admissionMetrics != null) admissionMetrics.incRebound();
             // Resume-token re-bind: preserve entityId, swap session in BotRegistry, restore respawn count.
             //
             // P18-Chunk-A H1 fix: gauge accounting under attribution change.
@@ -573,18 +586,6 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
             Integer snapshot = respawnCountAtStall.remove(rebind.entityId());
             if (snapshot != null) {
                 attrs.put(ATTR_RESPAWN_COUNT, snapshot);
-            }
-            // Phase 19.5 M-F: rebindSession returns false when the entity is no
-            // longer in BotRegistry (already reaped between tryRebind and here —
-            // e.g. grace expiry sweep ran on the same tick). Treat as a stale
-            // resume token: tell the client to re-register fresh + close.
-            if (!botRegistry.rebindSession(session.getId(), rebind.entityId())) {
-                sendFrame(session, new Frame.ErrorFrame(400, Optional.of("stale-resume-token")));
-                try { session.close(); } catch (Exception ignored) {}
-                log.warn("BACKPRESSURE rebind-stale tick={} session={} entity={} {}",
-                        currentTick, session.getId(), rebind.entityId(),
-                        AttributionTagger.formatLogFields(session));
-                return;
             }
             sendFrame(session, new Frame.SyncFrame(rebind.entityId(),
                     Optional.of(rebind.freshResumeToken()), List.of()));

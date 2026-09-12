@@ -1,10 +1,22 @@
 package com.paralife.websocket;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import com.paralife.admission.AdmissionGate;
 import com.paralife.admission.AdmissionMetrics;
 import com.paralife.admission.OutboundSender;
+import com.paralife.admission.ResumeTokenRegistry;
+import com.paralife.engine.BotRegistry;
 import com.paralife.engine.BuffRegistry;
 import com.paralife.engine.EnvCleanupHooksBean;
 import com.paralife.engine.EnvironmentEngine;
+import com.paralife.engine.LiveEntityRegistry;
+import com.paralife.world.Position;
+import com.paralife.world.WorldGrid;
+import java.util.HashMap;
+import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,15 +25,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Phase 19.1 D-09 — BL disconnect lifecycle leak assertions.
@@ -55,29 +62,50 @@ class WorldWebSocketHandlerCleanupTest {
     @Autowired EnvCleanupHooksBean envCleanupHooksBean;
     @Autowired AdmissionMetrics admissionMetrics;
     @Autowired OutboundSender outboundSender;
+    @Autowired AdmissionGate admissionGate;
+    @Autowired ResumeTokenRegistry resumeTokens;
+    @Autowired BotRegistry bots;
+    @Autowired LiveEntityRegistry liveEntities;
+    @Autowired WorldGrid grid;
+    @Autowired SessionRegistry sessions;
 
     private WebSocketSession session;
+    private WebSocketSession collateral;
     private String entityId;
+    private String token;
+    private Position position;
+    private int slotsBefore;
+    private int activeBefore;
 
     @BeforeEach
     void setUp() throws Exception {
+        slotsBefore = admissionGate.reservedSlots();
+        activeBefore = admissionMetrics.totalActiveBucketCount();
+        // Keep another real reservation alive: a double release must not hide behind the zero floor.
+        collateral = openSession("cleanup-collateral", "operator", null);
+        handler.handleMessage(collateral, new TextMessage("r|C"));
+        assertThat(collateral.getAttributes()).containsKey("entityId");
         session = openSession("cleanup-test-session", "unit-test", null);
         handler.handleMessage(session, new TextMessage("r|C"));
         // Grab the entity id that was assigned after registration.
         Object eid = session.getAttributes().get("entityId");
         entityId = eid instanceof String s ? s : null;
         assertThat(entityId).as("entity must be registered after r|C").isNotNull();
+        token = (String) session.getAttributes().get("resumeToken");
+        position = bots.getBySession(session.getId()).orElseThrow().position();
     }
 
     @AfterEach
-    void tearDown() {
-        // Best-effort cleanup — the test may have already disconnected the session.
-        try { outboundSender.detachSession("cleanup-test-session"); } catch (Exception ignored) {}
+    void tearDown() throws Exception {
+        handler.cleanupByEntityId(entityId);
+        sessions.unregister(session.getId());
+        outboundSender.detachSession(session.getId());
+        handler.afterConnectionClosed(collateral, CloseStatus.NORMAL);
     }
 
     @Test
     @DisplayName("cleanupBot: BuffRegistry, infection, FLEEING, and bucket-tags all empty post-disconnect")
-    void cleanupBot_clearsAllEnvMaps() {
+    void cleanupBot_clearsAllEnvMaps() throws Exception {
         populateEnvState(entityId);
 
         // Pre-condition: at least the buff is present.
@@ -85,8 +113,10 @@ class WorldWebSocketHandlerCleanupTest {
                 .as("buff must be present before cleanup")
                 .contains(entityId);
 
-        handler.cleanupBot(session);
+        handler.afterConnectionClosed(session, CloseStatus.NORMAL);
 
+        assertAllMapsEmpty(entityId);
+        handler.afterConnectionClosed(session, CloseStatus.NORMAL);
         assertAllMapsEmpty(entityId);
     }
 
@@ -102,14 +132,14 @@ class WorldWebSocketHandlerCleanupTest {
         handler.cleanupByEntityId(entityId);
 
         assertAllMapsEmpty(entityId);
+        handler.cleanupByEntityId(entityId);
+        assertAllMapsEmpty(entityId);
     }
 
     @Test
     @DisplayName("A4.2 idempotency: second cleanupBot call is a no-op; no double-decrement on admissionMetrics")
     void cleanupBot_idempotent_noDoubleDecrement() {
         populateEnvState(entityId);
-
-        int activeBefore = admissionMetrics.totalActiveBucketCount();
 
         handler.cleanupBot(session);
         assertAllMapsEmpty(entityId);
@@ -135,10 +165,16 @@ class WorldWebSocketHandlerCleanupTest {
         // Populate env state BEFORE detaching the session from the registry.
         populateEnvState(entityId);
 
+        sessions.unregister(session.getId());
+        assertThat(sessions.getSession(session.getId())).isNull();
+        assertThat(bots.getBySession(session.getId())).isPresent();
+
         // Directly call cleanupByEntityId without having a live session bound.
         // (cleanupBot was NOT called first — entity still has state.)
         handler.cleanupByEntityId(entityId);
 
+        assertAllMapsEmpty(entityId);
+        handler.cleanupByEntityId(entityId);
         assertAllMapsEmpty(entityId);
     }
 
@@ -153,6 +189,17 @@ class WorldWebSocketHandlerCleanupTest {
                         new com.paralife.world.Position(1, 1)));
         // FLEEING (package-visible test helper)
         environmentEngine.grantFleeingForTest(eid, 9999L, 5, 5);
+        assertThat(buffRegistry.getRegisteredEntityIds()).contains(eid);
+        assertThat(envCleanupHooksBean.getInfections()).containsKey(eid);
+        assertThat(environmentEngine.getFleeing(eid)).isNotNull();
+        assertThat(admissionMetrics.lookupBucketTags(eid)).isNotNull();
+        assertThat(grid.getCell(position.x(), position.y()).occupant().id()).isEqualTo(eid);
+        assertThat(bots.getBySession(session.getId()).orElseThrow().entityId()).isEqualTo(eid);
+        assertThat(liveEntities.snapshot()).anyMatch(entry -> entry.entityId().equals(eid));
+        assertThat(session.getAttributes()).containsEntry("entityId", eid).containsEntry("entityType", 'C');
+        assertThat(tokenExists()).isTrue();
+        assertThat(admissionGate.reservedSlots()).isEqualTo(slotsBefore + 2);
+        assertThat(admissionMetrics.totalActiveBucketCount()).isEqualTo(activeBefore + 2);
     }
 
     private void assertAllMapsEmpty(String eid) {
@@ -165,9 +212,21 @@ class WorldWebSocketHandlerCleanupTest {
         assertThat(environmentEngine.getFleeing(eid))
                 .as("FLEEING map must not contain entry for %s after cleanup", eid)
                 .isNull();
+        assertThat(grid.getCell(position.x(), position.y()).isEmpty()).isTrue();
+        assertThat(bots.getBySession(session.getId())).isEmpty();
+        assertThat(bots.getSessionByEntity(eid)).isEmpty();
+        assertThat(liveEntities.snapshot()).noneMatch(entry -> entry.entityId().equals(eid));
+        assertThat(tokenExists()).isFalse();
+        assertThat(admissionGate.reservedSlots()).isEqualTo(slotsBefore + 1);
+        assertThat(admissionMetrics.totalActiveBucketCount()).isEqualTo(activeBefore + 1);
+        assertThat(bots.getBySession(collateral.getId())).isPresent();
         assertThat(admissionMetrics.lookupBucketTags(eid))
                 .as("AdmissionMetrics bucket-tags must not contain entry for %s after cleanup", eid)
                 .isNull();
+    }
+
+    private boolean tokenExists() {
+        return Boolean.TRUE.equals(ReflectionTestUtils.invokeMethod(resumeTokens, "contains", token));
     }
 
     private WebSocketSession openSession(String id, String source, String harness) throws Exception {

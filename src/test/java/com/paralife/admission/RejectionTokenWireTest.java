@@ -25,7 +25,7 @@ import org.junit.jupiter.params.provider.MethodSource;
  * taxonomy for traceability — it is echoed verbatim by the codec, so it can never independently
  * drive red. The only production-owned red/green driver is the token constant's string value.
  * This pins the wire <em>encoding</em> boundary, not gate condition→token routing (§0 Non-Goals;
- * 4 of the 9 tokens are emitted outside {@code AdmissionGate}).
+ * 5 of the 10 tokens are emitted outside {@code AdmissionGate}).
  */
 class RejectionTokenWireTest {
 
@@ -33,6 +33,7 @@ class RejectionTokenWireTest {
     static Stream<Arguments> tokenWireContract() {
         return Stream.of(
                 Arguments.of(RejectionToken.MALFORMED, 400, "E|400|malformed"),
+                Arguments.of(RejectionToken.STALE_RESUME_TOKEN, 400, "E|400|stale-resume-token"),
                 Arguments.of(RejectionToken.NO_ACTIVE_ENTITY, 404, "E|404|no-active-entity"),
                 Arguments.of(RejectionToken.RECONNECT_REQUIRED, 408, "E|408|reconnect-required"),
                 Arguments.of(RejectionToken.ALREADY_REGISTERED, 409, "E|409|already-registered"),
