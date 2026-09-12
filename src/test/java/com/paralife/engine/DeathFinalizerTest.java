@@ -1,24 +1,27 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+
+import com.paralife.diagnostics.DeathDiagnostics;
 import com.paralife.world.Entity.BondedPair;
 import com.paralife.world.Entity.CompositeMember;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Entity.Role;
+import com.paralife.world.GridConfig;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
+import java.util.HashSet;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
-
-import java.util.HashSet;
-import java.util.Set;
-
-import static org.mockito.Mockito.inOrder;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Mockito-based unit tests for {@link DeathFinalizer}. Plain JUnit 5 + Mockito
@@ -64,6 +67,22 @@ class DeathFinalizerTest {
     }
 
     @Test
+    void particleDeathIsRecordedBeforeRegistryUnregisterForgetsLifecycle() {
+        DeathDiagnostics diagnostics = mock(DeathDiagnostics.class);
+        LiveEntityRegistry liveEntities = lifecycleRegistry("p-life", new Position(7, 3), diagnostics);
+        finalizer.setDeathDiagnostics(diagnostics);
+        finalizer.setLiveEntityRegistry(liveEntities);
+        Particle particle = new Particle("p-life", ParticleType.CATALYST, 0, 100);
+
+        finalizer.finalizeParticleDeath(7, 3, particle);
+
+        InOrder order = inOrder(diagnostics, liveEntities);
+        order.verify(diagnostics).recordDeath("p-life", "CATALYST");
+        order.verify(liveEntities).unregister("p-life");
+        order.verify(diagnostics).forget("p-life");
+    }
+
+    @Test
     void bondedPairDeathCleansBothMemberIdsAndBpId() {
         // cycle-4 action item #6 — Gemini MEDIUM BondedPair cleanup:
         // finalizeBondedPairDeath MUST clear infection for primary id,
@@ -83,6 +102,23 @@ class DeathFinalizerTest {
         verify(hooks).clearInfectionOnDeath("bp1");   // cycle-4 action item #6
         verify(hooks).applyCompost(new Position(5, 5));
         verify(worldGrid).clearEntity(5, 5);
+    }
+
+    @Test
+    void bondedPairDeathIsRecordedBeforeRegistryUnregisterForgetsLifecycle() {
+        DeathDiagnostics diagnostics = mock(DeathDiagnostics.class);
+        LiveEntityRegistry liveEntities = lifecycleRegistry("bp-life", new Position(5, 5), diagnostics);
+        finalizer.setDeathDiagnostics(diagnostics);
+        finalizer.setLiveEntityRegistry(liveEntities);
+        BondedPair pair = new BondedPair("bp-life", ParticleType.CATALYST,
+                ParticleType.MEMBRANE, 0, 100, "p-a", "p-b");
+
+        finalizer.finalizeBondedPairDeath(5, 5, pair);
+
+        InOrder order = inOrder(diagnostics, liveEntities);
+        order.verify(diagnostics).recordDeath("bp-life", "BONDED");
+        order.verify(liveEntities).unregister("bp-life");
+        order.verify(diagnostics).forget("bp-life");
     }
 
     @Test
@@ -149,5 +185,15 @@ class DeathFinalizerTest {
 
         finalizer.resetCountForTest();
         assertThat(finalizer.getDeathEventCount()).isEqualTo(0L);
+    }
+
+    private LiveEntityRegistry lifecycleRegistry(String entityId, Position position,
+                                                   DeathDiagnostics diagnostics) {
+        LiveEntityRegistry liveEntities =
+                spy(new LiveEntityRegistry(new GridConfig(10, 10)));
+        liveEntities.setDeathDiagnostics(diagnostics);
+        liveEntities.register(entityId, position);
+        clearInvocations(diagnostics, liveEntities);
+        return liveEntities;
     }
 }

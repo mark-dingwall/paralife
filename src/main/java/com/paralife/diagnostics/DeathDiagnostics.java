@@ -3,14 +3,13 @@ package com.paralife.diagnostics;
 import com.paralife.engine.TickEngine;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.LongAdder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Death-cause + lifespan diagnostic instrumentation. First resident of
@@ -65,9 +64,10 @@ public class DeathDiagnostics {
     }
 
     /**
-     * Tag the cause that drove this entity to energy==0. Call AFTER the lethal
-     * energy write, only when the entity is now {@code !isAlive()}. First claim
-     * wins for the tick (combat before the decay sweep, etc.).
+     * Tag the cause that drove this entity to energy==0 when the sink determines
+     * that the entity crosses the lethal boundary. First claim wins for the
+     * lifecycle (combat before the decay sweep, etc.) until death or forget reaps
+     * the retained state.
      *
      * @param preHit energy immediately BEFORE the lethal hit (for healthy-kill detection)
      */

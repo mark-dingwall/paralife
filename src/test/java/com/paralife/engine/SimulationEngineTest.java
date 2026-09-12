@@ -1,23 +1,30 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+
+import com.paralife.diagnostics.DeathDiagnostics;
 import com.paralife.world.Cell;
 import com.paralife.world.Entity;
 import com.paralife.world.Entity.Nutrient;
 import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Entity.Rock;
+import com.paralife.world.Entity.Role;
 import com.paralife.world.GridConfig;
+import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.never;
-import static org.mockito.ArgumentMatchers.anyString;
+import org.mockito.InOrder;
 
 class SimulationEngineTest {
 
@@ -356,6 +363,30 @@ class SimulationEngineTest {
             assertThat(grid.getCell(1, 1).isEmpty()).isTrue();
             assertThat(grid.getCell(2, 2).isEmpty()).isTrue();
             assertThat(grid.getCell(3, 3).hasOccupant()).isTrue();
+        }
+
+        @Test
+        void compositeMemberDeathIsRecordedBeforeRegistryUnregisterForgetsLifecycle() {
+            Position position = new Position(4, 4);
+            Entity.CompositeMember member = new Entity.CompositeMember(
+                    "cm-life", "composite-life", ParticleType.SPORE, Role.LOCOMOTOR, 0, 50);
+            DeathDiagnostics diagnostics = mock(DeathDiagnostics.class);
+            LiveEntityRegistry liveEntities = spy(new LiveEntityRegistry(new GridConfig(WIDTH, HEIGHT)));
+            liveEntities.setDeathDiagnostics(diagnostics);
+            liveEntities.register(member.id(), position);
+            clearInvocations(diagnostics, liveEntities);
+            SimulationEngine engine = engineWith(disabled());
+            engine.setDeathDiagnostics(diagnostics);
+            engine.setLiveEntityRegistry(liveEntities);
+            grid.setEntity(position.x(), position.y(), member);
+
+            engine.cleanupCompositeMemberCellViaFinalizer(member, position);
+
+            InOrder order = inOrder(diagnostics, liveEntities);
+            order.verify(diagnostics).recordDeath("cm-life", "SPORE");
+            order.verify(liveEntities).unregister("cm-life");
+            order.verify(diagnostics).forget("cm-life");
+            assertThat(grid.getCell(position.x(), position.y()).isEmpty()).isTrue();
         }
     }
 
