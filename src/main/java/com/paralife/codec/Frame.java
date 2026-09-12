@@ -60,7 +60,7 @@ public sealed interface Frame
      *       energy + own events only. Vision/effects/pool/roster are absent.
      *       On the wire the {@code sensorRadius} slot is omitted and minimal
      *       form is detected positionally by the codec.</li>
-     *   <li>{@code 1} — 3×3 (authority-lite: FEEDER/ATTACKER/REPRODUCER).</li>
+     *   <li>{@code 1} — 3×3 (authority-lite: FEEDER/ATTACKER).</li>
      *   <li>{@code 2} — 5×5 default (solo/bonded/LOCOMOTOR).</li>
      *   <li>{@code 3} — 7×7 with SENSOR_PLUS_1 buff active.</li>
      * </ul>

@@ -42,6 +42,7 @@ public final class PerceptionCodec {
      * so this is the SOLE disambiguator between a token slot and an effect list slot.
      */
     private static final String RESUME_TOKEN_SENTINEL = "r:";
+    private static final int RESUME_TOKEN_LENGTH = 18;
 
     private PerceptionCodec() {
         // utility — not instantiable
@@ -729,7 +730,7 @@ public final class PerceptionCodec {
             // No effect code begins with 'r' (valid codes: S/I/F/A/M/U per §8.3).
             if (peekStartsWithSentinel(c, RESUME_TOKEN_SENTINEL)) {
                 String token = c.readUntil('|', false);
-                if (token.isEmpty()) throw new CodecException("Sync resume-token empty at " + c.index());
+                validateResumeToken(token, "Sync", c.index());
                 resumeToken = Optional.of(token);
                 // Optional third slot: |<effects>
                 if (!c.atEnd() && c.peek() == '|') {
@@ -742,6 +743,9 @@ public final class PerceptionCodec {
             } else {
                 effects = parseEffectList(c);
             }
+        }
+        if (!c.atEnd()) {
+            throw new CodecException("Sync frame has unexpected trailing slot at " + c.index());
         }
         return new Frame.SyncFrame(entityId, resumeToken, effects);
     }
@@ -764,13 +768,27 @@ public final class PerceptionCodec {
             if (token.isEmpty()) {
                 throw new CodecException("Register frame: empty resume-token at " + c.index());
             }
-            if (!token.startsWith(RESUME_TOKEN_SENTINEL)) {
-                throw new CodecException(
-                        "Register resume-token must start with 'r:' at " + c.index() + ": " + token);
-            }
+            validateResumeToken(token, "Register", c.index());
             resumeToken = Optional.of(token);
         }
+        if (!c.atEnd()) {
+            throw new CodecException("Register frame has unexpected trailing slot at " + c.index());
+        }
         return new Frame.RegisterFrame(t, resumeToken);
+    }
+
+    private static void validateResumeToken(String token, String frameType, int pos) {
+        if (token.length() != RESUME_TOKEN_LENGTH || !token.startsWith(RESUME_TOKEN_SENTINEL)) {
+            throw new CodecException(
+                    frameType + " resume-token must be exactly r:<16-lowercase-hex> at " + pos + ": " + token);
+        }
+        for (int i = RESUME_TOKEN_SENTINEL.length(); i < token.length(); i++) {
+            char ch = token.charAt(i);
+            if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) {
+                throw new CodecException(
+                        frameType + " resume-token must be exactly r:<16-lowercase-hex> at " + pos + ": " + token);
+            }
+        }
     }
 
     /**
@@ -836,9 +854,7 @@ public final class PerceptionCodec {
                 }
             }
             case 'L' -> {
-                if (!arg.isEmpty()) {
-                    throw new CodecException("Verb L takes no arg but got: " + arg);
-                }
+                throw new CodecException("Verb L takes no argument slot");
             }
             default -> throw new CodecException("Internal: unvalidated verb " + verb);
         }

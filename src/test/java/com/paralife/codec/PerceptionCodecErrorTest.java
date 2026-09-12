@@ -2,12 +2,17 @@ package com.paralife.codec;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Negative-path tests for {@link PerceptionCodec} — malformed wire bytes, unknown
@@ -66,9 +71,11 @@ class PerceptionCodecErrorTest {
 
     @Test
     void alarmActionRoundTrips() {
-        Frame.ActionFrame alarm = new Frame.ActionFrame('L', Optional.empty());
-        String encoded = PerceptionCodec.encode(alarm);
-        assertEquals("a|L", encoded);
+        Frame.ActionFrame alarm = assertInstanceOf(
+                Frame.ActionFrame.class, PerceptionCodec.decode("a|L"));
+        assertEquals('L', alarm.verb());
+        assertEquals(Optional.empty(), alarm.arg());
+        assertEquals("a|L", PerceptionCodec.encode(alarm));
     }
 
     @Test
@@ -85,6 +92,93 @@ class PerceptionCodecErrorTest {
         Frame.RegisterFrame r = new Frame.RegisterFrame('C');
         assertEquals("r|C", PerceptionCodec.encode(r));
         assertEquals(r, PerceptionCodec.decode("r|C"));
+    }
+
+    @Test
+    void canonicalResumeTokenDecodesInRegisterSlot() {
+        Frame.RegisterFrame register = assertInstanceOf(
+                Frame.RegisterFrame.class,
+                PerceptionCodec.decode("r|C|r:0123456789abcdef"));
+
+        assertEquals('C', register.entityType());
+        assertEquals(Optional.of("r:0123456789abcdef"), register.resumeToken());
+    }
+
+    @Test
+    void canonicalResumeTokenDecodesInSyncSlot() {
+        Frame.SyncFrame sync = assertInstanceOf(
+                Frame.SyncFrame.class,
+                PerceptionCodec.decode("S|7A|r:0123456789abcdef"));
+
+        assertEquals("7A", sync.entityId());
+        assertEquals(Optional.of("r:0123456789abcdef"), sync.resumeToken());
+        assertEquals(List.of(), sync.effects());
+    }
+
+    @ParameterizedTest(name = "rejects malformed frame: {0}")
+    @ValueSource(strings = {
+        // Register resume-token slot: exact r:<16-lowercase-hex>, with no trailing slot.
+        "r|C|r:0123456789abcde",
+        "r|C|r:0123456789abcdef0",
+        "r|C|r:0123456789abcdeF",
+        "r|C|r:0123456789abcdeg",
+        "r|C|r:",
+        "r|C|r:0123456789abcdef|extra",
+        // Sync resume-token slot has the same exact shape and at most one effects slot.
+        "S|7A|r:0123456789abcde",
+        "S|7A|r:0123456789abcdef0",
+        "S|7A|r:0123456789abcdeF",
+        "S|7A|r:0123456789abcdeg",
+        "S|7A|r:",
+        "S|7A|r:0123456789abcdef|S:1|S:2",
+        // Action grammar: direction verbs require one numpad digit; V requires three; L is bare.
+        "a|M",
+        "a|E|0",
+        "a|V|98",
+        "a|L|",
+        // Tick grammar boundaries and representative malformed tagged blocks.
+        "T|001|0A1B|15/80|0",
+        "T|001|0A1B|15/80|4",
+        "T|001|0A1B|15/80|2|s61C12",
+        "T|001|0A1B|15/80|2|x",
+        "T|001|0A1B|15/80|vH"
+    })
+    void malformedFramesRejected(String wire) {
+        assertThrows(CodecException.class, () -> PerceptionCodec.decode(wire));
+    }
+
+    @Test
+    void minimalTickWithoutEventsDecodesFields() {
+        Frame.TickFrame tick = assertInstanceOf(
+                Frame.TickFrame.class,
+                PerceptionCodec.decode("T|001|0A1B|15/80"));
+
+        assertEquals(1L, tick.tickId());
+        assertEquals(10, tick.curX());
+        assertEquals(75, tick.curY());
+        assertEquals(69, tick.energy());
+        assertEquals(512, tick.maxEnergy());
+        assertEquals(0, tick.sensorRadius());
+        assertEquals(List.of(), tick.cells());
+        assertEquals(List.of(), tick.events());
+    }
+
+    @Test
+    void reorderedOptionalFullFrameBlocksRemainAccepted() {
+        Frame.TickFrame tick = assertInstanceOf(
+                Frame.TickFrame.class,
+                PerceptionCodec.decode("T|001|0A1B|15/80|2|vS|s61F"));
+
+        assertEquals(2, tick.sensorRadius());
+        assertEquals(1, tick.cells().size());
+        CellEntry cell = tick.cells().getFirst();
+        assertEquals(new Coord.Numpad('6'), cell.coord());
+        assertEquals(1, cell.presence());
+        assertEquals(Optional.of(new KindData.Simple('F')), cell.kind());
+        assertEquals(OptionalInt.empty(), cell.entityState());
+        assertEquals(OptionalInt.empty(), cell.envState());
+        assertEquals(List.of(
+                new Event('S', Optional.empty(), OptionalInt.empty())), tick.events());
     }
 
     /**
