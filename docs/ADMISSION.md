@@ -70,6 +70,7 @@ frozen strings of all 10 constant-backed §1 tokens are pinned as independent wi
 | A34 | WHEN a token candidate is accepted THE SYSTEM SHALL count rebound and publish success attributes, respawn restoration, and attribution transfer only after the bot binding commits. | §4 | `AdmissionGateTest.rebindOnValidResumeToken` — rebound zero; `StaleResumeHandlerTest.committedRebindPublishesSuccessOnlyAfterRegistryCommit` — assertions at the real commit boundary, then Sync, restored count, new attribution, rebound one. |
 | A35 | WHEN candidate compensation encounters a token for another entity or a STALLED entry THE SYSTEM SHALL preserve that entry; WHEN it encounters the exact ACTIVE candidate THE SYSTEM SHALL remove it without touching collateral tokens. | §4 | `ResumeTokenRegistryTest.discardActiveRemovesOnlyExactCandidateForExpectedEntity` and `discardActivePreservesStalledTokenAndItsExpiryAccounting` — mismatch and stalled controls plus exact removal and repeated-call checks. |
 | A36 | WHEN an open STALLED session's out-of-band error send throws THE SYSTEM SHALL still count the inbound rejection and request `SERVICE_RESTARTED` close. | §1/§4 | `StaleResumeHandlerTest.stalledInboundSendFailureStillCountsRejectionAndClosesForRestart` — actual `sendMessage` invocation throws, counter increments, close is called. |
+| A37 | WHEN a terminal callback races with a committed rebind THE SYSTEM SHALL finish publishing that rebind before applying Dead cleanup, leaving no active entity attribute, ACTIVE resume token, or active attribution bucket. | §4 | `StaleResumeHandlerTest.deathAfterRebindCommitCannotBeOverwrittenBySuccessPublication` — two threads pause after the real commit, attempt death before publication, then assert Dead state and cleared token/buckets; A34 supplies the successful Alive control. |
 
 **Guard order (prose — precedence edges beyond A6 now clause-pinned).** `AdmissionGate.evaluate`
 applies six guards in fixed order (source: `AdmissionGate.java` guards 1–6 + javadoc lines 22–34):
@@ -219,6 +220,8 @@ Client reconnects on a new WebSocket, sends `r|<type>|<resumeToken>`:
    the registry's scalar stalled count, and mint a fresh ACTIVE candidate for the same entity.
    - The handler commits `BotRegistry.rebindSession` before installing attributes, restoring the
      stall-time respawn snapshot, transferring attribution buckets, or incrementing `rebound`.
+     Commit and publication share the session monitor with `markDead`, so a terminal callback
+     observing the committed binding applies Dead cleanup after publication and cannot be overwritten.
    - On success, swap the old session binding to the new session and return the fresh token in
      `S|<entityId>|<newResumeToken>`; successful accounting belongs to the handler, not the gate.
    - On `false`, call `discardActive(candidate, expectedEntityId)`: atomically remove only that

@@ -170,6 +170,19 @@ constant-referential blind spots.
 `src/test/java/com/paralife/codec/`; strengthens `ADMISSION.md` §0 A4/A6/A14/A22 + the partial/orphan
 deferrals.
 
+## Environmental death diagnostics pre-hit precision
+
+**Why deferred:** environmental lethal hints currently use `preHitEnergy=0` as an unavailable-value
+sentinel because the death sweep runs after damage. Capturing exact energy at each environmental
+damage site is separate from pinning the existing lifecycle bookkeeping contract.
+
+**Trigger:** the next diagnostics/environment attribution change that needs exact pre-hit energy.
+Capture it before each lethal damage write and retain an explicit unavailable representation where
+capture is impossible; keep population aggregates observe-only.
+
+**Anchor:** `docs/DIAGNOSTICS.md` "Pre-hit availability", `EnvironmentEngine.processEnvDeaths`,
+`DeathDiagnostics.hintLethal` (historical provenance: frozen TD-PR2-D).
+
 ## M5 / post-MVP follow-ups (ex-SCHEMA §13)
 
 **Why:** folded from `SCHEMA.md` §13 (docs editorial pass, Task 2) — the heading stays as a stub

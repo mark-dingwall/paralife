@@ -26,11 +26,13 @@ import org.springframework.web.socket.WebSocketSession;
  * <p>Migrated from {@code Messages.Action} → {@link Frame.ActionFrame}. Verbs
  * use SCHEMA §8.6 letter codes and numpad direction args:
  * <ul>
- *   <li>{@code E} — consume (no arg)</li>
+ *   <li>{@code E|<numpad>} — consume (FEEDER ignores the supplied direction)</li>
  *   <li>{@code A|<numpad>} — attack (2 = S, 6 = E, etc.)</li>
  *   <li>{@code R|<numpad>} — reproduce</li>
- *   <li>{@code L} — alarm (no arg, LOCOMOTOR only)</li>
+ *   <li>{@code L} — alarm (no arg; composite members notify their LOCOMOTOR)</li>
  * </ul>
+ * Composite actions dispatch by role. An argument-less {@code L} also lets FEEDER
+ * consume an adjacent nutrient and ATTACKER auto-target an adjacent enemy.
  */
 class CompositeActionTest {
 
@@ -111,7 +113,7 @@ class CompositeActionTest {
 
     // ── Frame.ActionFrame convenience builders ────────────────────────
 
-    /** Consume — verb E, no arg (per SCHEMA §8.6). */
+    /** Consume — verb E with the required direction arg, ignored by FEEDER role dispatch. */
     private static Frame.ActionFrame consume() {
         return new Frame.ActionFrame('E', Optional.of("5"));
     }
@@ -200,6 +202,7 @@ class CompositeActionTest {
     void attackerDirectedAttackDamagesBondedPair() {
         Position attackerPos = new Position(3, 3);
         Position targetPos = new Position(4, 3);
+        Position alternativePos = new Position(2, 2); // NW is first in automatic neighbor search.
         int attackerEnergy = 50;
         int targetEnergy = 70;
         int initialPool = 100;
@@ -211,6 +214,8 @@ class CompositeActionTest {
                 "enemy-a+enemy-b", ParticleType.MEMBRANE, ParticleType.CATALYST,
                 targetEnergy, 120);
         worldGrid.setEntity(targetPos.x(), targetPos.y(), enemy);
+        Particle alternative = new Particle("enemy-alternative", ParticleType.MEMBRANE, 60, 100);
+        worldGrid.setEntity(alternativePos.x(), alternativePos.y(), alternative);
         registerComposite("comp-attacker", "cm-attacker-directed");
 
         resolver.queueAction("s-attacker-directed", attack('6'));
@@ -219,6 +224,7 @@ class CompositeActionTest {
         Entity.BondedPair damaged =
                 (Entity.BondedPair) worldGrid.getCell(targetPos.x(), targetPos.y()).occupant();
         assertThat(damaged.energy()).isEqualTo(targetEnergy - config.combatEnergyTransfer());
+        assertThat(worldGrid.getCell(alternativePos.x(), alternativePos.y()).occupant()).isEqualTo(alternative);
         assertThat(compositeRegistry.getSharedEnergy("comp-attacker"))
                 .isEqualTo(initialPool - compositeConfig.attackerActiveDrain());
         assertThat(((CompositeMember) worldGrid.getCell(attackerPos.x(), attackerPos.y()).occupant()).energy())

@@ -1,6 +1,7 @@
 package com.paralife.admission;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.*;
 
 import com.paralife.codec.Frame;
@@ -17,8 +18,15 @@ import com.paralife.world.WorldGrid;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
-import java.util.HashMap;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
+import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -139,6 +147,71 @@ class StaleResumeHandlerTest {
     }
 
     @Test
+    void deathAfterRebindCommitCannotBeOverwrittenBySuccessPublication() throws Exception {
+        CountDownLatch committed = new CountDownLatch(1);
+        CountDownLatch publish = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            boolean rebound = (boolean) invocation.callRealMethod();
+            assertThat(rebound).isTrue();
+            committed.countDown();
+            assertThat(publish.await(5, TimeUnit.SECONDS)).as("publication released").isTrue();
+            return rebound;
+        }).when(bots).rebindSession("new", "entity");
+
+        FutureTask<Void> rebind = new FutureTask<>(() -> {
+            handler.handleMessage(newSession, new TextMessage("r|C|" + oldToken));
+            return null;
+        });
+        FutureTask<Void> death = new FutureTask<>(() -> {
+            bots.unregisterByEntity("entity");
+            assertThat(bots.drainDeaths()).containsExactly(
+                    new BotRegistry.DeathNotice("new", "entity", new Position(1, 1)));
+            handler.markDead(newSession);
+            return null;
+        });
+        // Platform threads let us observe the exact contended monitor. Separate threads
+        // prevent a reentrant markDead call from bypassing the session lock under test.
+        Thread rebindThread = Thread.ofPlatform().name("rebind-publication-test").unstarted(rebind);
+        Thread deathThread = Thread.ofPlatform().name("rebind-death-test").unstarted(death);
+        ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+        try {
+            rebindThread.start();
+            assertThat(committed.await(5, TimeUnit.SECONDS)).as("registry committed").isTrue();
+            assertThat(bots.getBySession("new").orElseThrow().entityId()).isEqualTo("entity");
+            assertThat(newSession.getAttributes()).doesNotContainKey("entityId");
+            assertThat(tokens.contains(candidate)).isTrue();
+
+            deathThread.start();
+            // Release publication only after death has either completed (the regression)
+            // or reached the session monitor held by the rebind thread (the fixed path).
+            await().atMost(5, TimeUnit.SECONDS).until(() -> {
+                ThreadInfo info = threads.getThreadInfo(deathThread.threadId());
+                return death.isDone() || (info != null
+                        && info.getThreadState() == Thread.State.BLOCKED
+                        && info.getLockOwnerId() == rebindThread.threadId()
+                        && info.getLockInfo().getIdentityHashCode() == System.identityHashCode(newSession));
+            });
+            publish.countDown();
+            rebind.get(5, TimeUnit.SECONDS);
+            death.get(5, TimeUnit.SECONDS);
+
+            assertThat(newSession.getAttributes()).containsEntry("entityType", 'C')
+                    .containsEntry("respawnCount", 2)
+                    .doesNotContainKeys("entityId", "resumeToken", "stallTick");
+            assertThat(bots.getBySession("new")).isEmpty();
+            assertThat(tokens.contains(candidate)).isFalse();
+            assertThat(metrics.lookupBucketTags("entity")).isNull();
+            assertThat(metrics.totalActiveBucketCount()).isZero();
+            assertThat(metrics.totalStalledBucketCount()).isZero();
+            assertThat(meters.counter(AdmissionMetrics.M_REBOUND).count()).isEqualTo(1);
+        } finally {
+            publish.countDown();
+            rebindThread.join(Duration.ofSeconds(5));
+            deathThread.join(Duration.ofSeconds(5));
+        }
+    }
+
+    @Test
     void stalledInboundSendFailureStillCountsRejectionAndClosesForRestart() throws Exception {
         clearInvocations(oldSession);
         doThrow(new IOException("transport failed")).when(oldSession).sendMessage(any());
@@ -156,7 +229,7 @@ class StaleResumeHandlerTest {
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getId()).thenReturn(id);
         when(session.isOpen()).thenReturn(true);
-        Map<String, Object> attrs = new HashMap<>();
+        Map<String, Object> attrs = new ConcurrentHashMap<>();
         attrs.put("source", source);
         when(session.getAttributes()).thenReturn(attrs);
         return session;

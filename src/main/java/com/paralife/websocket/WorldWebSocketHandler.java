@@ -539,59 +539,63 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         }
 
         if (result instanceof AdmissionResult.Rebind rebind) {
-            // Token consumption precedes this commit. On the defined stale (false) outcome,
-            // compensate only the freshly minted candidate; do not publish success state.
-            if (!botRegistry.rebindSession(session.getId(), rebind.entityId())) {
-                resumeTokenRegistry.discardActive(rebind.freshResumeToken(), rebind.entityId());
-                if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.STALE_RESUME_TOKEN, session);
-                sendFrame(session, new Frame.ErrorFrame(400, Optional.of(RejectionToken.STALE_RESUME_TOKEN)));
-                try { session.close(); } catch (Exception ignored) {}
-                log.warn("BACKPRESSURE rebind-stale tick={} session={} entity={} {}",
-                        currentTick, session.getId(), rebind.entityId(),
-                        AttributionTagger.formatLogFields(session));
-                return;
-            }
-            if (admissionMetrics != null) admissionMetrics.incRebound();
-            // Resume-token re-bind: preserve entityId, swap session in BotRegistry, restore respawn count.
-            //
-            // P18-Chunk-A H1 fix: gauge accounting under attribution change.
-            // The original Allow incremented the gauge keyed by the OLD session's tags
-            // (captured in the snapshot). When the rebound session presents different
-            // attribution headers (operator JVM restart with auto-uuid harness, missing
-            // headers, etc.) we must:
-            //   1. drop the OLD stalled-bucket gauge   (decStalledBucketByTags(snapshot))
-            //   2. drop the OLD active-bucket gauge    (decActiveBucketByTags(snapshot))
-            //   3. re-increment the NEW active-bucket  (incActiveBucket — uses live session tags
-            //      and updates the entityId→Tags snapshot to point at the new bucket)
-            //
-            // For the same-attribution case (snapshot == new tags) this is a net no-op.
-            // Both buckets stay at their pre-rebind values and the snapshot is rewritten to itself.
-            // Inserting ATTR_ENTITY_ID into attrs BEFORE incActiveBucket is required — the
-            // incActiveBucket call captures the snapshot keyed by the entity id read off attrs.
-            attrs.remove(ATTR_STALL_TICK);
-            attrs.put(ATTR_ENTITY_ID, rebind.entityId());
-            attrs.put(ATTR_ENTITY_TYPE, register.entityType());
-            attrs.put(ATTR_RESUME_TOKEN, rebind.freshResumeToken());
-
-            if (admissionMetrics != null) {
-                io.micrometer.core.instrument.Tags oldTags =
-                        admissionMetrics.lookupBucketTags(rebind.entityId());
-                if (oldTags != null) {
-                    admissionMetrics.decStalledBucketByTags(oldTags);
-                    admissionMetrics.decActiveBucketByTags(oldTags);
+            // A terminal callback can observe the new binding as soon as it commits.
+            // Serialize publication with markDead so it cannot overwrite the Dead state.
+            synchronized (session) {
+                // Token consumption precedes this commit. On the defined stale (false) outcome,
+                // compensate only the freshly minted candidate; do not publish success state.
+                if (!botRegistry.rebindSession(session.getId(), rebind.entityId())) {
+                    resumeTokenRegistry.discardActive(rebind.freshResumeToken(), rebind.entityId());
+                    if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.STALE_RESUME_TOKEN, session);
+                    sendFrame(session, new Frame.ErrorFrame(400, Optional.of(RejectionToken.STALE_RESUME_TOKEN)));
+                    try { session.close(); } catch (Exception ignored) {}
+                    log.warn("BACKPRESSURE rebind-stale tick={} session={} entity={} {}",
+                            currentTick, session.getId(), rebind.entityId(),
+                            AttributionTagger.formatLogFields(session));
+                    return;
                 }
-                admissionMetrics.incActiveBucket(session);
+                if (admissionMetrics != null) admissionMetrics.incRebound();
+                // Resume-token re-bind: preserve entityId, swap session in BotRegistry, restore respawn count.
+                //
+                // P18-Chunk-A H1 fix: gauge accounting under attribution change.
+                // The original Allow incremented the gauge keyed by the OLD session's tags
+                // (captured in the snapshot). When the rebound session presents different
+                // attribution headers (operator JVM restart with auto-uuid harness, missing
+                // headers, etc.) we must:
+                //   1. drop the OLD stalled-bucket gauge   (decStalledBucketByTags(snapshot))
+                //   2. drop the OLD active-bucket gauge    (decActiveBucketByTags(snapshot))
+                //   3. re-increment the NEW active-bucket  (incActiveBucket — uses live session tags
+                //      and updates the entityId→Tags snapshot to point at the new bucket)
+                //
+                // For the same-attribution case (snapshot == new tags) this is a net no-op.
+                // Both buckets stay at their pre-rebind values and the snapshot is rewritten to itself.
+                // Inserting ATTR_ENTITY_ID into attrs BEFORE incActiveBucket is required — the
+                // incActiveBucket call captures the snapshot keyed by the entity id read off attrs.
+                attrs.remove(ATTR_STALL_TICK);
+                attrs.put(ATTR_ENTITY_ID, rebind.entityId());
+                attrs.put(ATTR_ENTITY_TYPE, register.entityType());
+                attrs.put(ATTR_RESUME_TOKEN, rebind.freshResumeToken());
+
+                if (admissionMetrics != null) {
+                    io.micrometer.core.instrument.Tags oldTags =
+                            admissionMetrics.lookupBucketTags(rebind.entityId());
+                    if (oldTags != null) {
+                        admissionMetrics.decStalledBucketByTags(oldTags);
+                        admissionMetrics.decActiveBucketByTags(oldTags);
+                    }
+                    admissionMetrics.incActiveBucket(session);
+                }
+                // Restore respawn count from stall-time snapshot (claude MEDIUM respawn-cap-bypass fix).
+                Integer snapshot = respawnCountAtStall.remove(rebind.entityId());
+                if (snapshot != null) {
+                    attrs.put(ATTR_RESPAWN_COUNT, snapshot);
+                }
+                sendFrame(session, new Frame.SyncFrame(rebind.entityId(),
+                        Optional.of(rebind.freshResumeToken()), List.of()));
+                log.info("BACKPRESSURE resumed tick={} session={} entity={} respawnCountRestored={} {}",
+                        currentTick, session.getId(), rebind.entityId(), snapshot,
+                        AttributionTagger.formatLogFields(session));
             }
-            // Restore respawn count from stall-time snapshot (claude MEDIUM respawn-cap-bypass fix).
-            Integer snapshot = respawnCountAtStall.remove(rebind.entityId());
-            if (snapshot != null) {
-                attrs.put(ATTR_RESPAWN_COUNT, snapshot);
-            }
-            sendFrame(session, new Frame.SyncFrame(rebind.entityId(),
-                    Optional.of(rebind.freshResumeToken()), List.of()));
-            log.info("BACKPRESSURE resumed tick={} session={} entity={} respawnCountRestored={} {}",
-                    currentTick, session.getId(), rebind.entityId(), snapshot,
-                    AttributionTagger.formatLogFields(session));
             return;
         }
 
@@ -1088,20 +1092,22 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
      */
     public void markDead(WebSocketSession session) {
         if (session == null) return;
-        Object eid = session.getAttributes().remove(ATTR_ENTITY_ID);
-        session.getAttributes().remove(ATTR_RESUME_TOKEN);
-        String entityId = eid instanceof String e ? e : null;
-        if (entityId != null) {
-            if (admissionMetrics != null) {
-                io.micrometer.core.instrument.Tags bucketTags =
-                        admissionMetrics.lookupBucketTags(entityId);
-                if (bucketTags != null) {
-                    admissionMetrics.decActiveBucketByTags(bucketTags);
+        synchronized (session) {
+            Object eid = session.getAttributes().remove(ATTR_ENTITY_ID);
+            session.getAttributes().remove(ATTR_RESUME_TOKEN);
+            String entityId = eid instanceof String e ? e : null;
+            if (entityId != null) {
+                if (admissionMetrics != null) {
+                    io.micrometer.core.instrument.Tags bucketTags =
+                            admissionMetrics.lookupBucketTags(entityId);
+                    if (bucketTags != null) {
+                        admissionMetrics.decActiveBucketByTags(bucketTags);
+                    }
+                    admissionMetrics.releaseBucketTags(entityId);
                 }
-                admissionMetrics.releaseBucketTags(entityId);
-            }
-            if (resumeTokenRegistry != null) {
-                resumeTokenRegistry.clearActive(entityId);
+                if (resumeTokenRegistry != null) {
+                    resumeTokenRegistry.clearActive(entityId);
+                }
             }
         }
     }
