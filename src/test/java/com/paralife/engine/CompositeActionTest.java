@@ -1,5 +1,9 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 import com.paralife.codec.Frame;
 import com.paralife.metrics.WebSocketMetrics;
 import com.paralife.websocket.SessionRegistry;
@@ -10,16 +14,11 @@ import com.paralife.world.Entity.Particle;
 import com.paralife.world.Entity.ParticleType;
 import com.paralife.world.Entity.Role;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.WebSocketSession;
-
-import java.util.Map;
-import java.util.Optional;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Plan 15-11 (Task 2): composite reactive-role verb dispatch.
@@ -41,6 +40,7 @@ class CompositeActionTest {
     private CompositeRegistry compositeRegistry;
     private CompositeConfig compositeConfig;
     private SimulationConfig config;
+    private AlarmQueue alarmQueue;
     private ActionResolver resolver;
 
     @BeforeEach
@@ -51,8 +51,10 @@ class CompositeActionTest {
         compositeRegistry = new CompositeRegistry();
         compositeConfig = CompositeConfig.defaults();
         config = SimulationConfig.defaults();
+        alarmQueue = new AlarmQueue();
         resolver = new ActionResolver(worldGrid, botRegistry, sessionRegistry, config,
-                compositeRegistry, compositeConfig, legacyProfile());
+                compositeRegistry, compositeConfig, legacyProfile(),
+                StarvationConfig.defaults(), alarmQueue);
     }
 
     /**
@@ -122,6 +124,105 @@ class CompositeActionTest {
     /** Reproduce toward numpad direction. */
     private static Frame.ActionFrame reproduce(char numpad) {
         return new Frame.ActionFrame('R', Optional.of(String.valueOf(numpad)));
+    }
+
+    /** Alarm — verb L, no arg. Role dispatch supplies the reachable no-direction action. */
+    private static Frame.ActionFrame alarm() {
+        return new Frame.ActionFrame('L', Optional.empty());
+    }
+
+    // ── Reachable no-direction role alternatives ─────────────────────
+
+    @Test
+    void feederAlarmQueuesAlarmAndConsumesAdjacentNutrient() {
+        Position feederPos = new Position(3, 3);
+        Position nutrientPos = new Position(3, 4);
+        int memberEnergy = 50;
+        int initialPool = 100;
+        int nutrientLevel = 20;
+        long alarmTick = 40L;
+
+        mockSession("s-feeder-alarm");
+        placeCompositeMember("s-feeder-alarm", "cm-feeder-alarm", "comp-feeder",
+                ParticleType.CATALYST, Role.FEEDER, feederPos, memberEnergy);
+        worldGrid.setEntity(nutrientPos.x(), nutrientPos.y(), new Nutrient("n-alarm", nutrientLevel));
+        registerComposite("comp-feeder", "cm-feeder-alarm");
+
+        resolver.onTick(new TickEvent(alarmTick));
+        resolver.queueAction("s-feeder-alarm", alarm());
+        resolver.onTick(new TickEvent(alarmTick + 1));
+
+        int nutrientGain = legacyProfile().forType(ParticleType.CATALYST).nutrientConsumeEnergy();
+        assertThat(worldGrid.getCell(nutrientPos.x(), nutrientPos.y()).occupant())
+                .isEqualTo(new Nutrient("n-alarm", nutrientLevel - nutrientGain));
+        assertThat(compositeRegistry.getSharedEnergy("comp-feeder"))
+                .isEqualTo(initialPool + nutrientGain - compositeConfig.feederActiveDrain());
+        assertThat(((CompositeMember) worldGrid.getCell(feederPos.x(), feederPos.y()).occupant()).energy())
+                .isEqualTo(memberEnergy);
+        assertThat(alarmQueue.drainAlarms("comp-feeder"))
+                .containsExactly(new AlarmQueue.AlarmEntry("comp-feeder", feederPos, alarmTick));
+    }
+
+    @Test
+    void attackerAlarmQueuesAlarmAndAutoTargetsAdjacentCompositeMember() {
+        Position attackerPos = new Position(3, 3);
+        Position targetPos = new Position(3, 4);
+        int attackerEnergy = 50;
+        int targetEnergy = 60;
+        int initialPool = 100;
+        long alarmTick = 50L;
+
+        mockSession("s-attacker-alarm");
+        placeCompositeMember("s-attacker-alarm", "cm-attacker-alarm", "comp-attacker",
+                ParticleType.CATALYST, Role.ATTACKER, attackerPos, attackerEnergy);
+        CompositeMember enemy = new CompositeMember(
+                "enemy-member", "enemy-composite", ParticleType.MEMBRANE,
+                Role.DEFENDER, targetEnergy, 100);
+        worldGrid.setEntity(targetPos.x(), targetPos.y(), enemy);
+        registerComposite("comp-attacker", "cm-attacker-alarm");
+
+        resolver.onTick(new TickEvent(alarmTick));
+        resolver.queueAction("s-attacker-alarm", alarm());
+        resolver.onTick(new TickEvent(alarmTick + 1));
+
+        CompositeMember damaged =
+                (CompositeMember) worldGrid.getCell(targetPos.x(), targetPos.y()).occupant();
+        assertThat(damaged.energy()).isEqualTo(targetEnergy - config.combatEnergyTransfer());
+        assertThat(compositeRegistry.getSharedEnergy("comp-attacker"))
+                .isEqualTo(initialPool - compositeConfig.attackerActiveDrain());
+        assertThat(((CompositeMember) worldGrid.getCell(attackerPos.x(), attackerPos.y()).occupant()).energy())
+                .isEqualTo(attackerEnergy);
+        assertThat(alarmQueue.drainAlarms("comp-attacker"))
+                .containsExactly(new AlarmQueue.AlarmEntry("comp-attacker", attackerPos, alarmTick));
+    }
+
+    @Test
+    void attackerDirectedAttackDamagesBondedPair() {
+        Position attackerPos = new Position(3, 3);
+        Position targetPos = new Position(4, 3);
+        int attackerEnergy = 50;
+        int targetEnergy = 70;
+        int initialPool = 100;
+
+        mockSession("s-attacker-directed");
+        placeCompositeMember("s-attacker-directed", "cm-attacker-directed", "comp-attacker",
+                ParticleType.CATALYST, Role.ATTACKER, attackerPos, attackerEnergy);
+        Entity.BondedPair enemy = new Entity.BondedPair(
+                "enemy-a+enemy-b", ParticleType.MEMBRANE, ParticleType.CATALYST,
+                targetEnergy, 120);
+        worldGrid.setEntity(targetPos.x(), targetPos.y(), enemy);
+        registerComposite("comp-attacker", "cm-attacker-directed");
+
+        resolver.queueAction("s-attacker-directed", attack('6'));
+        resolver.onTick(new TickEvent(60L));
+
+        Entity.BondedPair damaged =
+                (Entity.BondedPair) worldGrid.getCell(targetPos.x(), targetPos.y()).occupant();
+        assertThat(damaged.energy()).isEqualTo(targetEnergy - config.combatEnergyTransfer());
+        assertThat(compositeRegistry.getSharedEnergy("comp-attacker"))
+                .isEqualTo(initialPool - compositeConfig.attackerActiveDrain());
+        assertThat(((CompositeMember) worldGrid.getCell(attackerPos.x(), attackerPos.y()).occupant()).energy())
+                .isEqualTo(attackerEnergy);
     }
 
     // ── FEEDER tests ─────────────────────────────────────────────

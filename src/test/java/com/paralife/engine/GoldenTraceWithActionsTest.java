@@ -1,17 +1,35 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.paralife.admission.OutboundSender;
+import com.paralife.codec.Coord;
+import com.paralife.codec.Event;
 import com.paralife.codec.Frame;
-import com.paralife.engine.AlarmQueue;
-import com.paralife.engine.TickEvent;
+import com.paralife.codec.PerceptionCodec;
 import com.paralife.metrics.EmergenceMetrics;
 import com.paralife.websocket.SessionRegistry;
 import com.paralife.websocket.WorldWebSocketHandler;
 import com.paralife.world.Entity;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.TreeMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,21 +40,6 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.web.socket.WebSocketSession;
-
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.TreeMap;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.fail;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Phase 19.1 D-11 — golden-trace with actions gate.
@@ -202,86 +205,143 @@ class GoldenTraceWithActionsTest {
     // ── Test 2: L alarm routing ───────────────────────────────────────────────
 
     @Test
-    @DisplayName("Phase 19.1 G1-revised — L (Alarm) routes via queueAction's synchronous channel "
-            + "for composite members and is silently no-op for solo entities")
-    void lAlarmRoutesViaQueueActionForCompositeMember() throws Exception {
+    @DisplayName("L alarm is projected once to the explicit composite LOCOMOTOR")
+    void lAlarmIsProjectedOnceToExplicitLocomotor() throws Exception {
         resetAll();
+        AlarmFixture fixture = setUpAlarmFixture();
+        List<String> locoFrames = captureFramesFor(fixture.locomotorSessionId());
 
-        // Drive enough ticks for composites to form (bonding-probability=1.0).
-        setupScenario();
-        runTicks();
+        // Prime ActionResolver's current-tick clock before the synchronous L route.
+        actionResolver.onTick(new TickEvent(70L));
+        actionResolver.queueAction(
+                fixture.alarmingSessionId(), new Frame.ActionFrame('L', Optional.empty()));
 
-        List<String> compositeIds = stagedCompositeIds();
+        tickBroadcaster.onTick(new TickEvent(71L));
+        awaitAllSessionQueuesDrained();
+        awaitCapturedFrameCount(locoFrames, 1);
 
-        // --- Solo case ---
-        // Any bot-registered session whose entity is NOT a composite member.
-        String soloSessionId = null;
-        for (String sid : registeredSessionIds) {
-            var botOpt = botRegistry.getBySession(sid);
-            if (botOpt.isEmpty()) continue;
-            String entityId = botOpt.get().entityId();
-            if (compositeRegistry.getCompositeForMember(entityId).isEmpty()) {
-                soloSessionId = sid;
-                break;
-            }
+        assertThat(locoFrames).hasSize(1);
+        String firstWire = locoFrames.get(0);
+        Frame.TickFrame first = decodeTick(firstWire);
+        assertThat(firstWire).contains("v4N");
+        assertThat(first.events())
+                .containsExactly(new Event(
+                        'N', Optional.of(new Coord.Numpad('4')), OptionalInt.empty()));
+
+        tickBroadcaster.onTick(new TickEvent(72L));
+        awaitAllSessionQueuesDrained();
+        awaitCapturedFrameCount(locoFrames, 2);
+
+        assertThat(locoFrames).hasSize(2);
+        assertThat(decodeTick(locoFrames.get(1)).events()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("LOCOMOTOR alarm projection retains FIFO prefix, drops overflow, and never replays it")
+    void alarmProjectionCapsRetainedFifoAndDropsOverflowAfterDrain() throws Exception {
+        resetAll();
+        AlarmFixture fixture = setUpAlarmFixture();
+        List<String> locoFrames = captureFramesFor(fixture.locomotorSessionId());
+
+        alarmQueue.enqueueAlarm(fixture.compositeId(), new Position(5, 6), 80L); // west → 4
+        alarmQueue.enqueueAlarm(fixture.compositeId(), new Position(6, 5), 81L); // north → 8
+        for (int i = 2; i < PerceptionCodec.MAX_V_ENTRIES; i++) {
+            alarmQueue.enqueueAlarm(fixture.compositeId(), new Position(5, 6), 80L + i);
         }
+        alarmQueue.enqueueAlarm(fixture.compositeId(), new Position(7, 6), 112L); // overflow east → 6
 
-        if (soloSessionId != null) {
-            actionResolver.queueAction(soloSessionId, new Frame.ActionFrame('L', Optional.empty()));
-            // L for a solo entity hits handleAlarmAction's early-return at :389 —
-            // it checks occupant instanceof CompositeMember. Non-composite occupants
-            // return early without calling enqueueAlarm.
-            for (String cid : compositeIds) {
-                assertThat(alarmQueue.drainAlarms(cid))
-                        .as("Solo L is silent no-op — no AlarmEntry for compositeId=" + cid)
-                        .isEmpty();
-            }
-        }
+        tickBroadcaster.onTick(new TickEvent(113L));
+        awaitAllSessionQueuesDrained();
+        awaitCapturedFrameCount(locoFrames, 1);
 
-        // --- Composite-member case ---
-        if (compositeIds.isEmpty()) {
-            // No composites formed — bonding pipeline coverage is in GoldenTraceEquivalenceTest.
-            return;
-        }
+        assertThat(locoFrames).hasSize(1);
+        Frame.TickFrame capped = decodeTick(locoFrames.get(0));
+        assertThat(capped.events()).hasSize(PerceptionCodec.MAX_V_ENTRIES);
+        assertThat(capped.events().get(0).coord()).contains(new Coord.Numpad('4'));
+        assertThat(capped.events().get(1).coord()).contains(new Coord.Numpad('8'));
+        assertThat(capped.events().subList(2, PerceptionCodec.MAX_V_ENTRIES))
+                .allSatisfy(event -> {
+                    assertThat(event.code()).isEqualTo('N');
+                    assertThat(event.coord()).contains(new Coord.Numpad('4'));
+                });
+        assertThat(capped.events())
+                .noneSatisfy(event -> assertThat(event.coord()).contains(new Coord.Numpad('6')));
 
-        String compositeId = compositeIds.get(0);
-        var compositeState = compositeRegistry.getComposite(compositeId).orElseThrow();
-        String memberEntityId = null;
-        Optional<String> memberSessionOpt = Optional.empty();
-        for (String mId : compositeState.getMemberIds()) {
-            Optional<String> sOpt = botRegistry.getSessionByEntity(mId);
-            if (sOpt.isPresent()) {
-                memberEntityId = mId;
-                memberSessionOpt = sOpt;
-                break;
-            }
-        }
+        tickBroadcaster.onTick(new TickEvent(114L));
+        awaitAllSessionQueuesDrained();
+        awaitCapturedFrameCount(locoFrames, 2);
 
-        if (memberSessionOpt.isEmpty()) {
-            // Bond-seeded entities not in botRegistry — skip composite-member assertion.
-            return;
-        }
-
-        String memberSessionId = memberSessionOpt.get();
-        // Drain pre-state to isolate this test's enqueue.
-        alarmQueue.drainAlarms(compositeId);
-
-        actionResolver.queueAction(memberSessionId, new Frame.ActionFrame('L', Optional.empty()));
-        List<AlarmQueue.AlarmEntry> drained = alarmQueue.drainAlarms(compositeId);
-        assertThat(drained)
-                .as("Composite L enqueues exactly one AlarmEntry into AlarmQueue for the member's compositeId")
-                .hasSize(1);
-        assertThat(drained.get(0).compositeId())
-                .isEqualTo(compositeId);
+        assertThat(locoFrames).hasSize(2);
+        assertThat(decodeTick(locoFrames.get(1)).events()).isEmpty();
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    private List<String> stagedCompositeIds() {
-        return compositeRegistry.getAll().stream()
-                .map(CompositeRegistry.CompositeState::getCompositeId)
-                .toList();
+    private AlarmFixture setUpAlarmFixture() {
+        String compositeId = "alarm-composite";
+        alarmQueue.drainAlarms(compositeId);
+        String alarmingEntityId = "alarm-feeder";
+        String alarmingSessionId = "alarm-feeder-session";
+        String locomotorEntityId = "alarm-locomotor";
+        String locomotorSessionId = "alarm-locomotor-session";
+        Position alarmingPosition = new Position(5, 6);
+        Position locomotorPosition = new Position(6, 6);
+
+        worldGrid.setEntity(alarmingPosition.x(), alarmingPosition.y(),
+                new Entity.CompositeMember(alarmingEntityId, compositeId,
+                        Entity.ParticleType.CATALYST, Entity.Role.FEEDER, 50, 100));
+        worldGrid.setEntity(locomotorPosition.x(), locomotorPosition.y(),
+                new Entity.CompositeMember(locomotorEntityId, compositeId,
+                        Entity.ParticleType.MEMBRANE, Entity.Role.LOCOMOTOR, 50, 100));
+        compositeRegistry.register(
+                compositeId,
+                List.of(alarmingEntityId, locomotorEntityId),
+                Map.of(alarmingEntityId, alarmingPosition, locomotorEntityId, locomotorPosition),
+                100,
+                200);
+        registerAlarmSession(alarmingSessionId, alarmingEntityId, alarmingPosition);
+        registerAlarmSession(locomotorSessionId, locomotorEntityId, locomotorPosition);
+
+        return new AlarmFixture(compositeId, alarmingSessionId, locomotorSessionId);
     }
+
+    private void registerAlarmSession(String sessionId, String entityId, Position position) {
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.isOpen()).thenReturn(true);
+        when(session.getId()).thenReturn(sessionId);
+        sessionRegistry.register(session);
+        outboundSender.attachSession(session, OUTBOUND_QUEUE_SIZE);
+        botRegistry.register(sessionId, entityId, position);
+        registeredSessionIds.add(sessionId);
+    }
+
+    private List<String> captureFramesFor(String sessionId) {
+        List<String> frames = new CopyOnWriteArrayList<>();
+        outboundSender.setFrameEmitListener((emittedSessionId, bytes) -> {
+            if (sessionId.equals(emittedSessionId)) {
+                frames.add(new String(bytes, StandardCharsets.UTF_8));
+            }
+        });
+        return frames;
+    }
+
+    private static Frame.TickFrame decodeTick(String wire) {
+        return (Frame.TickFrame) PerceptionCodec.decode(wire);
+    }
+
+    private static void awaitCapturedFrameCount(List<String> frames, int expected)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + 2_000_000_000L;
+        while (frames.size() < expected && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+        }
+        assertThat(frames).hasSize(expected);
+    }
+
+    private record AlarmFixture(
+            String compositeId,
+            String alarmingSessionId,
+            String locomotorSessionId) {}
 
     private Map<String, Position> captureEntityPositions() {
         Map<String, Position> positions = new HashMap<>();
