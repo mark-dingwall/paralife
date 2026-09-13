@@ -188,8 +188,7 @@ class StaleResumeHandlerTest {
                 ThreadInfo info = threads.getThreadInfo(deathThread.threadId());
                 return death.isDone() || (info != null
                         && info.getThreadState() == Thread.State.BLOCKED
-                        && info.getLockOwnerId() == rebindThread.threadId()
-                        && info.getLockInfo().getIdentityHashCode() == System.identityHashCode(newSession));
+                        && info.getLockOwnerId() == rebindThread.threadId());
             });
             publish.countDown();
             rebind.get(5, TimeUnit.SECONDS);
@@ -209,6 +208,59 @@ class StaleResumeHandlerTest {
             rebindThread.join(Duration.ofSeconds(5));
             deathThread.join(Duration.ofSeconds(5));
         }
+    }
+
+    @Test
+    void terminalCleanupDoesNotContendWithSocketWriteMonitor() throws Exception {
+        String entityId = "slow-write-entity";
+        String activeToken = tokens.issueActive(entityId, "new");
+        newSession.getAttributes().put("entityId", entityId);
+        newSession.getAttributes().put("entityType", 'C');
+        newSession.getAttributes().put("resumeToken", activeToken);
+        metrics.incActiveBucket(newSession);
+
+        CountDownLatch socketMonitorHeld = new CountDownLatch(1);
+        CountDownLatch releaseSocketMonitor = new CountDownLatch(1);
+        CountDownLatch terminalFinished = new CountDownLatch(1);
+        FutureTask<Void> slowWrite = new FutureTask<>(() -> {
+            synchronized (newSession) {
+                socketMonitorHeld.countDown();
+                assertThat(releaseSocketMonitor.await(5, TimeUnit.SECONDS))
+                        .as("socket monitor released")
+                        .isTrue();
+            }
+            return null;
+        });
+        FutureTask<Void> terminalCleanup = new FutureTask<>(() -> {
+            try {
+                handler.markDead(newSession);
+                return null;
+            } finally {
+                terminalFinished.countDown();
+            }
+        });
+        Thread slowWriteThread = Thread.ofPlatform().name("held-socket-write-test").unstarted(slowWrite);
+        Thread terminalThread = Thread.ofPlatform().name("terminal-cleanup-test").unstarted(terminalCleanup);
+
+        boolean completedWithoutSocketMonitor;
+        try {
+            slowWriteThread.start();
+            assertThat(socketMonitorHeld.await(5, TimeUnit.SECONDS)).as("socket monitor held").isTrue();
+            terminalThread.start();
+            completedWithoutSocketMonitor = terminalFinished.await(1, TimeUnit.SECONDS);
+        } finally {
+            releaseSocketMonitor.countDown();
+            slowWriteThread.join(Duration.ofSeconds(5));
+            terminalThread.join(Duration.ofSeconds(5));
+        }
+
+        assertThat(completedWithoutSocketMonitor)
+                .as("terminal cleanup must not wait for an in-flight socket write")
+                .isTrue();
+        slowWrite.get(5, TimeUnit.SECONDS);
+        terminalCleanup.get(5, TimeUnit.SECONDS);
+        assertThat(newSession.getAttributes()).doesNotContainKeys("entityId", "resumeToken");
+        assertThat(tokens.contains(activeToken)).isFalse();
     }
 
     @Test

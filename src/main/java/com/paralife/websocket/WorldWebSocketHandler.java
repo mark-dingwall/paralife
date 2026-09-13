@@ -126,6 +126,12 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
     private final ConcurrentHashMap<String, Integer> respawnCountAtStall = new ConcurrentHashMap<>();
 
     /**
+     * Per-session FSM publication lock. Deliberately distinct from the WebSocket session monitor,
+     * which outbound writers may hold while blocked in {@code sendMessage}.
+     */
+    private final ConcurrentHashMap<String, Object> lifecycleLocks = new ConcurrentHashMap<>();
+
+    /**
      * Phase 16 Plan 01: seeded placement RNG. Non-final so {@link #resetSeed()} can reassign
      * it between test runs. Bound from {@link SpawnConfig#seed()} — null = unseeded (production).
      */
@@ -440,6 +446,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
                     tickEngine.currentTick(), sessionId, status,
                     session.getAttributes().get(ATTR_ENTITY_ID),
                     AttributionTagger.formatLogFields(session));
+            lifecycleLocks.remove(sessionId);
             return;
         }
 
@@ -453,6 +460,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         cleanupBot(session);
         log.info("Client disconnected: {} (total: {}, status: {})",
                 sessionId, sessionRegistry.getSessionCount(), status);
+        lifecycleLocks.remove(sessionId);
     }
 
     @Override
@@ -474,9 +482,11 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
             // the registry entry. The grace-expiry sweep's cleanupByEntityId is the sole reaper.
             log.info("BACKPRESSURE transport-error-held tick={} session={}",
                     tickEngine.currentTick(), session.getId());
+            lifecycleLocks.remove(session.getId());
             return;
         }
         cleanupBot(session);
+        lifecycleLocks.remove(session.getId());
     }
 
     // ── Inbound message dispatch ─────────────────────────────────────────────
@@ -541,7 +551,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         if (result instanceof AdmissionResult.Rebind rebind) {
             // A terminal callback can observe the new binding as soon as it commits.
             // Serialize publication with markDead so it cannot overwrite the Dead state.
-            synchronized (session) {
+            synchronized (lifecycleLock(session)) {
                 // Token consumption precedes this commit. On the defined stale (false) outcome,
                 // compensate only the freshly minted candidate; do not publish success state.
                 if (!botRegistry.rebindSession(session.getId(), rebind.entityId())) {
@@ -1092,7 +1102,7 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
      */
     public void markDead(WebSocketSession session) {
         if (session == null) return;
-        synchronized (session) {
+        synchronized (lifecycleLock(session)) {
             Object eid = session.getAttributes().remove(ATTR_ENTITY_ID);
             session.getAttributes().remove(ATTR_RESUME_TOKEN);
             String entityId = eid instanceof String e ? e : null;
@@ -1110,5 +1120,9 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
                 }
             }
         }
+    }
+
+    private Object lifecycleLock(WebSocketSession session) {
+        return lifecycleLocks.computeIfAbsent(session.getId(), ignored -> new Object());
     }
 }

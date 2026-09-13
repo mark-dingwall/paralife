@@ -220,8 +220,10 @@ Client reconnects on a new WebSocket, sends `r|<type>|<resumeToken>`:
    the registry's scalar stalled count, and mint a fresh ACTIVE candidate for the same entity.
    - The handler commits `BotRegistry.rebindSession` before installing attributes, restoring the
      stall-time respawn snapshot, transferring attribution buckets, or incrementing `rebound`.
-     Commit and publication share the session monitor with `markDead`, so a terminal callback
-     observing the committed binding applies Dead cleanup after publication and cannot be overwritten.
+     Commit and publication share a handler-owned per-session lifecycle lock with `markDead`, so a
+     terminal callback observing the committed binding applies Dead cleanup after publication and
+     cannot be overwritten. This lock is deliberately distinct from the WebSocket session monitor
+     used by blocking socket writes.
    - On success, swap the old session binding to the new session and return the fresh token in
      `S|<entityId>|<newResumeToken>`; successful accounting belongs to the handler, not the gate.
    - On `false`, call `discardActive(candidate, expectedEntityId)`: atomically remove only that
