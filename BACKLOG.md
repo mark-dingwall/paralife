@@ -162,6 +162,11 @@ constant-referential blind spots.
   production path calls `setMaintenance`; `/actuator/metrics/paralife.admission.maintenance` can
   therefore disagree with the live gate after a maintenance-enabled startup. Fix the wiring and
   add a context-level positive/negative control on the next admission-metrics change.
+- **Shard lifecycle publication only if profiling justifies it.** Rebind, STALLED transition,
+  identity remap, and terminal cleanup currently share one handler-owned lock so their cross-store
+  ownership updates remain atomic. This deliberately serializes rare lifecycle operations without
+  retaining per-session locks. Consider keyed/striped coordination only if reconnect/close burst
+  profiling shows material contention; do not add a lock registry solely for theoretical throughput.
 
 **Trigger:** opportunistic / next admission-touching change.
 

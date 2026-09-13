@@ -7,6 +7,7 @@ import static org.mockito.Mockito.*;
 import com.paralife.codec.Frame;
 import com.paralife.engine.ActionResolver;
 import com.paralife.engine.BotRegistry;
+import com.paralife.engine.LiveEntityRegistry;
 import com.paralife.engine.MetabolicProfile;
 import com.paralife.engine.SpawnConfig;
 import com.paralife.engine.TickEngine;
@@ -43,7 +44,11 @@ class StaleResumeHandlerTest {
     private final ResumeTokenRegistry tokens = spy(new ResumeTokenRegistry(config, metrics));
     private final BotRegistry bots = spy(new BotRegistry());
     private final OutboundSender outbound = mock(OutboundSender.class);
+    private final SessionRegistry sessions = mock(SessionRegistry.class);
+    private final WorldGrid grid = mock(WorldGrid.class);
+    private final LiveEntityRegistry liveEntities = mock(LiveEntityRegistry.class);
     private WorldWebSocketHandler handler;
+    private AdmissionGate gate;
     private WebSocketSession oldSession;
     private WebSocketSession newSession;
     private String oldToken;
@@ -53,14 +58,16 @@ class StaleResumeHandlerTest {
     @BeforeEach
     void setUp() {
         TickEngine tick = mock(TickEngine.class);
-        WorldGrid grid = mock(WorldGrid.class);
-        AdmissionGate gate = new AdmissionGate(config, RespawnConfig.defaults(), grid,
+        when(grid.livingEntityCount()).thenReturn(1);
+        gate = new AdmissionGate(config, RespawnConfig.defaults(), grid,
                 mock(TickHealthMonitor.class), tokens, metrics);
-        handler = new WorldWebSocketHandler(mock(SessionRegistry.class), grid, tick, bots,
-                mock(ActionResolver.class), MetabolicProfile.defaults(), SpawnConfig.defaults(),
-                RespawnConfig.defaults(), gate, outbound, tokens, config, metrics, null, null);
+        gate.seedReservedSlots();
         oldSession = session("old", "operator");
         newSession = session("new", "harness");
+        when(sessions.getSession("new")).thenReturn(newSession);
+        handler = new WorldWebSocketHandler(sessions, grid, tick, bots, mock(ActionResolver.class),
+                MetabolicProfile.defaults(), SpawnConfig.defaults(), RespawnConfig.defaults(), gate,
+                outbound, tokens, config, metrics, null, liveEntities);
         newSession.getAttributes().put("harness", "new-harness");
         oldSession.getAttributes().put("entityId", "entity");
         oldSession.getAttributes().put("entityType", 'C');
@@ -79,7 +86,7 @@ class StaleResumeHandlerTest {
     }
 
     @Test
-    void staleRebindDiscardsOnlyCandidateWithoutPublishingSuccess() throws Exception {
+    void staleRebindReleasesReservationWithoutPublishingSuccess() throws Exception {
         // Deterministically reproduce the missing binding at commit, keeping token-side effects real.
         bots.unregisterByEntity("entity");
         Tags oldTags = metrics.lookupBucketTags("entity");
@@ -87,6 +94,7 @@ class StaleResumeHandlerTest {
         assertThat(tokens.stalledSize()).isEqualTo(1);
         assertThat(metrics.totalActiveBucketCount()).isEqualTo(1);
         assertThat(metrics.totalStalledBucketCount()).isEqualTo(1);
+        assertThat(gate.reservedSlots()).isEqualTo(1);
 
         handler.handleMessage(newSession, new TextMessage("r|C|" + oldToken));
 
@@ -97,13 +105,14 @@ class StaleResumeHandlerTest {
         assertThat(tokens.peek(collateralToken).orElseThrow().state()).isEqualTo(ResumeTokenRegistry.State.ACTIVE);
         assertThat(tokens.contains(oldToken)).isFalse();
         assertThat(tokens.stalledSize()).as("tryRebind owns the scalar decrement").isZero();
-        assertThat(metrics.totalActiveBucketCount()).isEqualTo(1);
-        assertThat(metrics.totalStalledBucketCount()).isEqualTo(1);
-        assertThat(metrics.lookupBucketTags("entity")).isEqualTo(oldTags);
+        assertThat(metrics.totalActiveBucketCount()).isZero();
+        assertThat(metrics.totalStalledBucketCount()).isZero();
+        assertThat(metrics.lookupBucketTags("entity")).isNotEqualTo(oldTags).isNull();
+        assertThat(gate.reservedSlots()).isZero();
         assertThat(meters.get(AdmissionMetrics.M_ACTIVE_ENTITIES).tag("source", "operator").gauge().value())
-                .isEqualTo(1);
+                .isZero();
         assertThat(meters.get(AdmissionMetrics.M_STALLED_SESSIONS).tag("source", "operator").gauge().value())
-                .isEqualTo(1);
+                .isZero();
         assertThat(meters.find(AdmissionMetrics.M_ACTIVE_ENTITIES).tag("source", "harness").gauge()).isNull();
         assertThat(meters.counter(AdmissionMetrics.M_REBOUND).count()).isZero();
         assertThat(meters.counter(AdmissionMetrics.M_REJECTED, "reason", "stale-resume-token",
@@ -115,12 +124,24 @@ class StaleResumeHandlerTest {
         verify(newSession).close();
         verify(newSession, never()).close(any(CloseStatus.class));
         assertThat(bots.getBySession("new")).isEmpty();
+    }
 
-        // A subsequent real success proves the stale attempt did not consume the respawn snapshot.
-        bots.register("old", "entity", new Position(1, 1));
-        tokens.convertToStalled(collateralToken, 0L);
-        handler.handleMessage(newSession, new TextMessage("r|C|" + collateralToken));
-        assertThat(newSession.getAttributes()).containsEntry("respawnCount", 2);
+    @Test
+    void staleRebindAfterIdentityRemapReleasesOriginalReservation() throws Exception {
+        handler.onEntityRemapped("old", "entity", "successor");
+        assertThat(bots.getBySession("old").orElseThrow().entityId()).isEqualTo("successor");
+        assertThat(tokens.peek(oldToken).orElseThrow().entityId()).isEqualTo("successor");
+        bots.unregisterByEntity("successor");
+
+        handler.handleMessage(newSession, new TextMessage("r|C|" + oldToken));
+
+        assertThat(gate.reservedSlots()).isZero();
+        assertThat(metrics.lookupBucketTags("entity")).isNull();
+        assertThat(metrics.lookupBucketTags("successor")).isNull();
+        assertThat(metrics.totalActiveBucketCount()).isZero();
+        assertThat(metrics.totalStalledBucketCount()).isZero();
+        verify(outbound).offer(eq("new"), isA(Frame.ErrorFrame.class));
+        verify(outbound, never()).offer(eq("new"), isA(Frame.SyncFrame.class));
     }
 
     @Test
@@ -206,6 +227,9 @@ class StaleResumeHandlerTest {
             assertThat(metrics.totalActiveBucketCount()).isZero();
             assertThat(metrics.totalStalledBucketCount()).isZero();
             assertThat(meters.counter(AdmissionMetrics.M_REBOUND).count()).isEqualTo(1);
+            assertThat(gate.reservedSlots())
+                    .as("death preserves the connected session reservation")
+                    .isEqualTo(1);
         } finally {
             publish.countDown();
             rebindThread.join(Duration.ofSeconds(5));
@@ -267,15 +291,119 @@ class StaleResumeHandlerTest {
     }
 
     @Test
-    void closeDuringPausedRebindKeepsOneLifecycleLock() throws Exception {
-        assertTerminalCallbackDoesNotSplitLifecycleLock(
+    void closeDuringPausedRebindPerformsCompleteTerminalCleanup() throws Exception {
+        assertTerminalCallbackPerformsCompleteCleanup(
                 session -> handler.afterConnectionClosed(session, CloseStatus.NORMAL));
     }
 
     @Test
-    void transportErrorDuringPausedRebindKeepsOneLifecycleLock() throws Exception {
-        assertTerminalCallbackDoesNotSplitLifecycleLock(
+    void transportErrorDuringPausedRebindPerformsCompleteTerminalCleanup() throws Exception {
+        assertTerminalCallbackPerformsCompleteCleanup(
                 session -> handler.handleTransportError(session, new IOException("closed")));
+    }
+
+    @Test
+    void entityRemapCannotSplitRebindPublication() throws Exception {
+        CountDownLatch committed = new CountDownLatch(1);
+        CountDownLatch publish = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            boolean rebound = (boolean) invocation.callRealMethod();
+            assertThat(rebound).isTrue();
+            committed.countDown();
+            assertThat(publish.await(5, TimeUnit.SECONDS)).as("publication released").isTrue();
+            return rebound;
+        }).when(bots).rebindSession("new", "entity");
+
+        FutureTask<Void> rebind = new FutureTask<>(() -> {
+            handler.handleMessage(newSession, new TextMessage("r|C|" + oldToken));
+            return null;
+        });
+        FutureTask<Void> remap = new FutureTask<>(() -> {
+            handler.onEntityRemapped("new", "entity", "successor");
+            return null;
+        });
+        Thread rebindThread = Thread.ofPlatform().name("remap-rebind-test").unstarted(rebind);
+        Thread remapThread = Thread.ofPlatform().name("remap-publication-test").unstarted(remap);
+        ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+        try {
+            rebindThread.start();
+            assertThat(committed.await(5, TimeUnit.SECONDS)).as("registry committed").isTrue();
+            remapThread.start();
+            await().atMost(5, TimeUnit.SECONDS).until(() -> {
+                ThreadInfo info = threads.getThreadInfo(remapThread.threadId());
+                return remap.isDone() || (info != null
+                        && info.getThreadState() == Thread.State.BLOCKED
+                        && info.getLockOwnerId() == rebindThread.threadId());
+            });
+
+            publish.countDown();
+            rebind.get(5, TimeUnit.SECONDS);
+            remap.get(5, TimeUnit.SECONDS);
+
+            assertThat(bots.getBySession("new").orElseThrow().entityId()).isEqualTo("successor");
+            assertThat(newSession.getAttributes()).containsEntry("entityId", "successor");
+            assertThat(tokens.peek(candidate).orElseThrow().entityId()).isEqualTo("successor");
+            assertThat(metrics.lookupBucketTags("entity")).isNull();
+            assertThat(metrics.lookupBucketTags("successor"))
+                    .isEqualTo(Tags.of("source", "harness", "harness", "new-harness"));
+            assertThat(metrics.totalActiveBucketCount()).isEqualTo(1);
+            assertThat(metrics.totalStalledBucketCount()).isZero();
+        } finally {
+            publish.countDown();
+            rebindThread.join(Duration.ofSeconds(5));
+            remapThread.join(Duration.ofSeconds(5));
+        }
+    }
+
+    @Test
+    void markStalledCannotSplitRebindPublication() throws Exception {
+        CountDownLatch committed = new CountDownLatch(1);
+        CountDownLatch publish = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            boolean rebound = (boolean) invocation.callRealMethod();
+            assertThat(rebound).isTrue();
+            committed.countDown();
+            assertThat(publish.await(5, TimeUnit.SECONDS)).as("publication released").isTrue();
+            return rebound;
+        }).when(bots).rebindSession("new", "entity");
+
+        FutureTask<Void> rebind = new FutureTask<>(() -> {
+            handler.handleMessage(newSession, new TextMessage("r|C|" + oldToken));
+            return null;
+        });
+        FutureTask<Void> stall = new FutureTask<>(() -> {
+            handler.markStalled(newSession, 1L);
+            return null;
+        });
+        Thread rebindThread = Thread.ofPlatform().name("stall-rebind-test").unstarted(rebind);
+        Thread stallThread = Thread.ofPlatform().name("stall-publication-test").unstarted(stall);
+        ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+        try {
+            rebindThread.start();
+            assertThat(committed.await(5, TimeUnit.SECONDS)).as("registry committed").isTrue();
+            stallThread.start();
+            await().atMost(5, TimeUnit.SECONDS).until(() -> {
+                ThreadInfo info = threads.getThreadInfo(stallThread.threadId());
+                return stall.isDone() || (info != null
+                        && info.getThreadState() == Thread.State.BLOCKED
+                        && info.getLockOwnerId() == rebindThread.threadId());
+            });
+            assertThat(stall.isDone()).as("stall transition waits for rebind publication").isFalse();
+
+            publish.countDown();
+            rebind.get(5, TimeUnit.SECONDS);
+            stall.get(5, TimeUnit.SECONDS);
+
+            assertThat(newSession.getAttributes()).containsEntry("stallTick", 1L)
+                    .doesNotContainKey("entityId");
+            assertThat(tokens.peek(candidate).orElseThrow().state())
+                    .isEqualTo(ResumeTokenRegistry.State.STALLED);
+            verify(outbound).detachSession(newSession, CloseStatus.SERVICE_RESTARTED);
+        } finally {
+            publish.countDown();
+            rebindThread.join(Duration.ofSeconds(5));
+            stallThread.join(Duration.ofSeconds(5));
+        }
     }
 
     @Test
@@ -292,7 +420,7 @@ class StaleResumeHandlerTest {
         verify(oldSession).close(CloseStatus.SERVICE_RESTARTED);
     }
 
-    private void assertTerminalCallbackDoesNotSplitLifecycleLock(
+    private void assertTerminalCallbackPerformsCompleteCleanup(
             Consumer<WebSocketSession> terminalCallback) throws Exception {
         CountDownLatch committed = new CountDownLatch(1);
         CountDownLatch publish = new CountDownLatch(1);
@@ -308,35 +436,38 @@ class StaleResumeHandlerTest {
             handler.handleMessage(newSession, new TextMessage("r|C|" + oldToken));
             return null;
         });
-        FutureTask<Void> delayedCleanup = new FutureTask<>(() -> {
-            handler.markDead(newSession);
+        FutureTask<Void> terminal = new FutureTask<>(() -> {
+            terminalCallback.accept(newSession);
             return null;
         });
         Thread rebindThread = Thread.ofPlatform().name("terminal-rebind-test").unstarted(rebind);
-        Thread cleanupThread = Thread.ofPlatform().name("delayed-terminal-cleanup-test")
-                .unstarted(delayedCleanup);
+        Thread cleanupThread = Thread.ofPlatform().name("terminal-cleanup-test").unstarted(terminal);
         ThreadMXBean threads = ManagementFactory.getThreadMXBean();
         try {
             rebindThread.start();
             assertThat(committed.await(5, TimeUnit.SECONDS)).as("registry committed").isTrue();
 
-            terminalCallback.accept(newSession);
             cleanupThread.start();
             await().atMost(5, TimeUnit.SECONDS).until(() -> {
                 ThreadInfo info = threads.getThreadInfo(cleanupThread.threadId());
-                return delayedCleanup.isDone() || (info != null
+                return terminal.isDone() || (info != null
                         && info.getThreadState() == Thread.State.BLOCKED
                         && info.getLockOwnerId() == rebindThread.threadId());
             });
 
             publish.countDown();
             rebind.get(5, TimeUnit.SECONDS);
-            delayedCleanup.get(5, TimeUnit.SECONDS);
+            terminal.get(5, TimeUnit.SECONDS);
 
             assertThat(newSession.getAttributes()).doesNotContainKeys(
-                    "entityId", "resumeToken", "stallTick");
+                    "entityId", "entityType", "resumeToken", "stallTick");
             assertThat(bots.getBySession("new")).isEmpty();
             assertThat(tokens.contains(candidate)).isFalse();
+            assertThat(metrics.lookupBucketTags("entity")).isNull();
+            assertThat(metrics.totalActiveBucketCount()).isZero();
+            assertThat(metrics.totalStalledBucketCount()).isZero();
+            assertThat(gate.reservedSlots()).isZero();
+            verify(liveEntities).unregister("entity");
         } finally {
             publish.countDown();
             rebindThread.join(Duration.ofSeconds(5));

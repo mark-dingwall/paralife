@@ -42,10 +42,13 @@ the actual `sendMessage` call. Writers: drain VT (`OutboundSender.drainLoop`), k
 `WorldWebSocketHandler.sendFrame`. Encoding and metric recording stay outside the monitor — the
 monitor only protects the non-thread-safe `sendMessage` invocation.
 
-Rebind publication and `markDead` use a separate lifecycle lock stored on the session. This
-serializes Alive/Dead state publication without acquiring the socket-write monitor: a slow blocking
-`sendMessage` must never delay tick-thread terminal cleanup. Session ownership keeps one stable lock
-for every callback that still references that session without retaining closed sessions globally.
+Rebind publication, STALLED transitions, terminal cleanup, and identity remaps use one handler-owned lifecycle lock. An
+identity remap crosses `BotRegistry`, resume-token ownership, attribution ownership, and session
+attributes under that boundary, so no participant can publish a mixed identity. The lock is distinct
+from the WebSocket session monitor: a slow blocking `sendMessage` never delays lifecycle cleanup, and
+the handler-owned lock does not retain closed sessions.
+The coarse boundary is an MVP correctness choice for rare lifecycle operations; keyed or striped
+coordination is deferred unless reconnect/close burst profiling demonstrates material contention.
 
 **markStalled close-then-best-effort-OOB (Phase 19.1, D-07):** `WorldWebSocketHandler.markStalled`
 invokes `OutboundSender.detachSession(WebSocketSession, CloseStatus.SERVICE_RESTARTED)` (the
