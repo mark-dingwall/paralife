@@ -541,9 +541,72 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
                 session.getId(), currentTick, alreadyAlive, isRespawn, respawnCount,
                 register.resumeToken());
 
-        AdmissionResult result = (admissionGate != null)
-                ? admissionGate.evaluate(req, session)
-                : AdmissionResult.Allow.INSTANCE;
+        AdmissionResult result;
+        Frame.SyncFrame resumedSync = null;
+        Integer restoredRespawnCount = null;
+        boolean staleRebind = false;
+
+        if (admissionGate != null && register.resumeToken().isPresent()) {
+            synchronized (lifecycleLock) {
+                // A terminal callback may complete before this inbound frame reaches admission.
+                // Only the exact, still-open registered session may consume STALLED ownership.
+                if (sessionRegistry.getSession(session.getId()) != session || !session.isOpen()) {
+                    return;
+                }
+                // Token acceptance and the BotRegistry commit form one lifecycle transaction.
+                // Identity remaps therefore cannot move ownership between those two operations.
+                result = admissionGate.evaluate(req, session);
+                if (result instanceof AdmissionResult.Rebind rebind) {
+                    if (!botRegistry.rebindSession(session.getId(), rebind.entityId())) {
+                        resumeTokenRegistry.discardActive(rebind.freshResumeToken(), rebind.entityId());
+                        releaseAbandonedStalledReservation(rebind.entityId());
+                        staleRebind = true;
+                    } else {
+                        if (admissionMetrics != null) admissionMetrics.incRebound();
+                        // Resume-token re-bind: preserve entityId, swap session in BotRegistry, restore respawn count.
+                        //
+                        // P18-Chunk-A H1 fix: gauge accounting under attribution change.
+                        // The original Allow incremented the gauge keyed by the OLD session's tags
+                        // (captured in the snapshot). When the rebound session presents different
+                        // attribution headers (operator JVM restart with auto-uuid harness, missing
+                        // headers, etc.) we must:
+                        //   1. drop the OLD stalled-bucket gauge   (decStalledBucketByTags(snapshot))
+                        //   2. drop the OLD active-bucket gauge    (decActiveBucketByTags(snapshot))
+                        //   3. re-increment the NEW active-bucket  (incActiveBucket — uses live session tags
+                        //      and updates the entityId→Tags snapshot to point at the new bucket)
+                        //
+                        // For the same-attribution case (snapshot == new tags) this is a net no-op.
+                        // Both buckets stay at their pre-rebind values and the snapshot is rewritten to itself.
+                        // Inserting ATTR_ENTITY_ID into attrs BEFORE incActiveBucket is required — the
+                        // incActiveBucket call captures the snapshot keyed by the entity id read off attrs.
+                        attrs.remove(ATTR_STALL_TICK);
+                        attrs.put(ATTR_ENTITY_ID, rebind.entityId());
+                        attrs.put(ATTR_ENTITY_TYPE, register.entityType());
+                        attrs.put(ATTR_RESUME_TOKEN, rebind.freshResumeToken());
+
+                        if (admissionMetrics != null) {
+                            io.micrometer.core.instrument.Tags oldTags =
+                                    admissionMetrics.lookupBucketTags(rebind.entityId());
+                            if (oldTags != null) {
+                                admissionMetrics.decStalledBucketByTags(oldTags);
+                                admissionMetrics.decActiveBucketByTags(oldTags);
+                            }
+                            admissionMetrics.incActiveBucket(session);
+                        }
+                        restoredRespawnCount = respawnCountAtStall.remove(rebind.entityId());
+                        if (restoredRespawnCount != null) {
+                            attrs.put(ATTR_RESPAWN_COUNT, restoredRespawnCount);
+                        }
+                        resumedSync = new Frame.SyncFrame(rebind.entityId(),
+                                Optional.of(rebind.freshResumeToken()), List.of());
+                    }
+                }
+            }
+        } else {
+            result = (admissionGate != null)
+                    ? admissionGate.evaluate(req, session)
+                    : AdmissionResult.Allow.INSTANCE;
+        }
 
         if (result instanceof AdmissionResult.Reject reject) {
             sendFrame(session, new Frame.ErrorFrame(reject.code(), Optional.of(reject.token())));
@@ -551,67 +614,19 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         }
 
         if (result instanceof AdmissionResult.Rebind rebind) {
-            // A terminal callback can observe the new binding as soon as it commits.
-            // Serialize publication with markDead so it cannot overwrite the Dead state.
-            boolean stale;
-            synchronized (lifecycleLock) {
-                // Token consumption precedes this commit. On the defined stale (false) outcome,
-                // compensate only the freshly minted candidate; do not publish success state.
-                if (!botRegistry.rebindSession(session.getId(), rebind.entityId())) {
-                    resumeTokenRegistry.discardActive(rebind.freshResumeToken(), rebind.entityId());
-                    releaseAbandonedStalledReservation(rebind.entityId());
-                    stale = true;
-                } else {
-                    stale = false;
-                    if (admissionMetrics != null) admissionMetrics.incRebound();
-                    // Resume-token re-bind: preserve entityId, swap session in BotRegistry, restore respawn count.
-                    //
-                    // P18-Chunk-A H1 fix: gauge accounting under attribution change.
-                    // The original Allow incremented the gauge keyed by the OLD session's tags
-                    // (captured in the snapshot). When the rebound session presents different
-                    // attribution headers (operator JVM restart with auto-uuid harness, missing
-                    // headers, etc.) we must:
-                    //   1. drop the OLD stalled-bucket gauge   (decStalledBucketByTags(snapshot))
-                    //   2. drop the OLD active-bucket gauge    (decActiveBucketByTags(snapshot))
-                    //   3. re-increment the NEW active-bucket  (incActiveBucket — uses live session tags
-                    //      and updates the entityId→Tags snapshot to point at the new bucket)
-                    //
-                    // For the same-attribution case (snapshot == new tags) this is a net no-op.
-                    // Both buckets stay at their pre-rebind values and the snapshot is rewritten to itself.
-                    // Inserting ATTR_ENTITY_ID into attrs BEFORE incActiveBucket is required — the
-                    // incActiveBucket call captures the snapshot keyed by the entity id read off attrs.
-                    attrs.remove(ATTR_STALL_TICK);
-                    attrs.put(ATTR_ENTITY_ID, rebind.entityId());
-                    attrs.put(ATTR_ENTITY_TYPE, register.entityType());
-                    attrs.put(ATTR_RESUME_TOKEN, rebind.freshResumeToken());
-
-                    if (admissionMetrics != null) {
-                        io.micrometer.core.instrument.Tags oldTags =
-                                admissionMetrics.lookupBucketTags(rebind.entityId());
-                        if (oldTags != null) {
-                            admissionMetrics.decStalledBucketByTags(oldTags);
-                            admissionMetrics.decActiveBucketByTags(oldTags);
-                        }
-                        admissionMetrics.incActiveBucket(session);
-                    }
-                    // Restore respawn count from stall-time snapshot (claude MEDIUM respawn-cap-bypass fix).
-                    Integer snapshot = respawnCountAtStall.remove(rebind.entityId());
-                    if (snapshot != null) {
-                        attrs.put(ATTR_RESPAWN_COUNT, snapshot);
-                    }
-                    sendFrame(session, new Frame.SyncFrame(rebind.entityId(),
-                            Optional.of(rebind.freshResumeToken()), List.of()));
-                    log.info("BACKPRESSURE resumed tick={} session={} entity={} respawnCountRestored={} {}",
-                            currentTick, session.getId(), rebind.entityId(), snapshot,
-                            AttributionTagger.formatLogFields(session));
-                }
-            }
-            if (stale) {
+            if (staleRebind) {
                 if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.STALE_RESUME_TOKEN, session);
                 sendFrame(session, new Frame.ErrorFrame(400, Optional.of(RejectionToken.STALE_RESUME_TOKEN)));
                 try { session.close(); } catch (Exception ignored) {}
                 log.warn("BACKPRESSURE rebind-stale tick={} session={} entity={} {}",
                         currentTick, session.getId(), rebind.entityId(),
+                        AttributionTagger.formatLogFields(session));
+            } else {
+                // Outbound offer may synchronously enter overflow handling. Keep it outside the
+                // global lifecycle boundary so a slow transport cannot block unrelated cleanup.
+                sendFrame(session, resumedSync);
+                log.info("BACKPRESSURE resumed tick={} session={} entity={} respawnCountRestored={} {}",
+                        currentTick, session.getId(), rebind.entityId(), restoredRespawnCount,
                         AttributionTagger.formatLogFields(session));
             }
             return;
@@ -993,8 +1008,13 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
      * remap fires), only the session-attribute update is skipped.
      */
     @Override
-    public void onEntityRemapped(String sessionId, String oldEntityId, String newEntityId) {
+    public void onEntityRemapped(String oldEntityId, String newEntityId) {
         synchronized (lifecycleLock) {
+            String sessionId = botRegistry.getSessionForEntity(oldEntityId).orElse(null);
+            if (sessionId == null) {
+                log.debug("onEntityRemapped: entity {} is no longer controlled", oldEntityId);
+                return;
+            }
             // The listener owns the BotRegistry mutation so all identity-bearing surfaces move
             // under one boundary. SimulationEngine performs this directly only without a listener.
             botRegistry.remapEntity(sessionId, newEntityId);

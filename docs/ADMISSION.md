@@ -74,6 +74,10 @@ frozen strings of all 10 constant-backed §1 tokens are pinned as independent wi
 | A38 | WHEN an owned entity changes identity while a rebind is publishing THE SYSTEM SHALL serialize the BotRegistry remap, token/accounting/respawn-snapshot remap, and session-attribute publication as one lifecycle transaction. | §4 | `StaleResumeHandlerTest.entityRemapCannotSplitRebindPublication` — pauses rebind after commit, attempts a remap, then asserts one successor identity across binding, token, attribution ownership, and session state; `staleRebindAfterIdentityRemapReleasesOriginalReservation` proves the moved snapshot still releases capacity. |
 | A39 | WHEN backpressure stalls a session while its rebind is publishing THE SYSTEM SHALL complete rebind publication before snapshotting and converting that session to STALLED. | §4 | `StaleResumeHandlerTest.markStalledCannotSplitRebindPublication` — pauses after registry commit, attempts the stall, and asserts it waits before converting the fresh token and clearing the published entity identity. |
 | A40 | WHEN an entity-death callback races with a committed rebind THE SYSTEM SHALL serialize Dead publication after rebind, clearing the active entity identity, ACTIVE resume token, and active attribution ownership while preserving the connected session's admission reservation and respawn state. | §4 | `StaleResumeHandlerTest.deathAfterRebindCommitCannotBeOverwrittenBySuccessPublication`; engine death finalization independently owns grid/live-registry removal, and A34 supplies the successful Alive control. |
+| A41 | WHEN terminal cleanup has removed a reconnecting session before its resume token is accepted THE SYSTEM SHALL reject further registration work for that session without consuming the STALLED token, creating an ACTIVE candidate, rebinding the entity, or offering Sync. | §4 | `StaleResumeHandlerTest.terminalSessionCannotAcceptResumeToken` — completes close cleanup before registration and proves the original STALLED ownership remains; A34 is the accepted-session control. |
+| A42 | WHEN resume-token acceptance races with an owned-entity identity remap THE SYSTEM SHALL serialize token acceptance, bot rebind, and success publication before the remap transaction, leaving one successor identity across binding, token, attribution, respawn snapshot, and session state. | §4 | `StaleResumeHandlerTest.identityRemapCannotInterleaveTokenAcceptanceAndRebindCommit` — pauses immediately after real token acceptance and proves remap waits, then observes the successor identity across all ownership surfaces. |
+| A43 | WHEN an owned entity changes identity THE SYSTEM SHALL resolve its current controlling session inside the lifecycle transaction before remapping any identity-bearing surface. | §4 | `StaleResumeHandlerTest.entityRemapResolvesCurrentControllingSessionInsideTransaction` — replaces the controlling session before the callback and proves the current binding, attributes, token, and accounting all move together. |
+| A44 | WHEN a successful resumed Sync offer blocks or synchronously enters overflow handling THE SYSTEM SHALL NOT hold the handler lifecycle lock while making that offer. | §4 | `StaleResumeHandlerTest.blockedResumedSyncOfferDoesNotBlockLifecycleWork` — proves the real Sync offer is entered while an independent lifecycle callback completes; A34 proves the Sync is still offered. |
 
 **Guard order (prose — precedence edges beyond A6 now clause-pinned).** `AdmissionGate.evaluate`
 applies six guards in fixed order (source: `AdmissionGate.java` guards 1–6 + javadoc lines 22–34):
@@ -218,17 +222,24 @@ Key is the opaque token string. ACTIVE entries use `Long.MAX_VALUE` and are not 
 
 Client reconnects on a new WebSocket, sends `r|<type>|<resumeToken>`:
 
-1. `AdmissionGate` looks up token in `ResumeTokenRegistry`.
+1. While holding the handler lifecycle lock, the handler first confirms that the reconnecting
+   WebSocket is still open and is the exact session currently registered under its session id.
+   It then asks `AdmissionGate` to look up the token in `ResumeTokenRegistry`. Terminal sessions
+   perform no admission work, so their STALLED ownership remains available to a later connection.
 2. If found, STALLED, and `currentTick < expiresAtTick`: consume the token atomically, decrement
    the registry's scalar stalled count, and mint a fresh ACTIVE candidate for the same entity.
    - The handler commits `BotRegistry.rebindSession` before installing attributes, restoring the
      stall-time respawn snapshot, transferring attribution buckets, or incrementing `rebound`.
-     Commit and publication share a handler lifecycle lock with terminal cleanup and entity remaps,
+     Token acceptance, commit, and publication share a handler lifecycle lock with terminal cleanup and entity remaps,
      so a callback observing the committed binding applies its complete transition after publication
-     and cannot be overwritten. This lock is deliberately distinct from the WebSocket session
-     monitor used by blocking socket writes and does not retain closed sessions.
-   - On success, swap the old session binding to the new session and return the fresh token in
+     and cannot be overwritten. Identity remaps resolve the current controlling session from
+     `BotRegistry` inside this same transaction; the tick thread does not publish a pre-resolved
+     session id. This lock is deliberately distinct from the WebSocket session monitor used by
+     blocking socket writes and does not retain closed sessions.
+   - On success, swap the old session binding to the new session and prepare the fresh token for
      `S|<entityId>|<newResumeToken>`; successful accounting belongs to the handler, not the gate.
+     The Sync offer occurs after releasing the lifecycle lock so synchronous overflow/transport
+     handling cannot block unrelated lifecycle work. It remains an offer, not guaranteed delivery.
    - On `false`, call `discardActive(candidate, expectedEntityId)`: atomically remove only that
      exact token if still ACTIVE for that entity, preserving collateral tokens and changed entries.
      Remove the stalled respawn snapshot, release its admission reservation, and retire the original

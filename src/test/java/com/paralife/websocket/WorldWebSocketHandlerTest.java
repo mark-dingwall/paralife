@@ -65,6 +65,9 @@ class WorldWebSocketHandlerTest {
     ResumeTokenRegistry resumeTokenRegistry;
 
     @Autowired
+    SessionRegistry sessionRegistry;
+
+    @Autowired
     AdmissionConfig admissionConfig;
 
     // A29 — spy the real bean so the "SHALL NOT queue" conjunct is isolable via verify(never()).
@@ -199,6 +202,7 @@ class WorldWebSocketHandlerTest {
         when(s.getAttributes()).thenReturn(new HashMap<>());
         when(s.getId()).thenReturn(id);
         when(s.isOpen()).thenReturn(true);
+        sessionRegistry.register(s);
         outboundSender.attachSession(s, 16);
         return s;
     }
@@ -270,10 +274,12 @@ class WorldWebSocketHandlerTest {
                         "rebind must restore the pre-stall respawnCount (respawn-cap-bypass guard)");
             } finally {
                 handler.cleanupBot(sc2);
+                sessionRegistry.unregister("sc2");
                 outboundSender.detachSession("sc2");
             }
         } finally {
             handler.cleanupBot(sc1);
+            sessionRegistry.unregister("sc1");
             outboundSender.detachSession("sc1");
         }
     }
@@ -363,6 +369,7 @@ class WorldWebSocketHandlerTest {
             // cleanupByEntityId would leak the STALLED entry + gauge (clearActive preserves STALLED).
             long graceWindow = admissionConfig.backpressure().graceWindowTicks();
             resumeTokenRegistry.onTick(new TickEvent(graceWindow));
+            sessionRegistry.unregister("sc408");
             outboundSender.detachSession("sc408");
         }
     }

@@ -249,7 +249,8 @@ class BondDisconnectIntegrationTest {
         String token = resumeTokenRegistry.issueActive("pred-1", predSessionId);
         predSession.getAttributes().put("resumeToken", token);
 
-        // Bond formation tick — H-C fires onEntityRemapped(predSessionId, "pred-1", bp.id()).
+        // Bond formation tick — H-C fires onEntityRemapped("pred-1", bp.id()); the handler
+        // resolves the current controlling session inside its lifecycle transaction.
         publisher.publishEvent(new TickEvent(1L));
 
         String bpId = liveEntityRegistry.snapshot().get(0).entityId();

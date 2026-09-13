@@ -24,15 +24,16 @@ public interface EntityLifecycleListener {
 
     /**
      * Invoked synchronously inside the tick thread to remap {@link BotRegistry}
-     * from {@code oldEntityId} to {@code newEntityId} for {@code sessionId} and
-     * publish every related ownership surface atomically.
+     * from {@code oldEntityId} to {@code newEntityId} and publish every related
+     * ownership surface atomically. The implementation resolves the current
+     * controlling session inside that transaction.
      *
      * <p>Implementations should:
      * <ol>
      *   <li>Remap the controlled entity in {@link BotRegistry}.</li>
      *   <li>Rewrite any STALLED/ACTIVE resume-token entries keyed by
      *       {@code oldEntityId} so reconnect flows resolve to the new id.</li>
-     *   <li>Locate the session by {@code sessionId} and update its
+     *   <li>Resolve the current controlling session and update its
      *       {@code ATTR_ENTITY_ID} attribute to {@code newEntityId}.</li>
      * </ol>
      *
@@ -40,5 +41,5 @@ public interface EntityLifecycleListener {
      * remap fired), implementations still remap the registry/token/accounting
      * ownership; only the session-attribute update is skipped.
      */
-    void onEntityRemapped(String sessionId, String oldEntityId, String newEntityId);
+    void onEntityRemapped(String oldEntityId, String newEntityId);
 }

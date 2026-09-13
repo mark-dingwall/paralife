@@ -59,8 +59,8 @@ class StaleResumeHandlerTest {
     void setUp() {
         TickEngine tick = mock(TickEngine.class);
         when(grid.livingEntityCount()).thenReturn(1);
-        gate = new AdmissionGate(config, RespawnConfig.defaults(), grid,
-                mock(TickHealthMonitor.class), tokens, metrics);
+        gate = spy(new AdmissionGate(config, RespawnConfig.defaults(), grid,
+                mock(TickHealthMonitor.class), tokens, metrics));
         gate.seedReservedSlots();
         oldSession = session("old", "operator");
         newSession = session("new", "harness");
@@ -128,7 +128,7 @@ class StaleResumeHandlerTest {
 
     @Test
     void staleRebindAfterIdentityRemapReleasesOriginalReservation() throws Exception {
-        handler.onEntityRemapped("old", "entity", "successor");
+        handler.onEntityRemapped("entity", "successor");
         assertThat(bots.getBySession("old").orElseThrow().entityId()).isEqualTo("successor");
         assertThat(tokens.peek(oldToken).orElseThrow().entityId()).isEqualTo("successor");
         bots.unregisterByEntity("successor");
@@ -168,6 +168,153 @@ class StaleResumeHandlerTest {
                 .isEqualTo(Tags.of("source", "harness", "harness", "new-harness"));
         verify(outbound).offer(eq("new"), isA(Frame.SyncFrame.class));
         verify(newSession, never()).close();
+    }
+
+    @Test
+    void terminalSessionCannotAcceptResumeToken() throws Exception {
+        handler.afterConnectionClosed(newSession, CloseStatus.NORMAL);
+        when(sessions.getSession("new")).thenReturn(null);
+        clearInvocations(outbound, bots, tokens);
+
+        handler.handleMessage(newSession, new TextMessage("r|C|" + oldToken));
+
+        verify(gate, never()).evaluate(any(), same(newSession));
+        assertThat(tokens.peek(oldToken).orElseThrow().state())
+                .isEqualTo(ResumeTokenRegistry.State.STALLED);
+        verify(tokens, never()).issueActive("entity", "new");
+        verify(bots, never()).rebindSession("new", "entity");
+        verify(outbound, never()).offer(eq("new"), any());
+        assertThat(bots.getBySession("old").orElseThrow().entityId()).isEqualTo("entity");
+    }
+
+    @Test
+    void identityRemapCannotInterleaveTokenAcceptanceAndRebindCommit() throws Exception {
+        CountDownLatch accepted = new CountDownLatch(1);
+        CountDownLatch continueAfterAcceptance = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            AdmissionResult result = (AdmissionResult) invocation.callRealMethod();
+            if (result instanceof AdmissionResult.Rebind) {
+                accepted.countDown();
+                assertThat(continueAfterAcceptance.await(5, TimeUnit.SECONDS))
+                        .as("rebind commit released")
+                        .isTrue();
+            }
+            return result;
+        }).when(gate).evaluate(any(), same(newSession));
+
+        FutureTask<Void> rebind = new FutureTask<>(() -> {
+            handler.handleMessage(newSession, new TextMessage("r|C|" + oldToken));
+            return null;
+        });
+        FutureTask<Void> remap = new FutureTask<>(() -> {
+            handler.onEntityRemapped("entity", "successor");
+            return null;
+        });
+        Thread rebindThread = Thread.ofPlatform().name("acceptance-rebind-test").unstarted(rebind);
+        Thread remapThread = Thread.ofPlatform().name("acceptance-remap-test").unstarted(remap);
+        ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+        try {
+            rebindThread.start();
+            assertThat(accepted.await(5, TimeUnit.SECONDS)).as("token accepted").isTrue();
+            assertThat(candidate).isNotNull();
+
+            remapThread.start();
+            await().atMost(5, TimeUnit.SECONDS).until(() -> {
+                ThreadInfo info = threads.getThreadInfo(remapThread.threadId());
+                return remap.isDone() || (info != null
+                        && info.getThreadState() == Thread.State.BLOCKED
+                        && info.getLockOwnerId() == rebindThread.threadId());
+            });
+            assertThat(remap.isDone())
+                    .as("identity remap waits for token acceptance and rebind commit")
+                    .isFalse();
+
+            continueAfterAcceptance.countDown();
+            rebind.get(5, TimeUnit.SECONDS);
+            remap.get(5, TimeUnit.SECONDS);
+
+            assertThat(bots.getBySession("new").orElseThrow().entityId()).isEqualTo("successor");
+            assertThat(newSession.getAttributes()).containsEntry("entityId", "successor")
+                    .containsEntry("respawnCount", 2);
+            assertThat(tokens.peek(candidate).orElseThrow().entityId()).isEqualTo("successor");
+            assertThat(metrics.lookupBucketTags("entity")).isNull();
+            assertThat(metrics.lookupBucketTags("successor"))
+                    .isEqualTo(Tags.of("source", "harness", "harness", "new-harness"));
+            verify(outbound).offer(eq("new"), isA(Frame.SyncFrame.class));
+        } finally {
+            continueAfterAcceptance.countDown();
+            rebindThread.join(Duration.ofSeconds(5));
+            remapThread.join(Duration.ofSeconds(5));
+        }
+    }
+
+    @Test
+    void entityRemapResolvesCurrentControllingSessionInsideTransaction() {
+        assertThat(bots.rebindSession("new", "entity")).isTrue();
+        newSession.getAttributes().put("entityId", "entity");
+
+        handler.onEntityRemapped("entity", "successor");
+
+        assertThat(bots.getBySession("new").orElseThrow().entityId()).isEqualTo("successor");
+        assertThat(newSession.getAttributes()).containsEntry("entityId", "successor");
+        assertThat(tokens.peek(oldToken).orElseThrow().entityId()).isEqualTo("successor");
+        assertThat(metrics.lookupBucketTags("entity")).isNull();
+        assertThat(metrics.lookupBucketTags("successor")).isEqualTo(Tags.of("source", "operator"));
+    }
+
+    @Test
+    void blockedResumedSyncOfferDoesNotBlockLifecycleWork() throws Exception {
+        CountDownLatch syncOfferEntered = new CountDownLatch(1);
+        CountDownLatch releaseSyncOffer = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            if (invocation.getArgument(1) instanceof Frame.SyncFrame) {
+                syncOfferEntered.countDown();
+                assertThat(releaseSyncOffer.await(5, TimeUnit.SECONDS))
+                        .as("Sync offer released")
+                        .isTrue();
+            }
+            return true;
+        }).when(outbound).offer(eq("new"), any());
+
+        WebSocketSession independent = session("independent", "operator");
+        independent.getAttributes().put("entityId", "independent-entity");
+        independent.getAttributes().put("entityType", 'M');
+        independent.getAttributes().put("resumeToken",
+                tokens.issueActive("independent-entity", "independent"));
+
+        FutureTask<Void> rebind = new FutureTask<>(() -> {
+            handler.handleMessage(newSession, new TextMessage("r|C|" + oldToken));
+            return null;
+        });
+        CountDownLatch lifecycleFinished = new CountDownLatch(1);
+        FutureTask<Void> lifecycleWork = new FutureTask<>(() -> {
+            try {
+                handler.markDead(independent);
+                return null;
+            } finally {
+                lifecycleFinished.countDown();
+            }
+        });
+        Thread rebindThread = Thread.ofPlatform().name("blocked-sync-offer-test").unstarted(rebind);
+        Thread lifecycleThread = Thread.ofPlatform().name("independent-lifecycle-test").unstarted(lifecycleWork);
+        boolean completedWhileOfferBlocked;
+        try {
+            rebindThread.start();
+            assertThat(syncOfferEntered.await(5, TimeUnit.SECONDS)).as("real Sync offer entered").isTrue();
+            lifecycleThread.start();
+            completedWhileOfferBlocked = lifecycleFinished.await(1, TimeUnit.SECONDS);
+        } finally {
+            releaseSyncOffer.countDown();
+            rebindThread.join(Duration.ofSeconds(5));
+            lifecycleThread.join(Duration.ofSeconds(5));
+        }
+
+        assertThat(completedWhileOfferBlocked)
+                .as("Sync offer must not retain the lifecycle lock")
+                .isTrue();
+        rebind.get(5, TimeUnit.SECONDS);
+        lifecycleWork.get(5, TimeUnit.SECONDS);
+        assertThat(independent.getAttributes()).doesNotContainKeys("entityId", "resumeToken");
     }
 
     @Test
@@ -319,7 +466,7 @@ class StaleResumeHandlerTest {
             return null;
         });
         FutureTask<Void> remap = new FutureTask<>(() -> {
-            handler.onEntityRemapped("new", "entity", "successor");
+            handler.onEntityRemapped("entity", "successor");
             return null;
         });
         Thread rebindThread = Thread.ofPlatform().name("remap-rebind-test").unstarted(rebind);

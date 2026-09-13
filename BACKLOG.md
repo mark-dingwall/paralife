@@ -167,6 +167,12 @@ constant-referential blind spots.
   ownership updates remain atomic. This deliberately serializes rare lifecycle operations without
   retaining per-session locks. Consider keyed/striped coordination only if reconnect/close burst
   profiling shows material contention; do not add a lock registry solely for theoretical throughput.
+- **Make fresh placement a terminal-safe lifecycle transaction.** Fresh registration, including an
+  unknown/expired resume token that falls through to `Allow`, performs placement and ownership
+  publication outside the handler lifecycle lock. A concurrent terminal callback can therefore
+  finish before attributes exist, after which the inbound thread can orphan the entity and admission
+  reservation on the closed session. Fixing this requires a bounded placement/publication transaction
+  with rollback and send-after-unlock; it is deliberately outside PR #28's rebind/remap race slice.
 
 **Trigger:** opportunistic / next admission-touching change.
 

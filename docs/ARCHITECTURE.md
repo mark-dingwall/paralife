@@ -42,11 +42,15 @@ the actual `sendMessage` call. Writers: drain VT (`OutboundSender.drainLoop`), k
 `WorldWebSocketHandler.sendFrame`. Encoding and metric recording stay outside the monitor — the
 monitor only protects the non-thread-safe `sendMessage` invocation.
 
-Rebind publication, STALLED transitions, terminal cleanup, and identity remaps use one handler-owned lifecycle lock. An
-identity remap crosses `BotRegistry`, resume-token ownership, attribution ownership, and session
-attributes under that boundary, so no participant can publish a mixed identity. The lock is distinct
-from the WebSocket session monitor: a slow blocking `sendMessage` never delays lifecycle cleanup, and
-the handler-owned lock does not retain closed sessions.
+Resume-token acceptance and rebind publication, STALLED transitions, terminal cleanup, and identity
+remaps use one handler-owned lifecycle lock. A resume-token rebind is eligible only while its exact
+session is still registered and open. An identity remap crosses `BotRegistry`, resume-token ownership,
+attribution ownership, and session attributes under that boundary, resolving the current controlling
+session there rather than carrying
+a pre-lock session-id snapshot, so no participant can publish a mixed identity. The resumed Sync is
+prepared under the boundary but offered after release. The lock is distinct from the WebSocket session
+monitor: a slow or overflowing send never delays lifecycle cleanup, and the handler-owned lock does
+not retain closed sessions.
 The coarse boundary is an MVP correctness choice for rare lifecycle operations; keyed or striped
 coordination is deferred unless reconnect/close burst profiling demonstrates material contention.
 
