@@ -27,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -89,7 +90,8 @@ class StaleResumeHandlerTest {
 
         handler.handleMessage(newSession, new TextMessage("r|C|" + oldToken));
 
-        assertThat(newSession.getAttributes()).isEqualTo(before);
+        assertThat(newSession.getAttributes()).containsAllEntriesOf(before)
+                .doesNotContainKeys("entityId", "entityType", "resumeToken", "respawnCount", "stallTick");
         assertThat(candidate).isNotNull();
         assertThat(tokens.contains(candidate)).isFalse();
         assertThat(tokens.peek(collateralToken).orElseThrow().state()).isEqualTo(ResumeTokenRegistry.State.ACTIVE);
@@ -125,7 +127,8 @@ class StaleResumeHandlerTest {
     void committedRebindPublishesSuccessOnlyAfterRegistryCommit() throws Exception {
         Map<String, Object> before = Map.copyOf(newSession.getAttributes());
         doAnswer(invocation -> {
-            assertThat(newSession.getAttributes()).isEqualTo(before);
+            assertThat(newSession.getAttributes()).containsAllEntriesOf(before)
+                    .doesNotContainKeys("entityId", "entityType", "resumeToken", "respawnCount", "stallTick");
             assertThat(meters.counter(AdmissionMetrics.M_REBOUND).count()).isZero();
             assertThat(metrics.lookupBucketTags("entity")).isEqualTo(Tags.of("source", "operator"));
             return invocation.callRealMethod();
@@ -264,6 +267,18 @@ class StaleResumeHandlerTest {
     }
 
     @Test
+    void closeDuringPausedRebindKeepsOneLifecycleLock() throws Exception {
+        assertTerminalCallbackDoesNotSplitLifecycleLock(
+                session -> handler.afterConnectionClosed(session, CloseStatus.NORMAL));
+    }
+
+    @Test
+    void transportErrorDuringPausedRebindKeepsOneLifecycleLock() throws Exception {
+        assertTerminalCallbackDoesNotSplitLifecycleLock(
+                session -> handler.handleTransportError(session, new IOException("closed")));
+    }
+
+    @Test
     void stalledInboundSendFailureStillCountsRejectionAndClosesForRestart() throws Exception {
         clearInvocations(oldSession);
         doThrow(new IOException("transport failed")).when(oldSession).sendMessage(any());
@@ -275,6 +290,58 @@ class StaleResumeHandlerTest {
         assertThat(meters.counter(AdmissionMetrics.M_REJECTED, "reason", "reconnect-required",
                 "source", "operator").count()).isEqualTo(1);
         verify(oldSession).close(CloseStatus.SERVICE_RESTARTED);
+    }
+
+    private void assertTerminalCallbackDoesNotSplitLifecycleLock(
+            Consumer<WebSocketSession> terminalCallback) throws Exception {
+        CountDownLatch committed = new CountDownLatch(1);
+        CountDownLatch publish = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            boolean rebound = (boolean) invocation.callRealMethod();
+            assertThat(rebound).isTrue();
+            committed.countDown();
+            assertThat(publish.await(5, TimeUnit.SECONDS)).as("publication released").isTrue();
+            return rebound;
+        }).when(bots).rebindSession("new", "entity");
+
+        FutureTask<Void> rebind = new FutureTask<>(() -> {
+            handler.handleMessage(newSession, new TextMessage("r|C|" + oldToken));
+            return null;
+        });
+        FutureTask<Void> delayedCleanup = new FutureTask<>(() -> {
+            handler.markDead(newSession);
+            return null;
+        });
+        Thread rebindThread = Thread.ofPlatform().name("terminal-rebind-test").unstarted(rebind);
+        Thread cleanupThread = Thread.ofPlatform().name("delayed-terminal-cleanup-test")
+                .unstarted(delayedCleanup);
+        ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+        try {
+            rebindThread.start();
+            assertThat(committed.await(5, TimeUnit.SECONDS)).as("registry committed").isTrue();
+
+            terminalCallback.accept(newSession);
+            cleanupThread.start();
+            await().atMost(5, TimeUnit.SECONDS).until(() -> {
+                ThreadInfo info = threads.getThreadInfo(cleanupThread.threadId());
+                return delayedCleanup.isDone() || (info != null
+                        && info.getThreadState() == Thread.State.BLOCKED
+                        && info.getLockOwnerId() == rebindThread.threadId());
+            });
+
+            publish.countDown();
+            rebind.get(5, TimeUnit.SECONDS);
+            delayedCleanup.get(5, TimeUnit.SECONDS);
+
+            assertThat(newSession.getAttributes()).doesNotContainKeys(
+                    "entityId", "resumeToken", "stallTick");
+            assertThat(bots.getBySession("new")).isEmpty();
+            assertThat(tokens.contains(candidate)).isFalse();
+        } finally {
+            publish.countDown();
+            rebindThread.join(Duration.ofSeconds(5));
+            cleanupThread.join(Duration.ofSeconds(5));
+        }
     }
 
     private static WebSocketSession session(String id, String source) {

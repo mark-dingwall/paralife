@@ -220,7 +220,7 @@ Client reconnects on a new WebSocket, sends `r|<type>|<resumeToken>`:
    the registry's scalar stalled count, and mint a fresh ACTIVE candidate for the same entity.
    - The handler commits `BotRegistry.rebindSession` before installing attributes, restoring the
      stall-time respawn snapshot, transferring attribution buckets, or incrementing `rebound`.
-     Commit and publication share a handler-owned per-session lifecycle lock with `markDead`, so a
+     Commit and publication share a lifecycle lock stored on the session with `markDead`, so a
      terminal callback observing the committed binding applies Dead cleanup after publication and
      cannot be overwritten. This lock is deliberately distinct from the WebSocket session monitor
      used by blocking socket writes.

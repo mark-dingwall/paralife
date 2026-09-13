@@ -88,6 +88,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
 
     // ── FSM session attribute keys ───────────────────────────────────────────
     private static final String ATTR_ENTITY_ID     = "entityId";
+    private static final String ATTR_LIFECYCLE_LOCK =
+            WorldWebSocketHandler.class.getName() + ".lifecycleLock";
     private static final String ATTR_ENTITY_TYPE   = "entityType";
     private static final String ATTR_RESPAWN_COUNT = "respawnCount";
     /** Phase 17: set to the tick number when session transitions to STALLED. */
@@ -124,12 +126,6 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
      * Cleared on cleanupByEntityId or successful rebind. Avoids retroactively widening Plan 05 API.
      */
     private final ConcurrentHashMap<String, Integer> respawnCountAtStall = new ConcurrentHashMap<>();
-
-    /**
-     * Per-session FSM publication lock. Deliberately distinct from the WebSocket session monitor,
-     * which outbound writers may hold while blocked in {@code sendMessage}.
-     */
-    private final ConcurrentHashMap<String, Object> lifecycleLocks = new ConcurrentHashMap<>();
 
     /**
      * Phase 16 Plan 01: seeded placement RNG. Non-final so {@link #resetSeed()} can reassign
@@ -446,7 +442,6 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
                     tickEngine.currentTick(), sessionId, status,
                     session.getAttributes().get(ATTR_ENTITY_ID),
                     AttributionTagger.formatLogFields(session));
-            lifecycleLocks.remove(sessionId);
             return;
         }
 
@@ -460,7 +455,6 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         cleanupBot(session);
         log.info("Client disconnected: {} (total: {}, status: {})",
                 sessionId, sessionRegistry.getSessionCount(), status);
-        lifecycleLocks.remove(sessionId);
     }
 
     @Override
@@ -482,11 +476,9 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
             // the registry entry. The grace-expiry sweep's cleanupByEntityId is the sole reaper.
             log.info("BACKPRESSURE transport-error-held tick={} session={}",
                     tickEngine.currentTick(), session.getId());
-            lifecycleLocks.remove(session.getId());
             return;
         }
         cleanupBot(session);
-        lifecycleLocks.remove(session.getId());
     }
 
     // ── Inbound message dispatch ─────────────────────────────────────────────
@@ -1123,6 +1115,9 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
     }
 
     private Object lifecycleLock(WebSocketSession session) {
-        return lifecycleLocks.computeIfAbsent(session.getId(), ignored -> new Object());
+        Map<String, Object> attributes = session.getAttributes();
+        synchronized (attributes) {
+            return attributes.computeIfAbsent(ATTR_LIFECYCLE_LOCK, ignored -> new Object());
+        }
     }
 }
