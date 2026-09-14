@@ -1,18 +1,20 @@
 package com.paralife.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+
+import com.paralife.diagnostics.DeathDiagnostics;
 import com.paralife.world.GridConfig;
 import com.paralife.world.Position;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 /**
  * Unit tests for {@link LiveEntityRegistry} — SCALE-07 sparse-set registry.
@@ -37,6 +39,20 @@ class LiveEntityRegistryTest {
     void registerAddsEntry() {
         registry.register("e-1", new Position(3, 4));
         assertThat(registry.size()).isEqualTo(1);
+    }
+
+    @Test
+    void registrationAndNonDeathUnregisterBracketDiagnosticLifecycle() {
+        DeathDiagnostics diagnostics = mock(DeathDiagnostics.class);
+        registry.setDeathDiagnostics(diagnostics);
+
+        registry.register("lifecycle", new Position(3, 4));
+        registry.unregister("lifecycle");
+
+        var order = inOrder(diagnostics);
+        order.verify(diagnostics).recordBirth("lifecycle");
+        order.verify(diagnostics).forget("lifecycle");
+        order.verifyNoMoreInteractions();
     }
 
     @Test

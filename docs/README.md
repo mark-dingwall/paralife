@@ -25,6 +25,7 @@ The canonical, source-referenced specifications. Code javadoc cites these by nam
 |-----|------------|
 | `SCHEMA.md` | Wire protocols — byte-exact compact-text bot frames plus the JSON `/ws/observer` frame/rendering contract (§14). |
 | `ENVIRONMENT.md` | Quantized toxin diffusion-decay guarantee (the currently extracted environment contract). |
+| `DIAGNOSTICS.md` | Flag-gated death-cause and lifespan lifecycle contract; aggregate totals remain observe-only. |
 | `ADMISSION.md` | Admission control, backpressure, resume-token FSM, STALLED lifecycle |
 | `HARNESS.md` | External load harness, harness-identity attribution, WS:entity 1:1 connection model + design ceilings |
 | `RUNTIME.md` | Per-connection runtime tuning (`paralife.runtime.*`), per-scale-tier JVM presets |

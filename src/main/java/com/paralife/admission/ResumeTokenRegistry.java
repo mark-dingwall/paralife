@@ -1,12 +1,6 @@
 package com.paralife.admission;
 
 import com.paralife.engine.TickEvent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.context.event.EventListener;
-import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
-
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Objects;
@@ -15,6 +9,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
 
 /**
  * Resume-token grace registry (Phase 17 D-12, D-13) — two-state lifecycle.
@@ -112,6 +111,16 @@ public class ResumeTokenRegistry {
                 it.remove();
             }
         }
+    }
+
+    /**
+     * Compensate an uncommitted rebind by removing only its exact ACTIVE candidate.
+     * The state and expected entity are checked atomically; collateral tokens and
+     * entries concurrently stalled or remapped remain owned by their lifecycle.
+     */
+    public void discardActive(String token, String entityId) {
+        tokenMap.computeIfPresent(token, (key, entry) ->
+                entry.state == State.ACTIVE && entry.entityId.equals(entityId) ? null : entry);
     }
 
     /**

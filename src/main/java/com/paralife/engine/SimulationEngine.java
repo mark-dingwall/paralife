@@ -8,14 +8,6 @@ import com.paralife.world.Entity.Particle;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.context.event.EventListener;
-import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -29,6 +21,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
 
 /**
  * Server-side physics engine. Processes the grid each tick in four phases:
@@ -280,12 +279,11 @@ public class SimulationEngine {
     }
 
     /**
-     * Phase 19.5 H2: callback fired immediately after bond-formation registry
-     * remap. Implementer (production: {@code WorldWebSocketHandler}) updates the
-     * predator session's {@code ATTR_ENTITY_ID} attribute to {@code bondedPair.id()}
-     * so subsequent {@code cleanupBot} unregistration reaches the right
-     * {@link LiveEntityRegistry} entry. Setter-injected and null-guarded so
-     * pre-Phase-19.5 unit tests compile unchanged.
+     * Phase 19.5 H2: lifecycle transaction used for controlled-entity identity
+     * changes. The production implementer remaps the registry and related WebSocket
+     * ownership atomically; the engine performs a direct registry remap only when no
+     * listener is installed. Setter-injected and null-guarded so pre-Phase-19.5 unit
+     * tests compile unchanged.
      */
     private EntityLifecycleListener entityLifecycleListener;
 
@@ -728,7 +726,6 @@ public class SimulationEngine {
                 // predator-session disconnect before the BondedPair dies leaks the
                 // bondedPair.id() entry in LiveEntityRegistry until BondedPair death
                 // (cleanupBot would call liveEntityRegistry.unregister(predator.id()) — a no-op).
-                String predatorSessionId = botRegistry.getSessionForEntity(bond.predator.id()).orElse(null);
                 String preySessionId = botRegistry.getSessionForEntity(bond.prey.id()).orElse(null);
                 if (preySessionId != null) {
                     // Phase 19.5 E1: prey's bot loses its entity on bond formation —
@@ -741,12 +738,11 @@ public class SimulationEngine {
                     // entity with no client signal).
                     botRegistry.absorbBySession(preySessionId, bond.prey.id(), bond.secondaryPos);
                 }
-                if (predatorSessionId != null) {
-                    botRegistry.remapEntity(predatorSessionId, bondedPair.id());
-                    if (entityLifecycleListener != null) {
-                        entityLifecycleListener.onEntityRemapped(
-                                predatorSessionId, bond.predator.id(), bondedPair.id());
-                    }
+                if (entityLifecycleListener != null) {
+                    entityLifecycleListener.onEntityRemapped(bond.predator.id(), bondedPair.id());
+                } else {
+                    botRegistry.getSessionForEntity(bond.predator.id())
+                            .ifPresent(sessionId -> botRegistry.remapEntity(sessionId, bondedPair.id()));
                 }
                 worldGrid.setEntity(bond.primaryPos.x(), bond.primaryPos.y(), bondedPair);
                 // Phase 19 SCALE-06 — STRUCTURAL: bond formed at primary position.
@@ -918,12 +914,12 @@ public class SimulationEngine {
         // primaryEntityId(). The pre-fix lookup of primaryEntityId/secondaryEntityId
         // both returned empty post-H2, leaking the session→bp.id() entry into the
         // composite era and orphaning the predator session.
-        botRegistry.getSessionForEntity(bp.id()).ifPresent(sessionId -> {
-            botRegistry.remapEntity(sessionId, newMemberId, pos);
-            if (entityLifecycleListener != null) {
-                entityLifecycleListener.onEntityRemapped(sessionId, bp.id(), newMemberId);
-            }
-        });
+        if (entityLifecycleListener != null) {
+            entityLifecycleListener.onEntityRemapped(bp.id(), newMemberId);
+        } else {
+            botRegistry.getSessionForEntity(bp.id()).ifPresent(sessionId ->
+                    botRegistry.remapEntity(sessionId, newMemberId, pos));
+        }
     }
 
     // ── Phase 2: Energy decay ──────────────────────────────────────
@@ -1295,15 +1291,15 @@ public class SimulationEngine {
             if (eligibleCellIndex != null) eligibleCellIndex.notifyChanged(pos.x(), pos.y());
 
             // Update BotRegistry: remap session from CompositeMember to BondedPair.
-            // Phase 19.5 H-A: fire EntityLifecycleListener so the WS layer keeps
+                    // Phase 19.5 H-A: delegate the remap so the WS layer keeps
             // ATTR_ENTITY_ID synchronised and any stalled resume-token entry is
             // rewritten to the new BondedPair id.
-            botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId -> {
-                botRegistry.remapEntity(sessionId, bondedPair.id(), pos);
-                if (entityLifecycleListener != null) {
-                    entityLifecycleListener.onEntityRemapped(sessionId, cm.id(), bondedPair.id());
-                }
-            });
+            if (entityLifecycleListener != null) {
+                entityLifecycleListener.onEntityRemapped(cm.id(), bondedPair.id());
+            } else {
+                botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId ->
+                        botRegistry.remapEntity(sessionId, bondedPair.id(), pos));
+            }
 
             // Plan 14-03 cycle-6 HIGH #2: merge surviving member state into bp.id()
             // via MAX semantics. Paired helpers: hooks.transferMutagenState
@@ -1363,14 +1359,14 @@ public class SimulationEngine {
                 }
 
                 // Remap session from CompositeMember to new Particle.
-                // Phase 19.5 H-A: fire EntityLifecycleListener for ATTR_ENTITY_ID
+                // Phase 19.5 H-A: delegate the remap for ATTR_ENTITY_ID
                 // and resume-token rewrite (mirrors revertToBondedPair).
-                botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId -> {
-                    botRegistry.remapEntity(sessionId, particle.id(), pos);
-                    if (entityLifecycleListener != null) {
-                        entityLifecycleListener.onEntityRemapped(sessionId, cm.id(), particle.id());
-                    }
-                });
+                if (entityLifecycleListener != null) {
+                    entityLifecycleListener.onEntityRemapped(cm.id(), particle.id());
+                } else {
+                    botRegistry.getSessionForEntity(cm.id()).ifPresent(sessionId ->
+                            botRegistry.remapEntity(sessionId, particle.id(), pos));
+                }
             }
         }
         compositeRegistry.dissolve(composite.getCompositeId());

@@ -151,16 +151,28 @@ constant-referential blind spots.
   `held-on-close`, `rebind-stale`, `transport-error-held` (STALLED-lifecycle edge transitions;
   the other 7 of 10 marker shapes are pinned by `AdmissionLogMarkersIntegrationTest` /
   `TickHealthGateIntegrationTest`).
-- **Normalize the orphan `stale-resume-token` rejection.** A post-`tryRebind` race emits the
-  literal `E|400|stale-resume-token` directly from `WorldWebSocketHandler`; it has no
-  `RejectionToken` constant, admission-rejection metric increment, or exact-wire test, so A28's
-  nine-token enum-backed vocabulary does not cover it. Promote it into the taxonomy, metric path,
-  and literal-pinned suite on the next admission-contract change.
+- **Normalize the orphan `stale-resume-token` rejection.** ✅ **DONE 2026-09-12** — the defined
+  `BotRegistry.rebindSession == false` path uses `RejectionToken.STALE_RESUME_TOKEN`, exact wire
+  and rejection-metric pins, and atomic candidate-only compensation; success accounting and state
+  publication follow registry commit (`docs/ADMISSION.md` A33–A35). The defensive
+  `IllegalStateException` session-collision path remains deferred and may leave its newly minted
+  candidate uncompensated; this completion covers only the defined `false` stale outcome.
 - **Initialize the maintenance gauge from configuration.** Admission honors
   `AdmissionConfig.maintenance()`, but `AdmissionMetrics` initializes the gauge to zero and no
   production path calls `setMaintenance`; `/actuator/metrics/paralife.admission.maintenance` can
   therefore disagree with the live gate after a maintenance-enabled startup. Fix the wiring and
   add a context-level positive/negative control on the next admission-metrics change.
+- **Shard lifecycle publication only if profiling justifies it.** Rebind, STALLED transition,
+  identity remap, and terminal cleanup currently share one handler-owned lock so their cross-store
+  ownership updates remain atomic. This deliberately serializes rare lifecycle operations without
+  retaining per-session locks. Consider keyed/striped coordination only if reconnect/close burst
+  profiling shows material contention; do not add a lock registry solely for theoretical throughput.
+- **Make fresh placement a terminal-safe lifecycle transaction.** Fresh registration, including an
+  unknown/expired resume token that falls through to `Allow`, performs placement and ownership
+  publication outside the handler lifecycle lock. A concurrent terminal callback can therefore
+  finish before attributes exist, after which the inbound thread can orphan the entity and admission
+  reservation on the closed session. Fixing this requires a bounded placement/publication transaction
+  with rollback and send-after-unlock; it is deliberately outside PR #28's rebind/remap race slice.
 
 **Trigger:** opportunistic / next admission-touching change.
 
@@ -168,6 +180,19 @@ constant-referential blind spots.
 `PlacementDensityIntegrationTest`, `StallRecoveryIntegrationTest`; new codec `E`-frame test in
 `src/test/java/com/paralife/codec/`; strengthens `ADMISSION.md` §0 A4/A6/A14/A22 + the partial/orphan
 deferrals.
+
+## Environmental death diagnostics pre-hit precision
+
+**Why deferred:** environmental lethal hints currently use `preHitEnergy=0` as an unavailable-value
+sentinel because the death sweep runs after damage. Capturing exact energy at each environmental
+damage site is separate from pinning the existing lifecycle bookkeeping contract.
+
+**Trigger:** the next diagnostics/environment attribution change that needs exact pre-hit energy.
+Capture it before each lethal damage write and retain an explicit unavailable representation where
+capture is impossible; keep population aggregates observe-only.
+
+**Anchor:** `docs/DIAGNOSTICS.md` "Pre-hit availability", `EnvironmentEngine.processEnvDeaths`,
+`DeathDiagnostics.hintLethal` (historical provenance: frozen TD-PR2-D).
 
 ## M5 / post-MVP follow-ups (ex-SCHEMA §13)
 

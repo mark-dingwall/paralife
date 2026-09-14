@@ -14,6 +14,9 @@ public final class RejectionToken {
     /** 400 — Codec / parse failure. */
     public static final String MALFORMED           = "malformed";
 
+    /** 400 — Resume candidate's entity binding disappeared before handler commit. */
+    public static final String STALE_RESUME_TOKEN  = "stale-resume-token";
+
     /** 404 — Action frame on Unregistered session. */
     public static final String NO_ACTIVE_ENTITY    = "no-active-entity";
 

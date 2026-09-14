@@ -1,20 +1,19 @@
 package com.paralife.engine;
 
 import com.paralife.world.Position;
-import org.springframework.stereotype.Component;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import org.springframework.stereotype.Component;
 
 /**
  * Per-composite alarm sink. Populated by {@link ActionResolver}'s verb-L
  * dispatch; drained by {@code TickBroadcaster.buildTickFrame} (wiring in plan
  * 15-08) when it builds the LOCOMOTOR's next {@code v} block and emits
- * {@code vN<relCoord>} events per SCHEMA §8.4.
+ * {@code v<coord>N} events per SCHEMA §8.4.
  *
  * <p>Created in plan 15-06 (NOT plan 15-08) so that verb-L dispatch has a
  * target from Wave 3 onward — no silent no-op window while the broadcaster

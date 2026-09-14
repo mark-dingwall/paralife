@@ -26,10 +26,10 @@ magnitude: the tick-health watermarks (80/60), the queue size (128), and the gra
 *format* `r:%016x` (A9) — the immutable wire format, regex-pinned — and the rejection-token
 *vocabulary* strings (A28, below). Rejection **tokens**
 are pinned two ways. Condition → `RejectionToken.X` *routing*: constant-referentially for the
-**gate-emitted** subset (A1–A6, A25–A27), and by **independent wire literal** for all four
-**handler-emitted** tokens — `no-active-entity`/`malformed`/`grid-full`/`reconnect-required`
-(A29/A30/A31/A32, emitted by `WorldWebSocketHandler`, not `AdmissionGate`). Token *string value*: the
-frozen strings of all 9 enum-backed §1 tokens are pinned as independent wire literals by A28
+**gate-emitted** subset (A1–A6, A25–A27), and by **independent wire literal** for all five
+**handler-emitted** tokens — `no-active-entity`/`malformed`/`grid-full`/`reconnect-required`/`stale-resume-token`
+(A29–A33, emitted by `WorldWebSocketHandler`, not `AdmissionGate`). Token *string value*: the
+frozen strings of all 10 constant-backed §1 tokens are pinned as independent wire literals by A28
 (`RejectionTokenWireTest`).
 
 | # | Requirement | § | Pinned by — anchor (test method · quoted assertion · symbol) |
@@ -61,11 +61,23 @@ frozen strings of all 9 enum-backed §1 tokens are pinned as independent wire li
 | A25 | WHEN the maintenance flag is set THE SYSTEM SHALL reject `maintenance` ahead of every lower guard — over tick-overload (guard 2) and over a reached global cap (guard 5). | §1, §5 | `AdmissionGateTest.maintenanceRejectedEvenWhenOverloaded` — overloaded + maintenance → `token()…isEqualTo(MAINTENANCE)` (maintenance > overload); `maintenanceRejectedEvenWhenCapReached` — cap armed via `seedReservedSlots()` (grid at cap) → `MAINTENANCE` (maintenance > cap). Positive control `seededCapAloneRejectsWorldFull` proves the seed genuinely arms the cap guard (→ `WORLD_FULL` with no higher guard). |
 | A26 | WHEN the tick-health gate is overloaded AND the global cap is already reached THE SYSTEM SHALL reject `tick-overload` (guard 2 > guard 5). | §1, §5 | `AdmissionGateTest.tickOverloadRejectedEvenWhenCapReached` — overloaded + cap armed via `seedReservedSlots()`, then `token()…isEqualTo(TICK_OVERLOAD)`. (Supersedes A4's "cap arg inert" caveat: this genuinely arms the reservation counter.) |
 | A27 | WHEN a valid STALLED resume token is presented AND the global cap is already reached THE SYSTEM SHALL rebind (guard 4 > guard 5), never reject `world-full`. | §1, §4, §5 | `AdmissionGateTest.validRebindWinsOverReachedCap` — `tryRebind` returns present + cap armed via `seedReservedSlots()`, then result `isInstanceOf(AdmissionResult.Rebind.class)`. |
-| A28 | WHEN encoding a rejection `ErrorFrame` that carries an enum-backed §1 token THE SYSTEM SHALL produce the exact wire literal `E\|<code>\|<token>` verbatim (the frozen string value of the corresponding `RejectionToken` constant, all 9 enum-backed rows). | §1 | `RejectionTokenWireTest.tokenEncodesToExactWireLiteral` — parameterized over all 9 `RejectionToken` rows; `PerceptionCodec.encode(new Frame.ErrorFrame(code, Optional.of(RejectionToken.X)))…isEqualTo` an **independent** literal (e.g. `"E\|429\|world-full"`), so renaming any constant's string value goes red. Pins the wire-encoding boundary, **not** condition→token routing. The direct `stale-resume-token` race response is the named unpinned orphan below. |
+| A28 | WHEN encoding a rejection `ErrorFrame` that carries a constant-backed §1 token THE SYSTEM SHALL produce the exact wire literal `E\|<code>\|<token>` verbatim (all 10 `RejectionToken` rows). | §1 | `RejectionTokenWireTest.tokenEncodesToExactWireLiteral` — compares real codec output against independent literals, including `"E\|400\|stale-resume-token"`. Pins wire encoding; A33 pins stale routing. |
 | A29 | WHEN an `ActionFrame` (`a\|`) arrives on a session with no active entity (`ATTR_ENTITY_ID` absent) THE SYSTEM SHALL reject `E\|404\|no-active-entity` and SHALL NOT queue the action. | §1 | `WorldWebSocketHandlerTest.actionOnUnregisteredSessionRejectedNoActiveEntity` — captured send `…equals("E\|404\|no-active-entity")` (independent literal) + `verify(actionResolver, never()).queueAction(eq("s1"),…)` isolates the not-queued conjunct (`@SpyBean`). Positive control `actionOnRegisteredSessionIsQueued` — registered session's action → `verify(...).queueAction(eq("s2"),…)`, proving both conjuncts are condition-specific. RED-tested: token swap → reject row red; `return` removed → not-queued row red. |
 | A30 | WHEN inbound text fails codec decode OR decodes to a client-illegal frame direction (`Sync`/`Tick`, server→client only) THE SYSTEM SHALL reject `E\|400\|malformed`. | §1 | `WorldWebSocketHandlerTest.malformedFrameProducesError400` — CodecException path, captured send `…equals("E\|400\|malformed")` (independent literal); `clientIllegalFrameDirectionRejectedAsMalformed` — parameterized `{Sync,Tick}` wire (encode-derived; `assertInstanceOf` precondition proves the illegal-direction arm is reached, not the CodecException fallback), each captured send `…equals("E\|400\|malformed")`. RED-tested: Sync-arm token swap → only the Sync row red, Tick green (per-arm isolation). Covers all 3 `MALFORMED` emit sites. |
 | A31 | WHEN registration placement exhausts the eligible set THE SYSTEM SHALL reject `E\|503\|grid-full`. | §1 | `PlacementDensityIntegrationTest.fillsGridAndReceivesGridFullOnExhaustion` — captured exhaustion-boundary 503 payload `…isEqualTo("E\|503\|grid-full")`, upgrading the prior code-only `startsWith("E\|503")` to the exact token. ⚠ **integration-anchored / non-isolating** (survive-a-run fill; condition→token pinned but not unit-isolated). RED-tested: token swap → red (`was "E\|503\|maintenance"`). |
-| A32 | WHEN any inbound frame arrives on a STALLED session THE SYSTEM SHALL reject `E\|408\|reconnect-required` (best-effort per D-07 — the OOB send is `isOpen()`-gated; in production `markStalled` closes the transport first, so it typically does not reach the wire) and close the transport (`SERVICE_RESTARTED`), short-circuiting before the decode/dispatch switch. | §1/§4 | `WorldWebSocketHandlerTest.stalledSessionInboundRejectedWithReconnectRequired` — engine-direct: register→`markStalled`→inbound (mock session, no overflow). The **408-vs-404 payload** is the discriminator: `markStalled` clears `ATTR_ENTITY_ID`, so with the guard removed an action falls through to the null-entity branch and emits `E\|404\|no-active-entity`; the test asserts the exact literal `…equals("E\|408\|reconnect-required")` + `verify(sc).close(SERVICE_RESTARTED)` on **two** frame kinds (`a\|M\|1` and `r\|C`) so a per-frame-kind guard relocation is caught. (A `never().queueAction` check would be vacuous — the null-entity branch returns before `queueAction` guard-or-no-guard.) `clearInvocations` discards `markStalled`'s own best-effort OOB 408. RED-tested: L474 stall guard disabled → 408 assert `WantedButNotInvoked` (frame falls through to 404). **Sole** coverage of the L474 guard — the `@slow` `StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed` pins overflow→stall→close only (no post-stall inbound, does not assert the 408). |
+| A32 | WHEN any inbound frame arrives on a STALLED session THE SYSTEM SHALL reject `E\|408\|reconnect-required` (best-effort per D-07 — the OOB send is `isOpen()`-gated; in production `markStalled` closes the transport first, so it typically does not reach the wire) and close the transport (`SERVICE_RESTARTED`), short-circuiting before the decode/dispatch switch. | §1/§4 | `WorldWebSocketHandlerTest.stalledSessionInboundRejectedWithReconnectRequired` — engine-direct: register→`markStalled`→inbound (mock session, no overflow). The **408-vs-404 payload** is the discriminator: `markStalled` clears `ATTR_ENTITY_ID`, so with the guard removed an action falls through to the null-entity branch and emits `E\|404\|no-active-entity`; the test asserts the exact literal `…equals("E\|408\|reconnect-required")` + `verify(sc).close(SERVICE_RESTARTED)` on **two** frame kinds (`a\|M\|1` and `r\|C`) so a per-frame-kind guard relocation is caught. (A `never().queueAction` check would be vacuous — the null-entity branch returns before `queueAction` guard-or-no-guard.) `clearInvocations` discards `markStalled`'s own best-effort OOB 408. RED-tested: L474 stall guard disabled → 408 assert `WantedButNotInvoked` (frame falls through to 404). A36 additionally pins production send-failure containment at this guard — the `@slow` `StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed` pins overflow→stall→close only (no post-stall inbound, does not assert the 408). |
+| A33 | WHEN token acceptance is followed by `BotRegistry.rebindSession == false` THE SYSTEM SHALL discard only the expected entity's exact ACTIVE candidate, release the abandoned stalled reservation and its handler-owned accounting, count a stale rejection with new-session attribution, offer one `E\|400\|stale-resume-token` and no Sync, and request parameterless close without publishing success state. | §1/§4 | `StaleResumeHandlerTest.staleRebindReleasesReservationWithoutPublishingSuccess` — candidate absent and collateral present, reservation/snapshot/buckets released, rebound zero, rejection one, one exact error offer and close. |
+| A34 | WHEN a token candidate is accepted THE SYSTEM SHALL count rebound and publish success attributes, respawn restoration, and attribution transfer only after the bot binding commits. | §4 | `AdmissionGateTest.rebindOnValidResumeToken` — rebound zero; `StaleResumeHandlerTest.committedRebindPublishesSuccessOnlyAfterRegistryCommit` — assertions at the real commit boundary, then Sync, restored count, new attribution, rebound one. |
+| A35 | WHEN candidate compensation encounters a token for another entity or a STALLED entry THE SYSTEM SHALL preserve that entry; WHEN it encounters the exact ACTIVE candidate THE SYSTEM SHALL remove it without touching collateral tokens. | §4 | `ResumeTokenRegistryTest.discardActiveRemovesOnlyExactCandidateForExpectedEntity` and `discardActivePreservesStalledTokenAndItsExpiryAccounting` — mismatch and stalled controls plus exact removal and repeated-call checks. |
+| A36 | WHEN an open STALLED session's out-of-band error send throws THE SYSTEM SHALL still count the inbound rejection and request `SERVICE_RESTARTED` close. | §1/§4 | `StaleResumeHandlerTest.stalledInboundSendFailureStillCountsRejectionAndClosesForRestart` — actual `sendMessage` invocation throws, counter increments, close is called. |
+| A37 | WHEN a terminal close or transport error races with a committed rebind THE SYSTEM SHALL serialize real terminal cleanup with rebind publication, leaving no binding, admission reservation, live registration, active entity attribute, ACTIVE resume token, or handler-owned attribution state. | §4 | `StaleResumeHandlerTest.closeDuringPausedRebindPerformsCompleteTerminalCleanup` and `transportErrorDuringPausedRebindPerformsCompleteTerminalCleanup`; A34 supplies the successful Alive control. |
+| A38 | WHEN an owned entity changes identity while a rebind is publishing THE SYSTEM SHALL serialize the BotRegistry remap, token/accounting/respawn-snapshot remap, and session-attribute publication as one lifecycle transaction. | §4 | `StaleResumeHandlerTest.entityRemapCannotSplitRebindPublication` — pauses rebind after commit, attempts a remap, then asserts one successor identity across binding, token, attribution ownership, and session state; `staleRebindAfterIdentityRemapReleasesOriginalReservation` proves the moved snapshot still releases capacity. |
+| A39 | WHEN backpressure stalls a session while its rebind is publishing THE SYSTEM SHALL complete rebind publication before snapshotting and converting that session to STALLED. | §4 | `StaleResumeHandlerTest.markStalledCannotSplitRebindPublication` — pauses after registry commit, attempts the stall, and asserts it waits before converting the fresh token and clearing the published entity identity. |
+| A40 | WHEN an entity-death callback races with a committed rebind THE SYSTEM SHALL serialize Dead publication after rebind, clearing the active entity identity, ACTIVE resume token, and active attribution ownership while preserving the connected session's admission reservation and respawn state. | §4 | `StaleResumeHandlerTest.deathAfterRebindCommitCannotBeOverwrittenBySuccessPublication`; engine death finalization independently owns grid/live-registry removal, and A34 supplies the successful Alive control. |
+| A41 | WHEN terminal cleanup has removed a reconnecting session before its resume token is accepted THE SYSTEM SHALL reject further registration work for that session without consuming the STALLED token, creating an ACTIVE candidate, rebinding the entity, or offering Sync. | §4 | `StaleResumeHandlerTest.terminalSessionCannotAcceptResumeToken` — completes close cleanup before registration and proves the original STALLED ownership remains; A34 is the accepted-session control. |
+| A42 | WHEN resume-token acceptance races with an owned-entity identity remap THE SYSTEM SHALL serialize token acceptance, bot rebind, and success publication before the remap transaction, leaving one successor identity across binding, token, attribution, respawn snapshot, and session state. | §4 | `StaleResumeHandlerTest.identityRemapCannotInterleaveTokenAcceptanceAndRebindCommit` — pauses immediately after real token acceptance and proves remap waits, then observes the successor identity across all ownership surfaces. |
+| A43 | WHEN an owned entity changes identity THE SYSTEM SHALL resolve its current controlling session inside the lifecycle transaction before remapping any identity-bearing surface. | §4 | `StaleResumeHandlerTest.entityRemapResolvesCurrentControllingSessionInsideTransaction` — replaces the controlling session before the callback and proves the current binding, attributes, token, and accounting all move together. |
+| A44 | WHEN a successful resumed Sync offer blocks or synchronously enters overflow handling THE SYSTEM SHALL NOT hold the handler lifecycle lock while making that offer. | §4 | `StaleResumeHandlerTest.blockedResumedSyncOfferDoesNotBlockLifecycleWork` — proves the real Sync offer is entered while an independent lifecycle callback completes; A34 proves the Sync is still offered. |
 
 **Guard order (prose — precedence edges beyond A6 now clause-pinned).** `AdmissionGate.evaluate`
 applies six guards in fixed order (source: `AdmissionGate.java` guards 1–6 + javadoc lines 22–34):
@@ -90,11 +102,11 @@ only runs for `isRespawn` requests, which the cap guard skips), not a reorderabl
   frame kinds; the 408 send is best-effort per D-07, observable here only because the mock stays open).
   The `@slow` `StallRecoveryIntegrationTest.stalledSessionInboundIsRejectedWith408AndClosed` pins
   overflow→stall→**close** only (it sends no post-stall inbound frame and does not assert the 408), so
-  A32's unit test is the **sole** coverage of the L474 inbound guard. **§0 routing sweep now
-  complete** — all four handler-emitted tokens have default-gated condition→token pins.
+  A32 pins inbound routing; A36 additionally pins send-failure containment. **§0 routing sweep now
+  complete** — all five handler-emitted tokens have default-gated condition→token pins (stale resume: A33).
 - **Token wire-strings — ✅ now literal-pinned (A28).** Previously constant-referential only (§1
   clauses pin condition → `RejectionToken.X` *constant*, so renaming a token's string value stayed
-  green); `RejectionTokenWireTest` now pins all 9 literals in the **default** suite against independent
+  green); `RejectionTokenWireTest` now pins all 10 literals in the **default** suite against independent
   `E\|<code>\|<token>` literals. (The `@slow` literal assertions in the non-normative
   `AdmissionLogMarkersIntegrationTest` remain as-is.)
 - **A14/A22 — ✅ mechanism now default-gated (E2E stays `@slow`).** The engine-direct decomposition is
@@ -104,8 +116,8 @@ only runs for `isRespawn` requests, which the cap guard skips), not a reorderabl
   `StallRecoveryIntegrationTest` `@slow` anchors are retained as the end-to-end overflow-driven wiring
   (run via `-PincludeLong=true`), no longer the sole gate.
 - **Orphans (excluded from §0):** inbound collapse-to-one *behaviour* (only the counter A24 is
-  pinned), plus the direct `stale-resume-token` rebind-race response (no `RejectionToken` constant,
-  metric increment, or exact-wire test). → BACKLOG. (`no-active-entity`/404 routing is no longer an
+  pinned). → BACKLOG. The stale resume `false` outcome is normalized by A33–A35; the defensive
+  `IllegalStateException` collision path remains deferred. (`no-active-entity`/404 routing is no longer an
   orphan — now pinned by A29. The §5 N-1 gauge-lag caveat is a documented observability note.)
 - **Cross-guard precedence edges** beyond A6 — ✅ **now pinned** (A25 maintenance > overload/cap, A26
   overload > cap, A27 rebind > cap): the unit tests arm the `reservedSlots` cap gate via
@@ -124,7 +136,7 @@ Wire format: `E|<code>|<token>` — the token slot is always populated for admis
 | HTTP Code | Token | Java Constant | Emitting Site | Cause |
 |-----------|-------|---------------|---------------|-------|
 | 400 | `malformed` | `RejectionToken.MALFORMED` | `WorldWebSocketHandler.handleTextMessage` (codec exception) | Codec / parse failure on any inbound frame |
-| 400 | `stale-resume-token` | — (direct literal; backlog orphan) | `WorldWebSocketHandler.handleRegister` | Token rebind succeeded, but the preserved entity's `BotRegistry` binding was absent at handler commit |
+| 400 | `stale-resume-token` | `RejectionToken.STALE_RESUME_TOKEN` | `WorldWebSocketHandler.handleRegister` | Token candidate accepted, but `BotRegistry.rebindSession` returned `false` at handler commit |
 | 404 | `no-active-entity` | `RejectionToken.NO_ACTIVE_ENTITY` | `WorldWebSocketHandler.handleAction` | Action frame (`a|`) on Unregistered or Dead session |
 | 408 | `reconnect-required` | `RejectionToken.RECONNECT_REQUIRED` | `WorldWebSocketHandler.handleTextMessage` (stall guard) | Any inbound frame from a STALLED session; best-effort send, then close/reconnect |
 | 409 | `already-registered` | `RejectionToken.ALREADY_REGISTERED` | `AdmissionGate.evaluate` | Second `r|` frame while session is Alive |
@@ -134,9 +146,9 @@ Wire format: `E|<code>|<token>` — the token slot is always populated for admis
 | 429 | `maintenance` | `RejectionToken.MAINTENANCE` | `AdmissionGate.evaluate` | Operator maintenance flag set (`AdmissionConfig.maintenance = true`, D-16) |
 | 503 | `grid-full` | `RejectionToken.GRID_FULL` | `WorldWebSocketHandler.handleRegister` (placement) | Eligible set exhausted or placement attempts cannot win a free cell |
 
-The nine `RejectionToken` values are the literal-pinned Phase-17 vocabulary. The direct
-`stale-resume-token` row is a later implementation orphan: live on the wire but not yet normalized
-through the enum/metric/test path (tracked in `BACKLOG.md`).
+The ten `RejectionToken` constants are literal-pinned, including stale resume. A stale rejection
+increments the rejection counter using the new session's source/harness attribution. Its single
+error offer is best-effort and does not guarantee socket delivery before parameterless close.
 
 Reserved but not emitted this phase: ingress-flood token (D-09 chose counter-only, no kill).
 
@@ -210,12 +222,37 @@ Key is the opaque token string. ACTIVE entries use `Long.MAX_VALUE` and are not 
 
 Client reconnects on a new WebSocket, sends `r|<type>|<resumeToken>`:
 
-1. `AdmissionGate` looks up token in `ResumeTokenRegistry`.
-2. If found, STALLED, and `currentTick < expiresAtTick`: re-bind entity.
-   - `BotRegistry` updated: old sessionId removed, new sessionId mapped to existing entityId.
-   - Token consumed and purged.
-   - Fresh token issued, returned in `S|<entityId>|<newResumeToken>`.
+1. While holding the handler lifecycle lock, the handler first confirms that the reconnecting
+   WebSocket is still open and is the exact session currently registered under its session id.
+   It then asks `AdmissionGate` to look up the token in `ResumeTokenRegistry`. Terminal sessions
+   perform no admission work, so their STALLED ownership remains available to a later connection.
+2. If found, STALLED, and `currentTick < expiresAtTick`: consume the token atomically, decrement
+   the registry's scalar stalled count, and mint a fresh ACTIVE candidate for the same entity.
+   - The handler commits `BotRegistry.rebindSession` before installing attributes, restoring the
+     stall-time respawn snapshot, transferring attribution buckets, or incrementing `rebound`.
+     Token acceptance, commit, and publication share a handler lifecycle lock with terminal cleanup and entity remaps,
+     so a callback observing the committed binding applies its complete transition after publication
+     and cannot be overwritten. Identity remaps resolve the current controlling session from
+     `BotRegistry` inside this same transaction; the tick thread does not publish a pre-resolved
+     session id. This lock is deliberately distinct from the WebSocket session monitor used by
+     blocking socket writes and does not retain closed sessions.
+   - On success, swap the old session binding to the new session and prepare the fresh token for
+     `S|<entityId>|<newResumeToken>`; successful accounting belongs to the handler, not the gate.
+     The Sync offer occurs after releasing the lifecycle lock so synchronous overflow/transport
+     handling cannot block unrelated lifecycle work. It remains an offer, not guaranteed delivery.
+   - On `false`, call `discardActive(candidate, expectedEntityId)`: atomically remove only that
+     exact token if still ACTIVE for that entity, preserving collateral tokens and changed entries.
+     Remove the stalled respawn snapshot, release its admission reservation, and retire the original
+     handler-owned active/stalled attribution state. Increment `stale-resume-token` rejection using
+     the new session's attribution, offer exactly one `E|400|stale-resume-token` and no Sync, then
+     request parameterless close. No success attributes, respawn restoration, rebound count, or
+     handler-owned bucket transfer occurs.
+     The earlier scalar stalled-count decrement is not rolled back; its legacy metric setter is
+     a no-op, and per-attribution stalled/active buckets are separately owned by the handler.
 3. If missing or expired: treat as fresh registration (backward-compatible).
+
+The defensive `IllegalStateException` session-collision path is outside this compensation contract;
+it remains deferred and may leave its newly minted ACTIVE candidate uncompensated.
 
 ### Expiry Sweep
 

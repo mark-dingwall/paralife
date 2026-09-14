@@ -77,7 +77,7 @@ import org.springframework.web.socket.WebSocketSession;
  *
  * <p><b>AlarmQueue drain (plan 15-06 producer, plan 15-08 consumer).</b>
  * LOCOMOTOR's v block drains {@link AlarmQueue#drainAlarms(String)} and emits
- * one {@code vN<relCoord>} event per pending alarm. Overflow past
+ * one {@code v<coord>N} event per pending alarm. Overflow past
  * {@link PerceptionCodec#MAX_V_ENTRIES} is truncated with a warn log.
  *
  * <p><b>Roster send-on-change (SCHEMA §8.5).</b> The g block ships ONLY when
@@ -1067,7 +1067,7 @@ public class TickBroadcaster {
                                            long tickId, AuthorityTier tier) {
         List<Event> out = new ArrayList<>();
 
-        // LOCOMOTOR-only: drain composite member alarms → vN<relCoord>.
+        // LOCOMOTOR-only: drain composite member alarms → v<coord>N.
         if (occupant instanceof CompositeMember cm && cm.role() == Role.LOCOMOTOR && alarmQueue != null) {
             List<AlarmQueue.AlarmEntry> alarms = alarmQueue.drainAlarms(cm.compositeId());
             int budget = PerceptionCodec.MAX_V_ENTRIES - out.size();

@@ -125,6 +125,9 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
      */
     private final ConcurrentHashMap<String, Integer> respawnCountAtStall = new ConcurrentHashMap<>();
 
+    /** Serializes ownership publication across rebind, remap, and terminal cleanup. */
+    private final Object lifecycleLock = new Object();
+
     /**
      * Phase 16 Plan 01: seeded placement RNG. Non-final so {@link #resetSeed()} can reassign
      * it between test runs. Bound from {@link SpawnConfig#seed()} — null = unseeded (production).
@@ -409,10 +412,8 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         String sessionId = session.getId();
-        boolean wasStalled = isStalled(session.getAttributes());
 
         // Capture attribution fields before any attribute removal.
-        String closeReason = wasStalled ? "stalled-held" : "graceful";
         Object harnessAttr = session.getAttributes().get(AttributionTagger.ATTR_HARNESS);
         String harnessField = harnessAttr != null ? harnessAttr.toString() : "-";
         Object sourceAttr = session.getAttributes().get(AttributionTagger.ATTR_SOURCE);
@@ -425,7 +426,21 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         if (outboundSender != null) {
             outboundSender.detachSession(session);
         }
-        sessionRegistry.unregister(sessionId);
+        boolean wasStalled;
+        synchronized (lifecycleLock) {
+            sessionRegistry.unregister(sessionId);
+            wasStalled = isStalled(session.getAttributes());
+            if (!wasStalled) {
+                // Normal disconnect: clear ACTIVE token and run standard cleanup.
+                // Pass the session reference directly so cleanup is independent of registry presence.
+                Object entityIdObj = session.getAttributes().get(ATTR_ENTITY_ID);
+                if (entityIdObj instanceof String eid && resumeTokenRegistry != null) {
+                    resumeTokenRegistry.clearActive(eid);
+                }
+                cleanupBot(session);
+            }
+        }
+        String closeReason = wasStalled ? "stalled-held" : "graceful";
 
         // Phase 18 D-14: HARNESS disconnected marker emitted on every exit path.
         log.info("HARNESS disconnected tick={} session={} harness={} source={} reason={}",
@@ -443,14 +458,6 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
             return;
         }
 
-        // Normal disconnect: clear ACTIVE token and run standard cleanup.
-        // Pass the session reference directly so cleanup is independent of registry presence
-        // (consensus CRITICAL fix — cleanup-after-unregister previously skipped slot release).
-        Object entityIdObj = session.getAttributes().get(ATTR_ENTITY_ID);
-        if (entityIdObj instanceof String eid && resumeTokenRegistry != null) {
-            resumeTokenRegistry.clearActive(eid);
-        }
-        cleanupBot(session);
         log.info("Client disconnected: {} (total: {}, status: {})",
                 sessionId, sessionRegistry.getSessionCount(), status);
     }
@@ -458,12 +465,18 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         log.warn("Transport error for session {}: {}", session.getId(), exception.getMessage());
-        boolean wasStalled = isStalled(session.getAttributes());
         // Phase 22 (TD-19.5-A): close-then-interrupt to avoid spurious VT-did-not-exit warnings.
         if (outboundSender != null) {
             outboundSender.detachSession(session);
         }
-        sessionRegistry.unregister(session.getId());
+        boolean wasStalled;
+        synchronized (lifecycleLock) {
+            sessionRegistry.unregister(session.getId());
+            wasStalled = isStalled(session.getAttributes());
+            if (!wasStalled) {
+                cleanupBot(session);
+            }
+        }
 
         if (wasStalled) {
             // TD-20-01c-E: a STALLED session's entity is held on the grid for the grace-expiry
@@ -476,7 +489,6 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
                     tickEngine.currentTick(), session.getId());
             return;
         }
-        cleanupBot(session);
     }
 
     // ── Inbound message dispatch ─────────────────────────────────────────────
@@ -529,9 +541,72 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
                 session.getId(), currentTick, alreadyAlive, isRespawn, respawnCount,
                 register.resumeToken());
 
-        AdmissionResult result = (admissionGate != null)
-                ? admissionGate.evaluate(req, session)
-                : AdmissionResult.Allow.INSTANCE;
+        AdmissionResult result;
+        Frame.SyncFrame resumedSync = null;
+        Integer restoredRespawnCount = null;
+        boolean staleRebind = false;
+
+        if (admissionGate != null && register.resumeToken().isPresent()) {
+            synchronized (lifecycleLock) {
+                // A terminal callback may complete before this inbound frame reaches admission.
+                // Only the exact, still-open registered session may consume STALLED ownership.
+                if (sessionRegistry.getSession(session.getId()) != session || !session.isOpen()) {
+                    return;
+                }
+                // Token acceptance and the BotRegistry commit form one lifecycle transaction.
+                // Identity remaps therefore cannot move ownership between those two operations.
+                result = admissionGate.evaluate(req, session);
+                if (result instanceof AdmissionResult.Rebind rebind) {
+                    if (!botRegistry.rebindSession(session.getId(), rebind.entityId())) {
+                        resumeTokenRegistry.discardActive(rebind.freshResumeToken(), rebind.entityId());
+                        releaseAbandonedStalledReservation(rebind.entityId());
+                        staleRebind = true;
+                    } else {
+                        if (admissionMetrics != null) admissionMetrics.incRebound();
+                        // Resume-token re-bind: preserve entityId, swap session in BotRegistry, restore respawn count.
+                        //
+                        // P18-Chunk-A H1 fix: gauge accounting under attribution change.
+                        // The original Allow incremented the gauge keyed by the OLD session's tags
+                        // (captured in the snapshot). When the rebound session presents different
+                        // attribution headers (operator JVM restart with auto-uuid harness, missing
+                        // headers, etc.) we must:
+                        //   1. drop the OLD stalled-bucket gauge   (decStalledBucketByTags(snapshot))
+                        //   2. drop the OLD active-bucket gauge    (decActiveBucketByTags(snapshot))
+                        //   3. re-increment the NEW active-bucket  (incActiveBucket — uses live session tags
+                        //      and updates the entityId→Tags snapshot to point at the new bucket)
+                        //
+                        // For the same-attribution case (snapshot == new tags) this is a net no-op.
+                        // Both buckets stay at their pre-rebind values and the snapshot is rewritten to itself.
+                        // Inserting ATTR_ENTITY_ID into attrs BEFORE incActiveBucket is required — the
+                        // incActiveBucket call captures the snapshot keyed by the entity id read off attrs.
+                        attrs.remove(ATTR_STALL_TICK);
+                        attrs.put(ATTR_ENTITY_ID, rebind.entityId());
+                        attrs.put(ATTR_ENTITY_TYPE, register.entityType());
+                        attrs.put(ATTR_RESUME_TOKEN, rebind.freshResumeToken());
+
+                        if (admissionMetrics != null) {
+                            io.micrometer.core.instrument.Tags oldTags =
+                                    admissionMetrics.lookupBucketTags(rebind.entityId());
+                            if (oldTags != null) {
+                                admissionMetrics.decStalledBucketByTags(oldTags);
+                                admissionMetrics.decActiveBucketByTags(oldTags);
+                            }
+                            admissionMetrics.incActiveBucket(session);
+                        }
+                        restoredRespawnCount = respawnCountAtStall.remove(rebind.entityId());
+                        if (restoredRespawnCount != null) {
+                            attrs.put(ATTR_RESPAWN_COUNT, restoredRespawnCount);
+                        }
+                        resumedSync = new Frame.SyncFrame(rebind.entityId(),
+                                Optional.of(rebind.freshResumeToken()), List.of());
+                    }
+                }
+            }
+        } else {
+            result = (admissionGate != null)
+                    ? admissionGate.evaluate(req, session)
+                    : AdmissionResult.Allow.INSTANCE;
+        }
 
         if (result instanceof AdmissionResult.Reject reject) {
             sendFrame(session, new Frame.ErrorFrame(reject.code(), Optional.of(reject.token())));
@@ -539,58 +614,21 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         }
 
         if (result instanceof AdmissionResult.Rebind rebind) {
-            // Resume-token re-bind: preserve entityId, swap session in BotRegistry, restore respawn count.
-            //
-            // P18-Chunk-A H1 fix: gauge accounting under attribution change.
-            // The original Allow incremented the gauge keyed by the OLD session's tags
-            // (captured in the snapshot). When the rebound session presents different
-            // attribution headers (operator JVM restart with auto-uuid harness, missing
-            // headers, etc.) we must:
-            //   1. drop the OLD stalled-bucket gauge   (decStalledBucketByTags(snapshot))
-            //   2. drop the OLD active-bucket gauge    (decActiveBucketByTags(snapshot))
-            //   3. re-increment the NEW active-bucket  (incActiveBucket — uses live session tags
-            //      and updates the entityId→Tags snapshot to point at the new bucket)
-            //
-            // For the same-attribution case (snapshot == new tags) this is a net no-op.
-            // Both buckets stay at their pre-rebind values and the snapshot is rewritten to itself.
-            // Inserting ATTR_ENTITY_ID into attrs BEFORE incActiveBucket is required — the
-            // incActiveBucket call captures the snapshot keyed by the entity id read off attrs.
-            attrs.remove(ATTR_STALL_TICK);
-            attrs.put(ATTR_ENTITY_ID, rebind.entityId());
-            attrs.put(ATTR_ENTITY_TYPE, register.entityType());
-            attrs.put(ATTR_RESUME_TOKEN, rebind.freshResumeToken());
-
-            if (admissionMetrics != null) {
-                io.micrometer.core.instrument.Tags oldTags =
-                        admissionMetrics.lookupBucketTags(rebind.entityId());
-                if (oldTags != null) {
-                    admissionMetrics.decStalledBucketByTags(oldTags);
-                    admissionMetrics.decActiveBucketByTags(oldTags);
-                }
-                admissionMetrics.incActiveBucket(session);
-            }
-            // Restore respawn count from stall-time snapshot (claude MEDIUM respawn-cap-bypass fix).
-            Integer snapshot = respawnCountAtStall.remove(rebind.entityId());
-            if (snapshot != null) {
-                attrs.put(ATTR_RESPAWN_COUNT, snapshot);
-            }
-            // Phase 19.5 M-F: rebindSession returns false when the entity is no
-            // longer in BotRegistry (already reaped between tryRebind and here —
-            // e.g. grace expiry sweep ran on the same tick). Treat as a stale
-            // resume token: tell the client to re-register fresh + close.
-            if (!botRegistry.rebindSession(session.getId(), rebind.entityId())) {
-                sendFrame(session, new Frame.ErrorFrame(400, Optional.of("stale-resume-token")));
+            if (staleRebind) {
+                if (admissionMetrics != null) admissionMetrics.incRejected(RejectionToken.STALE_RESUME_TOKEN, session);
+                sendFrame(session, new Frame.ErrorFrame(400, Optional.of(RejectionToken.STALE_RESUME_TOKEN)));
                 try { session.close(); } catch (Exception ignored) {}
                 log.warn("BACKPRESSURE rebind-stale tick={} session={} entity={} {}",
                         currentTick, session.getId(), rebind.entityId(),
                         AttributionTagger.formatLogFields(session));
-                return;
+            } else {
+                // Outbound offer may synchronously enter overflow handling. Keep it outside the
+                // global lifecycle boundary so a slow transport cannot block unrelated cleanup.
+                sendFrame(session, resumedSync);
+                log.info("BACKPRESSURE resumed tick={} session={} entity={} respawnCountRestored={} {}",
+                        currentTick, session.getId(), rebind.entityId(), restoredRespawnCount,
+                        AttributionTagger.formatLogFields(session));
             }
-            sendFrame(session, new Frame.SyncFrame(rebind.entityId(),
-                    Optional.of(rebind.freshResumeToken()), List.of()));
-            log.info("BACKPRESSURE resumed tick={} session={} entity={} respawnCountRestored={} {}",
-                    currentTick, session.getId(), rebind.entityId(), snapshot,
-                    AttributionTagger.formatLogFields(session));
             return;
         }
 
@@ -773,39 +811,37 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         if (session == null) return;
         var attrs = session.getAttributes();
 
-        // Idempotent guard (codex HIGH): if already STALLED, do nothing.
-        if (attrs.containsKey(ATTR_STALL_TICK)) return;
+        synchronized (lifecycleLock) {
+            // Idempotent guard (codex HIGH): if already STALLED, do nothing.
+            if (attrs.containsKey(ATTR_STALL_TICK)) return;
 
-        // SLI denominator: count this real stall transition (post-idempotency guard).
-        if (admissionMetrics != null) admissionMetrics.incStalledTotal();
+            // SLI denominator: count this real stall transition (post-idempotency guard).
+            if (admissionMetrics != null) admissionMetrics.incStalledTotal();
 
-        // === ROUND 2 CLAUDE HIGH AMENDMENT ===
-        // Read entityId BEFORE attrs.remove. Pass explicitly to incStalledBucket so
-        // bucketTagsByEntityId snapshot is captured with the real entityId — NOT null.
-        Object entityIdObj = attrs.get(ATTR_ENTITY_ID);
-        String entityId = entityIdObj != null ? entityIdObj.toString() : null;
-        if (admissionMetrics != null && entityId != null) {
-            admissionMetrics.incStalledBucket(session, entityId);
-        }
-        // === END AMENDMENT ===
+            // Read entityId BEFORE attrs.remove so bucket and respawn ownership use the real id.
+            Object entityIdObj = attrs.get(ATTR_ENTITY_ID);
+            String entityId = entityIdObj != null ? entityIdObj.toString() : null;
+            if (admissionMetrics != null && entityId != null) {
+                admissionMetrics.incStalledBucket(session, entityId);
+            }
 
-        attrs.put(ATTR_STALL_TICK, stallTick);
-        // NOW the existing remove proceeds.
-        attrs.remove(ATTR_ENTITY_ID);
-        Object tokenObj = attrs.get(ATTR_RESUME_TOKEN);
-        String activeToken = tokenObj == null ? null : tokenObj.toString();
+            attrs.put(ATTR_STALL_TICK, stallTick);
+            attrs.remove(ATTR_ENTITY_ID);
+            Object tokenObj = attrs.get(ATTR_RESUME_TOKEN);
+            String activeToken = tokenObj == null ? null : tokenObj.toString();
 
-        // Snapshot respawn count so rebind can restore it (claude MEDIUM respawn-cap-bypass fix).
-        if (entityId != null) {
-            respawnCountAtStall.put(entityId, respawnCountOf(attrs));
-        }
+            // Snapshot respawn count so rebind can restore it.
+            if (entityId != null) {
+                respawnCountAtStall.put(entityId, respawnCountOf(attrs));
+            }
 
-        // Convert ACTIVE → STALLED in registry.
-        if (activeToken != null && resumeTokenRegistry != null) {
-            resumeTokenRegistry.convertToStalled(activeToken, stallTick);
-        } else if (entityId != null) {
-            log.warn("markStalled: session={} entity={} has no cached resume token; entity will be unrecoverable",
-                    session.getId(), entityId);
+            // Convert ACTIVE → STALLED in registry before the close callback can observe STALLED.
+            if (activeToken != null && resumeTokenRegistry != null) {
+                resumeTokenRegistry.convertToStalled(activeToken, stallTick);
+            } else if (entityId != null) {
+                log.warn("markStalled: session={} entity={} has no cached resume token; entity will be unrecoverable",
+                        session.getId(), entityId);
+            }
         }
 
         // Phase 19.1 D-07 — close-aware detach with SERVICE_RESTARTED status.
@@ -927,6 +963,25 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
         }
     }
 
+    /** Release the reservation whose stalled entity disappeared before rebind committed. */
+    private void releaseAbandonedStalledReservation(String entityId) {
+        Integer snapshot = respawnCountAtStall.remove(entityId);
+        if (admissionMetrics != null) {
+            io.micrometer.core.instrument.Tags bucketTags =
+                    admissionMetrics.lookupBucketTags(entityId);
+            if (bucketTags != null) {
+                admissionMetrics.decActiveBucketByTags(bucketTags);
+                admissionMetrics.decStalledBucketByTags(bucketTags);
+                admissionMetrics.releaseBucketTags(entityId);
+            }
+        }
+        // The snapshot is installed for every real STALLED transition, including count zero,
+        // and therefore acts as the idempotent ownership marker for the admission reservation.
+        if (snapshot != null && admissionGate != null) {
+            admissionGate.releaseSlot();
+        }
+    }
+
     /**
      * Remove bot's entity from the grid, decrement bucket gauges, and release the admission slot.
      *
@@ -944,35 +999,45 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
      * so a second invocation on the same session is a no-op.
      */
     /**
-     * Phase 19.5 H-A — {@link EntityLifecycleListener} callback fired by
-     * {@code SimulationEngine} immediately after a {@link BotRegistry} remap
-     * (bond formation, composite formation, composite revert, dissolve).
-     * Updates {@code ATTR_ENTITY_ID} so subsequent {@link #cleanupBot} reaches
-     * the right {@link LiveEntityRegistry} entry, and rewrites any STALLED
-     * resume-token entry keyed by {@code oldEntityId} so reconnect resolves to
-     * the post-remap entity (Phase 19.5 H-C).
+     * Phase 19.5 H-A — {@link EntityLifecycleListener} transaction invoked by
+     * {@code SimulationEngine} for bond formation, composite formation, composite
+     * revert, and dissolve. Remaps {@link BotRegistry}, token/snapshot/accounting
+     * ownership, and {@code ATTR_ENTITY_ID} under the lifecycle boundary.
      *
      * <p>If the session is no longer present (already disconnected before the
-     * remap fired), this is a no-op — the registry remap is still correct and
-     * the next tick cleans up the orphan via registry-driven paths.
+     * remap fires), only the session-attribute update is skipped.
      */
     @Override
-    public void onEntityRemapped(String sessionId, String oldEntityId, String newEntityId) {
-        if (resumeTokenRegistry != null) {
-            resumeTokenRegistry.remapEntity(oldEntityId, newEntityId);
+    public void onEntityRemapped(String oldEntityId, String newEntityId) {
+        synchronized (lifecycleLock) {
+            String sessionId = botRegistry.getSessionForEntity(oldEntityId).orElse(null);
+            if (sessionId == null) {
+                log.debug("onEntityRemapped: entity {} is no longer controlled", oldEntityId);
+                return;
+            }
+            // The listener owns the BotRegistry mutation so all identity-bearing surfaces move
+            // under one boundary. SimulationEngine performs this directly only without a listener.
+            botRegistry.remapEntity(sessionId, newEntityId);
+            if (resumeTokenRegistry != null) {
+                resumeTokenRegistry.remapEntity(oldEntityId, newEntityId);
+            }
+            // Phase 19.1 D-08 — keep AdmissionMetrics bucket-tags map aligned with remap.
+            if (admissionMetrics != null) {
+                admissionMetrics.remapBucketTags(oldEntityId, newEntityId);
+            }
+            Integer respawnSnapshot = respawnCountAtStall.remove(oldEntityId);
+            if (respawnSnapshot != null) {
+                respawnCountAtStall.put(newEntityId, respawnSnapshot);
+            }
+            WebSocketSession session = sessionRegistry.getSession(sessionId);
+            if (session == null) {
+                log.debug("onEntityRemapped: session {} no longer present — skipping attr update",
+                        sessionId);
+                return;
+            }
+            session.getAttributes().put(ATTR_ENTITY_ID, newEntityId);
+            log.debug("onEntityRemapped: session={} {} -> {}", sessionId, oldEntityId, newEntityId);
         }
-        // Phase 19.1 D-08 — keep AdmissionMetrics bucket-tags map aligned with remap.
-        if (admissionMetrics != null) {
-            admissionMetrics.remapBucketTags(oldEntityId, newEntityId);
-        }
-        WebSocketSession session = sessionRegistry.getSession(sessionId);
-        if (session == null) {
-            log.debug("onEntityRemapped: session {} no longer present — skipping attr update",
-                    sessionId);
-            return;
-        }
-        session.getAttributes().put(ATTR_ENTITY_ID, newEntityId);
-        log.debug("onEntityRemapped: session={} {} -> {}", sessionId, oldEntityId, newEntityId);
     }
 
     public void cleanupBot(WebSocketSession s) {
@@ -1087,21 +1152,24 @@ public class WorldWebSocketHandler extends TextWebSocketHandler implements Entit
      */
     public void markDead(WebSocketSession session) {
         if (session == null) return;
-        Object eid = session.getAttributes().remove(ATTR_ENTITY_ID);
-        session.getAttributes().remove(ATTR_RESUME_TOKEN);
-        String entityId = eid instanceof String e ? e : null;
-        if (entityId != null) {
-            if (admissionMetrics != null) {
-                io.micrometer.core.instrument.Tags bucketTags =
-                        admissionMetrics.lookupBucketTags(entityId);
-                if (bucketTags != null) {
-                    admissionMetrics.decActiveBucketByTags(bucketTags);
+        synchronized (lifecycleLock) {
+            Object eid = session.getAttributes().remove(ATTR_ENTITY_ID);
+            session.getAttributes().remove(ATTR_RESUME_TOKEN);
+            String entityId = eid instanceof String e ? e : null;
+            if (entityId != null) {
+                if (admissionMetrics != null) {
+                    io.micrometer.core.instrument.Tags bucketTags =
+                            admissionMetrics.lookupBucketTags(entityId);
+                    if (bucketTags != null) {
+                        admissionMetrics.decActiveBucketByTags(bucketTags);
+                    }
+                    admissionMetrics.releaseBucketTags(entityId);
                 }
-                admissionMetrics.releaseBucketTags(entityId);
-            }
-            if (resumeTokenRegistry != null) {
-                resumeTokenRegistry.clearActive(entityId);
+                if (resumeTokenRegistry != null) {
+                    resumeTokenRegistry.clearActive(entityId);
+                }
             }
         }
     }
+
 }

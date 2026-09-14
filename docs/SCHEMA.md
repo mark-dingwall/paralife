@@ -28,8 +28,8 @@ tunable defaults.
 | R5 | WHEN emitting a spatial block (`s`/`g`/`v`) THE SYSTEM SHALL place coord first; WHEN emitting a type block (`f`/`c`) THE SYSTEM SHALL place code first. | §4 | `PerceptionCodecEncodeContractTest.encodePlacesCoordFirstInSpatialBlockCodeFirstInTypeBlock` (encode-isolating: `s` entry leads with coord, `f` entry leads with code + trailing ctx coord). Only the `f` leg is test-pinned: the `c` type block is code-first *by construction* (§4/§8.2 — it has no coord field, so nothing can misorder), making a `c`-leg assertion unfalsifiable. Joint backstop: `roundTripsExactly` V6. |
 | R6 | WHEN encoding a full `T` frame THE SYSTEM SHALL emit present optional blocks in the order `s, c, f, v, p, g`. | §6.3.1 | `PerceptionCodecEncodeContractTest.encodeEmitsBlocksInCanonicalOrder` (encode-isolating: all-six-blocks frame, asserts prefix sequence `containsExactly('s','c','f','v','p','g')`). Closes a round-trip blind spot — **no §10 vector carries both a `c` and an `f` block**, so a c/f reorder survives `roundTripsExactly`. Joint backstop: V6 + V11 (`v` before `g`). |
 | R7 | WHEN decoding a frame THE SYSTEM SHALL accept exactly the five types `r/S/T/a/E` and reject any other. | §5, §6 | `PerceptionCodecErrorTest.unknownFrameTypeRejected` — `assertTrue(ex.getMessage().contains("Unknown frame type"))` |
-| R8 | WHEN a client registers THE SYSTEM SHALL encode `r\|<entityType>[\|<resumeToken>]` with type ∈ {C,M,S}; the optional token slot is identified by its `r:` prefix (server-issued tokens are `r:<16-lowercase-hex>`). | §6.1 | `RegisterFrameResumeTokenTest.encodeRegisterWithoutToken` — `assertEquals("r\|C", encoded)`; `encodeRegisterWithToken` — `assertEquals("r\|C\|" + TOKEN, encoded)` |
-| R9 | WHEN syncing THE SYSTEM SHALL encode `S\|<entityId>[\|<resumeToken>][\|<effects>]`; the `r:` prefix disambiguates the optional token from effects. | §6.2 | `SyncFrameResumeTokenTest.parseSyncEntityOnly`, `parseSyncEntityAndToken`, `parseSyncEntityTokenAndEffects`; V10 covers effects without a token. |
+| R8 | WHEN a client registers THE SYSTEM SHALL encode `r\|<entityType>[\|<resumeToken>]` with type ∈ {C,M,S}; WHEN decoding a resume token THE SYSTEM SHALL accept exactly `r:<16-lowercase-hex>` in the final slot and reject every other shape or trailing slot. | §6.1 | `RegisterFrameResumeTokenTest.encodeRegisterWithoutToken`, `encodeRegisterWithToken`; `PerceptionCodecErrorTest.canonicalResumeTokenDecodesInRegisterSlot`, `malformedFramesRejected` |
+| R9 | WHEN syncing THE SYSTEM SHALL encode `S\|<entityId>[\|<resumeToken>][\|<effects>]`; WHEN decoding a resume token THE SYSTEM SHALL accept exactly `r:<16-lowercase-hex>` in the token slot, using `r:` to disambiguate it from effects, and reject every other token shape or trailing slot. | §6.2 | `SyncFrameResumeTokenTest.parseSyncEntityOnly`, `parseSyncEntityAndToken`, `parseSyncEntityTokenAndEffects`; `PerceptionCodecErrorTest.canonicalResumeTokenDecodesInSyncSlot`, `malformedFramesRejected`; V10 covers effects without a token. |
 | R10 | WHEN a composite member is passive (SENSOR/DEFENDER/REPRODUCER) THE SYSTEM SHALL send the minimal `T` form; WHEN authority-lite (FEEDER/ATTACKER) THE SYSTEM SHALL set sensorRadius=1; WHEN LOCOMOTOR THE SYSTEM SHALL set sensorRadius=1 and project own adjacency plus the union of SENSOR 5×5 windows. | §7, §6.3.2 | `TickBroadcasterProjectionTest.compositeSensorMemberReceivesMinimalForm`, `authorityLiteFeederHasSensorRadius1`, `locomotorReceivesPoolSnapshotAndRoster`; `CompositePerceptionTest.reproducerMemberReceivesMinimalForm`; `SensorStitchedPerceptionTest.d03Monotonic_addingSensorWidensLocomotorCells`. |
 | R11 | WHEN emitting an error THE SYSTEM SHALL encode `E\|<code>[\|<message>]` with a 3-digit code. | §6.5 | `PerceptionCodecErrorTest.errorFrameRoundTrips` — `assertEquals("E\|429\|respawn cap", encoded)` |
 | R12 | WHEN emitting a vision cell THE SYSTEM SHALL prefix a presence byte (bit 0 entity, bit 1 env) and SHALL NOT emit presence=0 cells; entity kind per the §8.1.1 table. | §8.1, §8.1.1 | `TickBroadcasterProjectionTest.emptyCellsOmittedFromSBlock`; `tickFrameShowsNearbyEntitiesWithCorrectKindCodes` — `assertThat(kindCodeOf(east)).isEqualTo('M')` |
@@ -39,6 +39,9 @@ tunable defaults.
 | R16 | WHEN a client submits an action THE SYSTEM SHALL accept verbs `M/E/A/R/V/L` and reject any other. | §8.6 | `PerceptionCodecErrorTest.actionRoundTrips` — `assertEquals("a\|M\|8", encoded)`; `unknownActionVerbRejected` |
 | R17 | WHEN any valid frame is decoded then re-encoded THE SYSTEM SHALL produce byte-identical output. | §10 | `PerceptionCodecRoundTripTest.roundTripsExactly` — `assertEquals(wireFrame, reEncoded, …)`, all 13 vectors |
 | R18 | WHEN an `s` block exceeds `MAX_S_ENTRIES` (256) or a `v` block exceeds `MAX_V_ENTRIES` (32) THE SYSTEM SHALL throw `CodecException` (server then emits `E\|400`). | §12 | `PerceptionCodecErrorTest.boundedEntriesRejected` — `contains("MAX_S_ENTRIES")`; `boundedEventsRejected` — `contains("MAX_V_ENTRIES")` |
+| R19 | WHEN a LOCOMOTOR frame projects pending alarms THE SYSTEM SHALL drain that composite's retained alarms FIFO at most once, emit a coordinate-first `<coord>N` prefix capped at `MAX_V_ENTRIES`, and intentionally drop any drained overflow rather than replay it later. | §8.4 | `GoldenTraceWithActionsTest.lAlarmIsProjectedOnceToExplicitLocomotor`; `alarmProjectionCapsRetainedFifoAndDropsOverflowAfterDrain`; queue isolation/drain contract: `AlarmQueueTest` |
+| R20 | WHEN a FEEDER submits reachable no-direction action `a\|L` THE SYSTEM SHALL enqueue its composite alarm and consume an adjacent nutrient through FEEDER role dispatch. | §7, §8.6 | `CompositeActionTest.feederAlarmQueuesAlarmAndConsumesAdjacentNutrient` — exact alarm, nutrient transformation, pool drain, unchanged member energy |
+| R21 | WHEN an ATTACKER submits `a\|L` THE SYSTEM SHALL enqueue its composite alarm and auto-target an adjacent enemy; WHEN it submits `a\|A\|<direction>` THE SYSTEM SHALL attack the directed adjacent target. | §7, §8.6 | `CompositeActionTest.attackerAlarmQueuesAlarmAndAutoTargetsAdjacentCompositeMember`; `attackerDirectedAttackDamagesBondedPair` — config-derived damage, exact pool drain, unchanged member energy |
 
 **Pinning & deferrals.** R4/R5/R6 now carry **encode-isolating** anchors
 (`PerceptionCodecEncodeContractTest`) that build a frame directly from independent literals, encode
@@ -156,7 +159,8 @@ r|<entityType>[|<resumeToken>]
 ```
 
 - `<entityType>` ∈ `{C, M, S}` (Catalyst, Membrane, Spore).
-- `<resumeToken>` — optional full token shaped `r:<16-lowercase-hex>`, presented only for stalled rebind.
+- `<resumeToken>` — optional full token shaped exactly `r:<16-lowercase-hex>`, presented only for
+  stalled rebind. Uppercase/non-hex digits, wrong lengths, empty tokens, and trailing slots are invalid.
 
 Sent as the first message on a fresh session, after terminal `D` (died) or `B` (absorbed into a
 bonded pair), and on stalled reconnect with the cached token. Server replies `S|...` on success;
@@ -169,8 +173,9 @@ S|<entityId>[|<resumeToken>][|<activeEffects>]
 ```
 
 - `<entityId>` — base64, ≥ 1 char, unbounded length (server allocates).
-- `<resumeToken>` — optional fresh `r:<16-lowercase-hex>` token. Its `r:` prefix is the positional
-  disambiguator from an effects segment.
+- `<resumeToken>` — optional fresh token shaped exactly `r:<16-lowercase-hex>`. Its `r:` prefix is
+  the positional disambiguator from an effects segment; noncanonical tokens and trailing slots are
+  invalid.
 - `<activeEffects>` — **present only on resync** (not on initial register when bot has no history). Same token format as `f` block content but without the `f` prefix: `<code>:<expiryTick>[:<ctx>],...`.
 
 Every successful registration, respawn, or rebind returns a fresh token. A rebind `S` may also carry
@@ -269,9 +274,9 @@ role/verb authorization matrix.
 The codec accepts `M/E/A/R/V/L`; the handler requires an active entity but does not enforce a
 role/verb matrix. A composite member that submits any action is dispatched by its role; submitting
 no action performs no role action. On the wire, `M/E/A/R/V` require an argument and only `L` omits
-one. FEEDER ignores any supplied direction. ATTACKER uses a direction when present and auto-targets
-when absent; because composite dispatch is role-based, an argument-less `L` reaches that branch and
-also enqueues an alarm. REPRODUCER discards its syntactic direction and auto-places;
+one. Therefore `a|L` is the reachable no-direction route: FEEDER enqueues an alarm and consumes an
+adjacent nutrient, while ATTACKER enqueues an alarm and auto-targets an adjacent enemy. ATTACKER
+`a|A|<direction>` attacks the directed adjacent target. REPRODUCER discards its syntactic direction and auto-places;
 DEFENDER/SENSOR are passive; and LOCOMOTOR consumes V ballots (or M as a single-choice ballot).
 Solo `A` currently rests.
 
@@ -479,7 +484,7 @@ a|<verb>[|<arg>]
 | `A` | Attack | single numpad digit (target direction) |
 | `R` | Reproduce | single numpad digit (birth direction) |
 | `V` | Vote-move (LOCOMOTOR) | 3-char numpad string (ranks 1-3) |
-| `L` | Alarm | — |
+| `L` | Alarm | none; canonical frame is exactly `a|L` |
 
 #### Vote example
 
@@ -489,7 +494,10 @@ until one has a majority. Elimination ties use the lowest numpad digit.
 
 #### Alarm example
 
-`a|L`. Routed via `BotRegistry` composite lookup. Appears in LOCOMOTOR's next `T` as `vN<relCoord>` event.
+`a|L` (a trailing empty argument slot, `a|L|`, is invalid). Routed via `BotRegistry` composite
+lookup. Appears in LOCOMOTOR's next `T` as a
+coordinate-first `v<coord>N` event. A LOCOMOTOR frame drains retained alarms FIFO at most once and
+emits at most `MAX_V_ENTRIES`; any drained overflow is intentionally dropped rather than replayed.
 
 ---
 
@@ -529,7 +537,7 @@ Decisions from `15-CONTEXT.md` superseded by this schema:
 ### New scope additions
 
 1. **FLEEING effect + lightning flee mechanic** (D-50 #9 → IN).
-2. **Alarm action `a|L`** + `vN<coord>` event delivery to LOCOMOTOR.
+2. **Alarm action `a|L`** + coordinate-first `v<coord>N` event delivery to LOCOMOTOR.
 3. **Proper IRV vote resolution** (replaces plurality).
 4. **Client-side terminal flow** (`D`/`B` triggers bare `r` registration; stalled reconnect presents the cached token; server returns `S` or an admission error).
 5. **Coord-first convention** for spatial blocks (`s` / `g` / `v`); code-first for type blocks (`f` / `c`).
