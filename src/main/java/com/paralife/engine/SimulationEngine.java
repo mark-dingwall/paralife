@@ -8,14 +8,6 @@ import com.paralife.world.Entity.Particle;
 import com.paralife.world.Position;
 import com.paralife.world.WorldGrid;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.context.event.EventListener;
-import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -29,6 +21,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
 
 /**
  * Server-side physics engine. Processes the grid each tick in four phases:
